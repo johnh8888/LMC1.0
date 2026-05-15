@@ -1,49 +1,48 @@
-name: 澳门彩特二色每日预测
+name: 澳门彩特二色全自动（每周调参+每日预测）
 
 on:
   schedule:
-    # 每天 21:30 UTC+8 执行（澳门彩通常晚间开奖，可根据实际调整）
-    - cron: '30 13 * * *'   # 13:30 UTC = 21:30 UTC+8
-  workflow_dispatch:        # 支持手动触发
+    # 每周一凌晨 1:00 UTC+8 调参（使用 UTC 时间）
+    - cron: '17 17 * * 0'   # 周日 17:17 UTC = 周一 01:17 UTC+8
+    # 每日 22:00 UTC+8 预测（开奖后）
+    - cron: '0 14 * * *'    # 14:00 UTC = 22:00 UTC+8
+  workflow_dispatch:        # 手动触发
 
 jobs:
-  predict:
+  tune:
+    if: github.event.schedule == '17 17 * * 0' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 30     # 调参最多30分钟
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 设置 Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
-      - name: 安装依赖（无需额外依赖，仅标准库）
-        run: |
-          python -m pip install --upgrade pip
-
-      - name: 运行澳门彩特二色预测
-        run: |
-          python macau_color_only.py > prediction_result.txt 2>&1
-          cat prediction_result.txt
-
-      - name: 保存预测结果（可选，提交到仓库）
-        run: |
-          mkdir -p predictions
-          cp prediction_result.txt predictions/macau_color_$(date +'%Y%m%d').txt
-
-      - name: 上传预测结果作为 Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macau-color-prediction
-          path: predictions/
-          retention-days: 7
-
-      - name: 推送到仓库（可选：自动提交结果）
-        if: false   # 默认关闭，需要自动提交时改为 true
+      - name: 安装依赖
+        run: pip install optuna
+      - name: 运行调参
+        run: python macau_color_only.py --tune
+      - name: 提交新的参数文件
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add predictions/
-          git commit -m "Daily Macau color prediction $(date +'%Y-%m-%d')" || exit 0
+          git add best_params_macau.json
+          git commit -m "Auto-tune Macau color params [skip ci]" || exit 0
           git push
+
+  predict:
+    if: always() && (github.event.schedule == '0 14 * * *' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: 运行预测
+        run: python macau_color_only.py
+      - name: 保存预测结果（可选）
+        uses: actions/upload-artifact@v4
+        with:
+          name: macau-color-prediction
+          path: prediction_result.txt
+          retention-days: 7
