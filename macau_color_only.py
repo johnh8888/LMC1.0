@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（短期热号强制版）
+澳门彩 · 特二色预测（修复热号检测版）
 """
 
 import argparse
@@ -28,8 +28,8 @@ DEFAULT_PARAMS = {
     "omission_cap": 5.0,
     "transition_weight": 3.0,
     "miss_streak_bonus": 5.0,
-    "recent_boost": 2.5,      # 提高近期权重
-    "recent_window": 4,       # 缩小近期窗口
+    "recent_boost": 2.5,
+    "recent_window": 4,
 }
 BEST_PARAMS_FILE = "best_params_macau.json"
 
@@ -98,13 +98,14 @@ def predict_two_colors(train_colors, miss_streak, params):
     if not train_colors:
         return ["红","蓝"]
 
-    # 短期热号强制检测（最近8期）
-    recent_8 = train_colors[:8]
+    # 修复：取最近8期（末尾8个）
+    recent_8 = train_colors[-8:] if len(train_colors) >= 8 else train_colors
     hot_color = None
     if len(recent_8) >= 5:
         freq = Counter(recent_8)
         most_common, cnt = freq.most_common(1)[0]
-        if cnt >= 4:
+        # 触发阈值降低为 3 次（更敏感）
+        if cnt >= 3:
             hot_color = most_common
 
     # 正常预测流程
@@ -118,8 +119,11 @@ def predict_two_colors(train_colors, miss_streak, params):
     recent_window = params.get("recent_window", 5)
 
     for w, wgt in windows:
-        for i, c in enumerate(train_colors[:w]):
+        # 遍历最近 w 期（注意：train_colors 是从早到晚，所以取最后 w 个才是最近）
+        recent_w = train_colors[-w:] if len(train_colors) >= w else train_colors
+        for i, c in enumerate(recent_w):
             weight = wgt
+            # i=0 对应最近一期，i 越小越近
             if i < recent_window:
                 weight *= recent_boost
             score[c] += weight
@@ -127,17 +131,18 @@ def predict_two_colors(train_colors, miss_streak, params):
     omission = {}
     for c in COLORS:
         miss = 0
-        for x in train_colors:
+        for x in reversed(train_colors):  # 从最近向历史查找
             if x == c: break
             miss += 1
         omission[c] = miss
         score[c] += min(miss * params["omission_weight"], params["omission_cap"])
 
-    last = train_colors[0]
+    # 转移矩阵：基于最近一期
+    last = train_colors[-1] if train_colors else None
     trans = defaultdict(Counter)
     for i in range(len(train_colors)-1):
         trans[train_colors[i]][train_colors[i+1]] += 1
-    if last in trans:
+    if last and last in trans:
         total = sum(trans[last].values())
         if total > 0:
             for c, v in trans[last].items():
@@ -154,6 +159,13 @@ def predict_two_colors(train_colors, miss_streak, params):
     # 强制热号覆盖：如果检测到热号且不在预测中，替换掉第二个预测
     if hot_color and hot_color not in pred:
         pred[-1] = hot_color
+        # 如果替换后仍有重复，去重
+        if pred[0] == pred[1]:
+            # 找下一个候选
+            for c in ranked:
+                if c not in pred:
+                    pred[1] = c
+                    break
 
     return pred
 
@@ -166,7 +178,7 @@ def backtest_with_details(colors, issues, params, lookback=10):
     max_miss = 0
     details = []
     for idx in test_indices:
-        train = colors[:idx]
+        train = colors[:idx]  # 从最早到 idx-1
         actual = colors[idx]
         pred = predict_two_colors(train, miss_streak, params)
         hit = actual in pred
