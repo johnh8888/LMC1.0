@@ -22,42 +22,35 @@ BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 COLORS = ["红","蓝","绿"]
 
-# 默认参数（含市场状态相关权重）
+# 默认参数
 DEFAULT_PARAMS = {
-    # 多窗口权重（基础）
     "short_window": 6,
     "mid_window": 20,
     "long_window": 50,
     "w_short": 4.5,
     "w_mid": 1.5,
     "w_long": 0.6,
-    # 遗漏参数
     "omission_weight": 0.8,
     "omission_cap": 5.0,
-    # 转移矩阵权重
     "transition_weight": 3.0,
-    # 连空保护参数
     "miss_streak_bonus": 5.0,
-    # 近期加权参数（短期热度）
     "recent_boost": 2.5,
     "recent_window": 4,
-    # 连续相同颜色奖励
     "streak_bonus": 1.5,
-    # 市场状态融合权重（不同状态下各模型的乘数）
-    "market_hot_weight": 1.5,      # 正常状态热点权重
+    # 市场状态权重
+    "unilateral_hot_weight": 2.2,
+    "unilateral_trans_weight": 1.8,
+    "unilateral_rev_weight": 0.6,
+    "chaos_cold_weight": 2.0,
+    "chaos_rev_weight": 1.8,
+    "chaos_hot_weight": 0.5,
+    "rotate_trans_weight": 2.2,
+    "rotate_cold_weight": 1.0,
+    "rotate_rev_weight": 1.0,
+    "market_hot_weight": 1.5,
     "market_cold_weight": 1.0,
     "market_trans_weight": 1.2,
     "market_rev_weight": 1.0,
-    "unilateral_hot_weight": 2.2,  # 单边状态热点权重
-    "unilateral_trans_weight": 1.8,
-    "unilateral_rev_weight": 0.6,
-    "chaos_cold_weight": 2.0,      # 混乱状态冷门权重
-    "chaos_rev_weight": 1.8,
-    "chaos_hot_weight": 0.5,
-    "rotate_trans_weight": 2.2,    # 轮动状态转移权重
-    "rotate_cold_weight": 1.0,
-    "rotate_rev_weight": 1.0,
-    # 市场识别阈值
     "single_threshold": 0.60,
 }
 BEST_PARAMS_FILE = "best_params_macau.json"
@@ -124,8 +117,8 @@ def fetch_macau_records(limit=600):
             continue
     return []
 
-# ========== 市场状态识别 ==========
 def detect_market(train, params):
+    """市场状态识别"""
     recent10 = train[:10]
     if len(recent10) < 10:
         return "正常"
@@ -140,9 +133,8 @@ def detect_market(train, params):
         return "轮动"
     return "正常"
 
-# ========== 子模型 ==========
 def model_hot(train, params):
-    """热点模型：多窗口加权计数"""
+    """热点模型：多窗口加权计数（从最近到最早）"""
     score = Counter()
     windows = [
         (params["short_window"], params["w_short"]),
@@ -170,7 +162,7 @@ def model_cold(train, params):
     return score
 
 def model_transition(train, params):
-    """转移模型：基于上一期颜色预测下一期"""
+    """转移模型：基于上一期颜色"""
     score = Counter()
     if len(train) < 2:
         return score
@@ -186,7 +178,7 @@ def model_transition(train, params):
     return score
 
 def model_reverse(train):
-    """反向模型：抑制假热，鼓励冷门（简单规则）"""
+    """反向模型：抑制假热"""
     score = Counter({c: 0 for c in COLORS})
     recent8 = train[:8] if len(train) >= 8 else train
     freq = Counter(recent8)
@@ -197,45 +189,43 @@ def model_reverse(train):
             score[c] += 3
     return score
 
-# ========== 核心融合预测 ==========
 def predict_two_colors(train_colors, miss_streak, params):
     if not train_colors:
         return ["红", "蓝"]
 
-    # 1. 市场识别
+    # 市场识别
     market = detect_market(train_colors, params)
 
-    # 2. 获取各模型得分
-    hot_score = model_hot(train_colors, params)
-    cold_score = model_cold(train_colors, params)
-    trans_score = model_transition(train_colors, params)
-    rev_score = model_reverse(train_colors)
+    # 各模型得分
+    hot = model_hot(train_colors, params)
+    cold = model_cold(train_colors, params)
+    trans = model_transition(train_colors, params)
+    rev = model_reverse(train_colors)
 
-    # 3. 根据市场状态加权融合
     final = Counter()
     if market == "单边":
         for c in COLORS:
-            final[c] += hot_score[c] * params.get("unilateral_hot_weight", 2.2)
-            final[c] += trans_score[c] * params.get("unilateral_trans_weight", 1.8)
-            final[c] += rev_score[c] * params.get("unilateral_rev_weight", 0.6)
+            final[c] += hot[c] * params.get("unilateral_hot_weight", 2.2)
+            final[c] += trans[c] * params.get("unilateral_trans_weight", 1.8)
+            final[c] += rev[c] * params.get("unilateral_rev_weight", 0.6)
     elif market == "混乱":
         for c in COLORS:
-            final[c] += cold_score[c] * params.get("chaos_cold_weight", 2.0)
-            final[c] += rev_score[c] * params.get("chaos_rev_weight", 1.8)
-            final[c] += hot_score[c] * params.get("chaos_hot_weight", 0.5)
+            final[c] += cold[c] * params.get("chaos_cold_weight", 2.0)
+            final[c] += rev[c] * params.get("chaos_rev_weight", 1.8)
+            final[c] += hot[c] * params.get("chaos_hot_weight", 0.5)
     elif market == "轮动":
         for c in COLORS:
-            final[c] += trans_score[c] * params.get("rotate_trans_weight", 2.2)
-            final[c] += cold_score[c] * params.get("rotate_cold_weight", 1.0)
-            final[c] += rev_score[c] * params.get("rotate_rev_weight", 1.0)
-    else:  # 正常状态
+            final[c] += trans[c] * params.get("rotate_trans_weight", 2.2)
+            final[c] += cold[c] * params.get("rotate_cold_weight", 1.0)
+            final[c] += rev[c] * params.get("rotate_rev_weight", 1.0)
+    else:  # 正常
         for c in COLORS:
-            final[c] += hot_score[c] * params.get("market_hot_weight", 1.5)
-            final[c] += cold_score[c] * params.get("market_cold_weight", 1.0)
-            final[c] += trans_score[c] * params.get("market_trans_weight", 1.2)
-            final[c] += rev_score[c] * params.get("market_rev_weight", 1.0)
+            final[c] += hot[c] * params.get("market_hot_weight", 1.5)
+            final[c] += cold[c] * params.get("market_cold_weight", 1.0)
+            final[c] += trans[c] * params.get("market_trans_weight", 1.2)
+            final[c] += rev[c] * params.get("market_rev_weight", 1.0)
 
-    # 4. 热号强制（最近7期内出现次数≥2的颜色）
+    # 热号强制（最近7期出现≥2次）
     recent_hot = train_colors[-7:] if len(train_colors) >= 7 else train_colors
     hot_set = set()
     if len(recent_hot) >= 3:
@@ -244,7 +234,7 @@ def predict_two_colors(train_colors, miss_streak, params):
             if cnt >= 2:
                 hot_set.add(c)
 
-    # 5. 连空保护（miss_streak >= 1 时奖励最冷两色）
+    # 连空保护
     if miss_streak >= 1:
         omission = {}
         for c in COLORS:
@@ -257,15 +247,14 @@ def predict_two_colors(train_colors, miss_streak, params):
         for c, _ in cold_rank[:2]:
             final[c] += params["miss_streak_bonus"]
 
-    # 6. 连续相同颜色奖励（如果最近两期相同）
+    # 连续相同奖励
     if len(train_colors) >= 2 and train_colors[0] == train_colors[1]:
         final[train_colors[0]] += params.get("streak_bonus", 1.5)
 
-    # 7. 取得分前两名
     ranked = [c for c, _ in final.most_common()]
     pred = ranked[:2]
 
-    # 8. 强制包含热号（按得分顺序替换）
+    # 强制包含热号
     hot_list = [c for c in ranked if c in hot_set]
     for hot in hot_list:
         if hot not in pred:
@@ -277,7 +266,6 @@ def predict_two_colors(train_colors, miss_streak, params):
                         break
     return pred[:2]
 
-# ========== 回测函数（正确，无数据泄露）==========
 def backtest_with_details(colors, issues, params, lookback=10):
     if len(colors) < 80 + lookback:
         return 0.0, 0, []
@@ -287,7 +275,7 @@ def backtest_with_details(colors, issues, params, lookback=10):
     max_miss = 0
     details = []
     for idx in test_indices:
-        train = colors[:idx]                     # 只使用该期之前的数据
+        train = colors[:idx]
         actual = colors[idx]
         pred = predict_two_colors(train, miss_streak, params)
         hit = actual in pred
@@ -314,7 +302,6 @@ def backtest(colors, params, lookback=100):
     miss_streak = 0
     max_miss = 0
     for i in range(80, 80+total):
-        # 训练数据使用该期之前的所有期（从最早到 i-1）
         train = list(reversed(rev[i+1:]))
         actual = rev[i]
         pred = predict_two_colors(train, miss_streak, params)
@@ -326,7 +313,6 @@ def backtest(colors, params, lookback=100):
             max_miss = max(max_miss, miss_streak)
     return hits / total, max_miss
 
-# ========== Optuna 调参 ==========
 def objective(trial, colors):
     import optuna
     params = {
@@ -344,7 +330,6 @@ def objective(trial, colors):
         "recent_window": trial.suggest_int("recent_window", 3, 6),
         "streak_bonus": trial.suggest_float("streak_bonus", 0.5, 3.0),
         "single_threshold": trial.suggest_float("single_threshold", 0.55, 0.70),
-        # 市场状态权重
         "unilateral_hot_weight": trial.suggest_float("unilateral_hot_weight", 1.5, 3.0),
         "unilateral_trans_weight": trial.suggest_float("unilateral_trans_weight", 1.0, 2.5),
         "unilateral_rev_weight": trial.suggest_float("unilateral_rev_weight", 0.2, 1.2),
@@ -359,9 +344,7 @@ def objective(trial, colors):
         "market_trans_weight": trial.suggest_float("market_trans_weight", 0.8, 2.0),
         "market_rev_weight": trial.suggest_float("market_rev_weight", 0.5, 1.5),
     }
-    hr, _ = backtest(colors, params, 100)
-    # 同时考虑最近100期命中率和最大连空
-    _, max_miss = backtest(colors, params, 100)
+    hr, max_miss = backtest(colors, params, 100)
     return hr - max_miss * 0.005
 
 def tune_params():
@@ -401,12 +384,10 @@ def load_params():
             pass
     return DEFAULT_PARAMS.copy()
 
-# ========== 主程序 ==========
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tune", action="store_true", help="运行 Optuna 自动调参")
+    parser.add_argument("--tune", action="store_true")
     args = parser.parse_args()
-
     if args.tune:
         tune_params()
         return
@@ -414,7 +395,7 @@ def main():
     print("获取澳门彩数据...")
     rows = fetch_macau_records(600)
     if not rows:
-        print("失败")
+        print("数据获取失败")
         return
 
     rows_rev = list(reversed(rows))
@@ -433,252 +414,6 @@ def main():
     print(f"预测期号：{pred_issue}")
     print(f"预测二色：{'、'.join(pred)}")
     print("=================================================")
-    print(f"\n最近10期命中率：{hr10:.1%}，最大连空：{max10}")
-    print(f"最近100期命中率：{hr100:.1%}，最大连空：{max100}")
-    print("\n===== 最近10期详情 =====")
-    for d in details:
-        mark = "✓" if d["hit"] else "✗"
-        print(f"{d['issue']:<10} 实际:{d['actual']}  预测:{'、'.join(d['pred']):<5} {mark}")
-
-if __name__ == "__main__":
-    main()            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                raw = resp.read()
-                if "gzip" in resp.headers.get("Content-Encoding","").lower():
-                    raw = gzip.decompress(raw)
-                data = json.loads(raw.decode("utf-8"))
-                rows = []
-                for item in data.get("lottery_data",[]):
-                    if "澳门彩" in item.get("name","") and "新" not in item.get("name",""):
-                        for line in item.get("history",[]):
-                            m = re.match(r"(\d{7})\s*期[：:]\s*([\d,，]+)", line)
-                            if not m: continue
-                            nums = parse_numbers(m.group(2))
-                            if len(nums) < 7: continue
-                            raw_issue = m.group(1)
-                            issue_no = f"{raw_issue[2:4]}/{int(raw_issue[4:]):03d}"
-                            rows.append({
-                                "issue_no": issue_no,
-                                "numbers": nums[:6],
-                                "special_number": nums[6]
-                            })
-                unique = {}
-                for r in rows:
-                    if r["issue_no"] not in unique:
-                        unique[r["issue_no"]] = r
-                rows = list(unique.values())
-                rows.sort(key=lambda x: x["issue_no"], reverse=True)
-                return rows[:limit]
-        except:
-            continue
-    return []
-
-def predict_two_colors(train_colors, miss_streak, params):
-    if not train_colors:
-        return ["红","蓝"]
-
-    # 热号集合：最近7期内出现次数≥2的颜色
-    recent_window_hot = 7
-    recent = train_colors[-recent_window_hot:] if len(train_colors) >= recent_window_hot else train_colors
-    hot_set = set()
-    if len(recent) >= 3:
-        freq = Counter(recent)
-        for c, cnt in freq.items():
-            if cnt >= 2:
-                hot_set.add(c)
-
-    # 得分计算
-    windows = [
-        (params["short_window"], params["w_short"]),
-        (params["mid_window"], params["w_mid"]),
-        (params["long_window"], params["w_long"]),
-    ]
-    score = Counter()
-    recent_boost = params.get("recent_boost", 1.0)
-    boost_window = params.get("recent_window", 5)
-
-    for w, wgt in windows:
-        recent_w = train_colors[-w:] if len(train_colors) >= w else train_colors
-        for i, c in enumerate(recent_w):
-            weight = wgt
-            if i < boost_window:
-                weight *= recent_boost
-            score[c] += weight
-
-    omission = {}
-    for c in COLORS:
-        miss = 0
-        for x in reversed(train_colors):
-            if x == c: break
-            miss += 1
-        omission[c] = miss
-        score[c] += min(miss * params["omission_weight"], params["omission_cap"])
-
-    last = train_colors[-1] if train_colors else None
-    trans = defaultdict(Counter)
-    for i in range(len(train_colors)-1):
-        trans[train_colors[i]][train_colors[i+1]] += 1
-    if last and last in trans:
-        total = sum(trans[last].values())
-        if total > 0:
-            for c, v in trans[last].items():
-                score[c] += (v/total) * params["transition_weight"]
-
-    if len(train_colors) >= 2 and train_colors[-1] == train_colors[-2]:
-        score[train_colors[-1]] += params.get("streak_bonus", 1.5)
-
-    if miss_streak >= 1:
-        cold_rank = sorted(omission.items(), key=lambda x: x[1], reverse=True)
-        for c,_ in cold_rank[:2]:
-            score[c] += params["miss_streak_bonus"]
-
-    ranked = [c for c,_ in score.most_common()]
-    pred = ranked[:2]
-
-    # 强制包含所有热色：按得分顺序，替换掉预测中得分较低的非热色
-    hot_list = [c for c in ranked if c in hot_set]  # 已按得分排序
-    for hot in hot_list:
-        if hot not in pred:
-            pred[-1] = hot
-            if pred[0] == pred[1]:
-                for c in ranked:
-                    if c not in pred:
-                        pred[1] = c
-                        break
-    return pred
-
-def backtest_with_details(colors, issues, params, lookback=10):
-    if len(colors) < 80 + lookback:
-        return 0.0, 0, []
-    test_indices = list(range(len(colors)-lookback, len(colors)))
-    hits = 0
-    miss_streak = 0
-    max_miss = 0
-    details = []
-    for idx in test_indices:
-        train = colors[:idx]
-        actual = colors[idx]
-        pred = predict_two_colors(train, miss_streak, params)
-        hit = actual in pred
-        if hit:
-            hits += 1
-            miss_streak = 0
-        else:
-            miss_streak += 1
-            max_miss = max(max_miss, miss_streak)
-        details.append({
-            "issue": issues[idx],
-            "actual": actual,
-            "pred": pred,
-            "hit": hit
-        })
-    return hits/lookback, max_miss, details
-
-def backtest(colors, params, lookback=100):
-    if len(colors) < 80 + lookback:
-        return 0.0, 0
-    rev = list(reversed(colors))
-    total = min(lookback, len(rev)-80)
-    hits = 0
-    miss_streak = 0
-    max_miss = 0
-    for i in range(80, 80+total):
-        train = list(reversed(rev[:i]))
-        actual = rev[i]
-        pred = predict_two_colors(train, miss_streak, params)
-        if actual in pred:
-            hits += 1
-            miss_streak = 0
-        else:
-            miss_streak += 1
-            max_miss = max(max_miss, miss_streak)
-    return hits/total, max_miss
-
-def objective(trial, colors):
-    import optuna
-    params = {
-        "short_window": trial.suggest_int("short_window", 3, 10),
-        "mid_window": trial.suggest_int("mid_window", 10, 30),
-        "long_window": trial.suggest_int("long_window", 25, 60),
-        "w_short": trial.suggest_float("w_short", 3.0, 7.0),
-        "w_mid": trial.suggest_float("w_mid", 1.0, 3.0),
-        "w_long": trial.suggest_float("w_long", 0.3, 1.5),
-        "omission_weight": trial.suggest_float("omission_weight", 0.4, 1.0),
-        "omission_cap": trial.suggest_float("omission_cap", 2.0, 6.0),
-        "transition_weight": trial.suggest_float("transition_weight", 2.0, 6.0),
-        "miss_streak_bonus": trial.suggest_float("miss_streak_bonus", 2.0, 5.0),
-        "recent_boost": trial.suggest_float("recent_boost", 2.0, 5.0),
-        "recent_window": trial.suggest_int("recent_window", 2, 5),
-        "streak_bonus": trial.suggest_float("streak_bonus", 1.0, 3.0),
-    }
-    hr, max_miss = backtest(colors, params, 100)
-    return hr - max_miss * 0.002
-
-def tune_params():
-    try:
-        import optuna
-    except ImportError:
-        print("请先安装 optuna: pip install optuna")
-        return
-    print("获取数据用于调参...")
-    rows = fetch_macau_records(600)
-    if not rows:
-        print("数据获取失败")
-        return
-    colors = [get_color(r["special_number"]) for r in reversed(rows)]
-    print("开始 Optuna 调参 (300 trials，目标近期命中率)...")
-    study = optuna.create_study(direction="maximize")
-    study.optimize(lambda t: objective(t, colors), n_trials=300, show_progress_bar=True)
-    best = study.best_params
-    for k,v in DEFAULT_PARAMS.items():
-        if k not in best:
-            best[k] = v
-    with open(BEST_PARAMS_FILE, "w") as f:
-        json.dump(best, f, indent=2)
-    print("\n最佳参数:\n", json.dumps(best, indent=2))
-    print(f"评分: {study.best_value:.4f} -> 保存到 {BEST_PARAMS_FILE}")
-
-def load_params():
-    if os.path.exists(BEST_PARAMS_FILE):
-        try:
-            with open(BEST_PARAMS_FILE) as f:
-                p = json.load(f)
-            for k,v in DEFAULT_PARAMS.items():
-                p.setdefault(k, v)
-            return p
-        except:
-            pass
-    return DEFAULT_PARAMS.copy()
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--tune", action="store_true")
-    args = parser.parse_args()
-    if args.tune:
-        tune_params()
-        return
-
-    print("获取澳门彩数据...")
-    rows = fetch_macau_records(600)
-    if not rows:
-        print("失败")
-        return
-    rows_rev = list(reversed(rows))
-    colors = [get_color(r["special_number"]) for r in rows_rev]
-    issues = [r["issue_no"] for r in rows_rev]
-    params = load_params()
-
-    pred = predict_two_colors(colors, miss_streak=0, params=params)
-    latest_issue = rows[0]["issue_no"]
-    pred_issue = next_issue(latest_issue)
-
-    hr10, max10, details = backtest_with_details(colors, issues, params, 10)
-    hr100, max100 = backtest(colors, params, 100)
-
-    print("\n========== 澳门彩 · 特二色预测 ==========")
-    print(f"预测期号：{pred_issue}")
-    print(f"预测二色：{'、'.join(pred)}")
-    print("=========================================")
     print(f"\n最近10期命中率：{hr10:.1%}，最大连空：{max10}")
     print(f"最近100期命中率：{hr100:.1%}，最大连空：{max100}")
     print("\n===== 最近10期详情 =====")
