@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（带回测与自动调参）
+澳门彩 · 特二色预测（带回测与自动调参，增加最近10期详情）
 用法:
     python macau_color_only.py              # 正常预测（使用已有最佳参数）
     python macau_color_only.py --tune       # 运行 Optuna 调参（生成 best_params_macau.json）
@@ -129,6 +129,34 @@ def predict_two_colors(train_colors, miss_streak, params):
     ranked = [c for c,_ in score.most_common()]
     return ranked[:2]
 
+def backtest_with_details(colors, issues, params, lookback=10):
+    """回测最近 lookback 期，返回 (命中率, 最大连空, 详情列表)"""
+    if len(colors) < 80 + lookback:
+        return 0.0, 0, []
+    test_indices = list(range(len(colors)-lookback, len(colors)))
+    hits = 0
+    miss_streak = 0
+    max_miss = 0
+    details = []
+    for idx in test_indices:
+        train = colors[:idx]
+        actual = colors[idx]
+        pred = predict_two_colors(train, miss_streak, params)
+        hit = actual in pred
+        if hit:
+            hits += 1
+            miss_streak = 0
+        else:
+            miss_streak += 1
+            max_miss = max(max_miss, miss_streak)
+        details.append({
+            "issue": issues[idx],
+            "actual": actual,
+            "pred": pred,
+            "hit": hit
+        })
+    return hits/lookback, max_miss, details
+
 def backtest(colors, params, lookback=100):
     if len(colors) < 80 + lookback:
         return 0.0, 0
@@ -215,12 +243,16 @@ def main():
     if not rows:
         print("失败")
         return
-    colors = [get_color(r["special_number"]) for r in reversed(rows)]
+    rows_rev = list(reversed(rows))
+    colors = [get_color(r["special_number"]) for r in rows_rev]
+    issues = [r["issue_no"] for r in rows_rev]
     params = load_params()
+
     pred = predict_two_colors(colors, miss_streak=0, params=params)
     latest_issue = rows[0]["issue_no"]
     pred_issue = next_issue(latest_issue)
-    hr10, max10 = backtest(colors, params, 10)
+
+    hr10, max10, details = backtest_with_details(colors, issues, params, 10)
     hr100, max100 = backtest(colors, params, 100)
 
     print("\n========== 澳门彩 · 特二色预测 ==========")
@@ -229,6 +261,10 @@ def main():
     print("=========================================")
     print(f"\n最近10期命中率：{hr10:.1%}，最大连空：{max10}")
     print(f"最近100期命中率：{hr100:.1%}，最大连空：{max100}")
+    print("\n===== 最近10期详情（由旧到新） =====")
+    for d in details:
+        mark = "✓" if d["hit"] else "✗"
+        print(f"{d['issue']:<10} 实际:{d['actual']}  预测:{'、'.join(d['pred']):<5} {mark}")
 
 if __name__ == "__main__":
     main()
