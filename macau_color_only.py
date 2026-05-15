@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（增强版：状态识别+动态连空保护）
-用法:
-    python macau_color_only.py              # 预测
-    python macau_color_only.py --tune       # 调参
+澳门彩 · 特二色预测（修复回测起点）
 """
 
 import argparse
@@ -81,6 +78,11 @@ def fetch_macau_records(limit=600):
                                 "numbers": nums[:6],
                                 "special_number": nums[6]
                             })
+                # 按期号去重（保留最后一次出现的，即最新）
+                unique = {}
+                for r in rows:
+                    unique[r["issue_no"]] = r
+                rows = list(unique.values())
                 rows.sort(key=lambda x: x["issue_no"], reverse=True)
                 return rows[:limit]
         except:
@@ -161,16 +163,32 @@ def predict_two_colors(train_colors, miss_streak, params):
     return ranked[:2]
 
 def backtest_with_details(colors, issues, params, lookback=10):
+    """
+    回测最后 lookback 期（离现在最近的 lookback 期）
+    colors: 从早到晚的颜色列表
+    issues: 从早到晚的期号列表
+    """
     if len(colors) < 80 + lookback:
         return 0.0, 0, []
+    # 转为最新在前
     rev_c = list(reversed(colors))
     rev_i = list(reversed(issues))
-    total = min(lookback, len(rev_c)-80)
+    total = lookback
+    # 起始索引：从最后 total 期开始（注意：测试期是 rev_c[start] ... rev_c[-1]）
+    start = len(rev_c) - total
+    # 确保有足够历史数据（至少80期）
+    if start < 80:
+        start = 80
+        total = len(rev_c) - start
+    if total <= 0:
+        return 0.0, 0, []
+
     hits = 0
     miss_streak = 0
     max_miss = 0
     details = []
-    for i in range(80, 80+total):
+    for i in range(start, len(rev_c)):
+        # 训练数据：rev_c[0:i] 是 i 条最新数据（逆序），需要转换为从早到晚
         train = list(reversed(rev_c[:i]))
         actual = rev_c[i]
         pred = predict_two_colors(train, miss_streak, params)
@@ -187,7 +205,8 @@ def backtest_with_details(colors, issues, params, lookback=10):
             "pred": pred,
             "hit": hit
         })
-    return hits/total, max_miss, details
+    hit_rate = hits / total if total > 0 else 0.0
+    return hit_rate, max_miss, details
 
 def objective(trial, colors):
     import optuna
@@ -278,7 +297,7 @@ def main():
     print("=========================================")
     print(f"\n最近10期命中率：{hr10:.1%}，最大连空：{max10}")
     print(f"最近100期命中率：{hr100:.1%}，最大连空：{max100}")
-    print("\n===== 最近10期详情 =====")
+    print("\n===== 最近10期详情（由旧到新） =====")
     for d in details:
         mark = "✓" if d["hit"] else "✗"
         print(f"{d['issue']:<10} 实际:{d['actual']}  预测:{'、'.join(d['pred']):<5} {mark}")
