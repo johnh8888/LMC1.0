@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（修复回测起点）
+澳门彩 · 特二色预测（修正版：回测正确显示最近10期）
 """
 
 import argparse
@@ -78,10 +78,11 @@ def fetch_macau_records(limit=600):
                                 "numbers": nums[:6],
                                 "special_number": nums[6]
                             })
-                # 按期号去重（保留最后一次出现的，即最新）
+                # 去重
                 unique = {}
                 for r in rows:
-                    unique[r["issue_no"]] = r
+                    if r["issue_no"] not in unique:
+                        unique[r["issue_no"]] = r
                 rows = list(unique.values())
                 rows.sort(key=lambda x: x["issue_no"], reverse=True)
                 return rows[:limit]
@@ -92,7 +93,6 @@ def fetch_macau_records(limit=600):
 def predict_two_colors(train_colors, miss_streak, params):
     if not train_colors:
         return ["红","蓝"]
-    # 状态识别
     recent = train_colors[:15]
     freq = Counter(recent)
     top_ratio = freq.most_common(1)[0][1] / len(recent)
@@ -124,7 +124,6 @@ def predict_two_colors(train_colors, miss_streak, params):
         omission[c] = miss
         score[c] += min(miss * params["omission_weight"], params["omission_cap"])
 
-    # 转移矩阵
     last = train_colors[0]
     trans = defaultdict(Counter)
     for i in range(len(train_colors)-1):
@@ -135,7 +134,6 @@ def predict_two_colors(train_colors, miss_streak, params):
             for c, v in trans[last].items():
                 score[c] += (v/total) * params["transition_weight"]
 
-    # 状态奖励
     if state == "单边":
         hottest = score.most_common(1)[0][0]
         score[hottest] += params["state_unilateral_bonus"]
@@ -143,14 +141,12 @@ def predict_two_colors(train_colors, miss_streak, params):
         coldest = max(omission, key=omission.get)
         score[coldest] += params["state_chaos_bonus"]
 
-    # 连空保护
     if use_miss:
         cold_rank = sorted(omission.items(), key=lambda x: x[1], reverse=True)
         bonus = params["miss_streak_bonus"] * (1 + 0.2 * miss_streak)
         for c,_ in cold_rank[:2]:
             score[c] += bonus
 
-    # 同色过滤
     kill_streak = params.get("kill_same_color_streak", 3)
     if kill_streak > 0:
         last_n = train_colors[:kill_streak]
@@ -163,34 +159,19 @@ def predict_two_colors(train_colors, miss_streak, params):
     return ranked[:2]
 
 def backtest_with_details(colors, issues, params, lookback=10):
-    """
-    回测最后 lookback 期（离现在最近的 lookback 期）
-    colors: 从早到晚的颜色列表
-    issues: 从早到晚的期号列表
-    """
+    """测试最后 lookback 期（最近N期）"""
     if len(colors) < 80 + lookback:
         return 0.0, 0, []
-    # 转为最新在前
-    rev_c = list(reversed(colors))
-    rev_i = list(reversed(issues))
-    total = lookback
-    # 起始索引：从最后 total 期开始（注意：测试期是 rev_c[start] ... rev_c[-1]）
-    start = len(rev_c) - total
-    # 确保有足够历史数据（至少80期）
-    if start < 80:
-        start = 80
-        total = len(rev_c) - start
-    if total <= 0:
-        return 0.0, 0, []
-
+    # 取最后 lookback 个索引
+    test_indices = list(range(len(colors) - lookback, len(colors)))
     hits = 0
     miss_streak = 0
     max_miss = 0
     details = []
-    for i in range(start, len(rev_c)):
-        # 训练数据：rev_c[0:i] 是 i 条最新数据（逆序），需要转换为从早到晚
-        train = list(reversed(rev_c[:i]))
-        actual = rev_c[i]
+    for idx in test_indices:
+        # 训练数据使用该期之前的所有数据（从0到idx-1）
+        train = colors[:idx]
+        actual = colors[idx]
         pred = predict_two_colors(train, miss_streak, params)
         hit = actual in pred
         if hit:
@@ -200,13 +181,12 @@ def backtest_with_details(colors, issues, params, lookback=10):
             miss_streak += 1
             max_miss = max(max_miss, miss_streak)
         details.append({
-            "issue": rev_i[i],
+            "issue": issues[idx],
             "actual": actual,
             "pred": pred,
             "hit": hit
         })
-    hit_rate = hits / total if total > 0 else 0.0
-    return hit_rate, max_miss, details
+    return hits / lookback, max_miss, details
 
 def objective(trial, colors):
     import optuna
@@ -241,9 +221,9 @@ def tune_params():
         print("失败")
         return
     colors = [get_color(r["special_number"]) for r in reversed(rows)]
-    print("开始调参 (100 trials)...")
+    print("开始调参 (150 trials)...")
     study = optuna.create_study(direction="maximize")
-    study.optimize(lambda t: objective(t, colors), n_trials=100, show_progress_bar=True)
+    study.optimize(lambda t: objective(t, colors), n_trials=150, show_progress_bar=True)
     best = study.best_params
     for k,v in DEFAULT_PARAMS.items():
         if k not in best:
