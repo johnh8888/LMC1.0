@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（冲刺72%+命中率版，稳定无市场切换）
+澳门彩 · 特二色预测（冲刺72%+增强版）
 用法:
     python macau_color_only.py              # 预测
     python macau_color_only.py --tune       # 调参 (建议300 trials)
@@ -21,19 +21,19 @@ GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 COLORS = ["红","蓝","绿"]
 
 DEFAULT_PARAMS = {
-    "short_window": 6,
-    "mid_window": 20,
-    "long_window": 50,
-    "w_short": 4.5,
-    "w_mid": 1.5,
-    "w_long": 0.6,
-    "omission_weight": 0.8,
-    "omission_cap": 5.0,
-    "transition_weight": 3.0,
-    "miss_streak_bonus": 5.0,
-    "recent_boost": 2.5,
-    "recent_window": 4,
-    "streak_bonus": 1.5,
+    "short_window": 5,
+    "mid_window": 18,
+    "long_window": 40,
+    "w_short": 5.5,
+    "w_mid": 2.0,
+    "w_long": 0.7,
+    "omission_weight": 0.7,
+    "omission_cap": 4.5,
+    "transition_weight": 3.5,
+    "miss_streak_bonus": 6.0,
+    "recent_boost": 3.5,
+    "recent_window": 3,
+    "streak_bonus": 2.0,
 }
 BEST_PARAMS_FILE = "best_params_macau.json"
 
@@ -102,16 +102,18 @@ def predict_two_colors(train_colors, miss_streak, params):
     if not train_colors:
         return ["红","蓝"]
 
-    # 热号强制：最近7期内出现次数≥2的所有颜色（最多两个）
-    recent_hot = train_colors[-7:] if len(train_colors) >= 7 else train_colors
+    # ---- 热号强制：最近5期内出现次数≥2的颜色（最多两个） ----
+    recent_hot_len = 5
+    recent = train_colors[-recent_hot_len:] if len(train_colors) >= recent_hot_len else train_colors
     hot_set = set()
-    if len(recent_hot) >= 3:
-        freq = Counter(recent_hot)
-        for c, cnt in freq.items():
-            if cnt >= 2:
+    if len(recent) >= 3:
+        freq = Counter(recent)
+        # 取所有出现次数≥2的颜色，按次数降序，最多取两个
+        for c, cnt in sorted(freq.items(), key=lambda x: x[1], reverse=True):
+            if cnt >= 2 and len(hot_set) < 2:
                 hot_set.add(c)
 
-    # 多窗口加权（近期加权）
+    # ---- 多窗口加权（近期加权） ----
     windows = [
         (params["short_window"], params["w_short"]),
         (params["mid_window"], params["w_mid"]),
@@ -129,7 +131,16 @@ def predict_two_colors(train_colors, miss_streak, params):
                 weight *= recent_boost
             score[c] += weight
 
-    # 遗漏加分
+    # ---- 短期频率修正（最近5期频率比例） ----
+    recent5 = train_colors[-5:] if len(train_colors) >= 5 else train_colors
+    if len(recent5) >= 3:
+        freq5 = Counter(recent5)
+        total5 = len(recent5)
+        for c in COLORS:
+            ratio = freq5.get(c, 0) / total5
+            score[c] += ratio * 8.0   # 额外加8分乘以频率比例
+
+    # ---- 遗漏加分 ----
     omission = {}
     for c in COLORS:
         miss = 0
@@ -139,7 +150,7 @@ def predict_two_colors(train_colors, miss_streak, params):
         omission[c] = miss
         score[c] += min(miss * params["omission_weight"], params["omission_cap"])
 
-    # 转移矩阵
+    # ---- 转移矩阵 ----
     last = train_colors[-1] if train_colors else None
     trans = defaultdict(Counter)
     for i in range(len(train_colors)-1):
@@ -150,11 +161,11 @@ def predict_two_colors(train_colors, miss_streak, params):
             for c, v in trans[last].items():
                 score[c] += (v/total) * params["transition_weight"]
 
-    # 连续状态奖励
+    # ---- 连续状态奖励 ----
     if len(train_colors) >= 2 and train_colors[-1] == train_colors[-2]:
         score[train_colors[-1]] += params.get("streak_bonus", 1.5)
 
-    # 连空保护
+    # ---- 连空保护 ----
     if miss_streak >= 1:
         cold_rank = sorted(omission.items(), key=lambda x: x[1], reverse=True)
         for c,_ in cold_rank[:2]:
@@ -163,7 +174,7 @@ def predict_two_colors(train_colors, miss_streak, params):
     ranked = [c for c,_ in score.most_common()]
     pred = ranked[:2]
 
-    # 强制包含热号（按得分顺序替换）
+    # ---- 强制包含热号（替换得分较低的非热色） ----
     hot_list = [c for c in ranked if c in hot_set]
     for hot in hot_list:
         if hot not in pred:
@@ -225,19 +236,19 @@ def backtest(colors, params, lookback=100):
 def objective(trial, colors):
     import optuna
     params = {
-        "short_window": trial.suggest_int("short_window", 4, 12),
-        "mid_window": trial.suggest_int("mid_window", 12, 35),
-        "long_window": trial.suggest_int("long_window", 30, 70),
-        "w_short": trial.suggest_float("w_short", 2.0, 6.0),
-        "w_mid": trial.suggest_float("w_mid", 0.8, 2.5),
-        "w_long": trial.suggest_float("w_long", 0.2, 1.5),
-        "omission_weight": trial.suggest_float("omission_weight", 0.5, 1.2),
-        "omission_cap": trial.suggest_float("omission_cap", 3.0, 8.0),
-        "transition_weight": trial.suggest_float("transition_weight", 2.0, 7.0),
+        "short_window": trial.suggest_int("short_window", 3, 10),
+        "mid_window": trial.suggest_int("mid_window", 10, 30),
+        "long_window": trial.suggest_int("long_window", 25, 55),
+        "w_short": trial.suggest_float("w_short", 3.0, 7.0),
+        "w_mid": trial.suggest_float("w_mid", 1.0, 3.0),
+        "w_long": trial.suggest_float("w_long", 0.3, 1.5),
+        "omission_weight": trial.suggest_float("omission_weight", 0.4, 1.0),
+        "omission_cap": trial.suggest_float("omission_cap", 3.0, 6.0),
+        "transition_weight": trial.suggest_float("transition_weight", 2.0, 6.0),
         "miss_streak_bonus": trial.suggest_float("miss_streak_bonus", 3.0, 8.0),
-        "recent_boost": trial.suggest_float("recent_boost", 1.5, 4.0),
-        "recent_window": trial.suggest_int("recent_window", 3, 6),
-        "streak_bonus": trial.suggest_float("streak_bonus", 0.5, 3.0),
+        "recent_boost": trial.suggest_float("recent_boost", 2.0, 5.0),
+        "recent_window": trial.suggest_int("recent_window", 2, 5),
+        "streak_bonus": trial.suggest_float("streak_bonus", 1.0, 3.0),
     }
     hr, max_miss = backtest(colors, params, 100)
     return hr - max_miss * 0.005
@@ -249,7 +260,7 @@ def tune_params():
         print("请先安装 optuna: pip install optuna")
         return
     print("获取数据用于调参...")
-    rows = fetch_macau_records(500)
+    rows = fetch_macau_records(600)
     if not rows:
         print("数据获取失败")
         return
@@ -287,7 +298,7 @@ def main():
         return
 
     print("获取澳门彩数据...")
-    rows = fetch_macau_records(500)
+    rows = fetch_macau_records(600)
     if not rows:
         print("失败")
         return
@@ -303,7 +314,7 @@ def main():
     hr10, max10, details = backtest_with_details(colors, issues, params, 10)
     hr100, max100 = backtest(colors, params, 100)
 
-    print("\n========== 澳门彩 · 特二色预测（稳定版）==========")
+    print("\n========== 澳门彩 · 特二色预测（增强版）==========")
     print(f"预测期号：{pred_issue}")
     print(f"预测二色：{'、'.join(pred)}")
     print("=================================================")
