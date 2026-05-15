@@ -17,9 +17,5 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Create writable data directory
-        run: |
-          mkdir -p /tmp/mydata
-          echo "export DATA_DIR=/tmp/mydata" >> $GITHUB_ENV
       - name: Run script
         run: python macau_color_only.py
