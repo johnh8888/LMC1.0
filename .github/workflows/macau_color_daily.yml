@@ -1,51 +1,21 @@
-name: 澳门彩特二色全自动（每周调参+每日预测）
+name: 澳门彩特二色每日预测（动态参数）
 
 on:
   schedule:
-    - cron: '17 17 * * 0'   # 周日 17:17 UTC = 周一 01:17 UTC+8
-    - cron: '0 14 * * *'    # 每日 14:00 UTC = 22:00 UTC+8
+    - cron: '0 14 * * *'   # 每天 22:00 UTC+8
   workflow_dispatch:
 
-permissions:
-  contents: write
-
-concurrency:
-  group: macau-color
-  cancel-in-progress: false
-
 jobs:
-  tune:
-    if: github.event.schedule == '17 17 * * 0' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45   # 增加超时
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: 安装依赖
-        run: pip install optuna
-      - name: 运行调参
-        run: python macau_color_only.py --tune
-      - name: 提交新的参数文件
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add best_params_macau.json
-          git commit -m "Auto-tune Macau color params [skip ci]" || exit 0
-          git push
-
   predict:
-    if: always() && (github.event.schedule == '0 14 * * *' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: 运行预测并保存结果
+      - name: 运行动态参数预测
         run: |
-          python macau_color_only.py | tee prediction_result.txt
+          python macau_color_adaptive.py | tee prediction_result.txt
       - name: 保存预测结果
         uses: actions/upload-artifact@v4
         with:
