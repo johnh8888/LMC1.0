@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（冲击75%+命中率版）
-- 强制包含最近7期内出现次数≥2的所有颜色
-- 提高近期权重，优化调参目标
+澳门彩 · 特二色预测（强制所有近期热色版）
 """
 
 import argparse
@@ -101,17 +99,17 @@ def predict_two_colors(train_colors, miss_streak, params):
     if not train_colors:
         return ["红","蓝"]
 
-    # --- 热号强制：最近7期内出现次数≥2的所有颜色（最多两个）---
+    # 热号集合：最近7期内出现次数≥2的颜色
     recent_window_hot = 7
     recent = train_colors[-recent_window_hot:] if len(train_colors) >= recent_window_hot else train_colors
-    hot_colors = []
+    hot_set = set()
     if len(recent) >= 3:
         freq = Counter(recent)
-        for c, cnt in freq.most_common():
-            if cnt >= 2 and len(hot_colors) < 2:
-                hot_colors.append(c)
+        for c, cnt in freq.items():
+            if cnt >= 2:
+                hot_set.add(c)
 
-    # --- 多窗口加权得分 ---
+    # 得分计算
     windows = [
         (params["short_window"], params["w_short"]),
         (params["mid_window"], params["w_mid"]),
@@ -129,7 +127,6 @@ def predict_two_colors(train_colors, miss_streak, params):
                 weight *= recent_boost
             score[c] += weight
 
-    # --- 遗漏加分 ---
     omission = {}
     for c in COLORS:
         miss = 0
@@ -139,7 +136,6 @@ def predict_two_colors(train_colors, miss_streak, params):
         omission[c] = miss
         score[c] += min(miss * params["omission_weight"], params["omission_cap"])
 
-    # --- 转移矩阵 ---
     last = train_colors[-1] if train_colors else None
     trans = defaultdict(Counter)
     for i in range(len(train_colors)-1):
@@ -150,11 +146,9 @@ def predict_two_colors(train_colors, miss_streak, params):
             for c, v in trans[last].items():
                 score[c] += (v/total) * params["transition_weight"]
 
-    # --- 连续状态奖励 ---
     if len(train_colors) >= 2 and train_colors[-1] == train_colors[-2]:
         score[train_colors[-1]] += params.get("streak_bonus", 1.5)
 
-    # --- 连空保护（miss_streak>=1时奖励最冷两色）---
     if miss_streak >= 1:
         cold_rank = sorted(omission.items(), key=lambda x: x[1], reverse=True)
         for c,_ in cold_rank[:2]:
@@ -163,11 +157,11 @@ def predict_two_colors(train_colors, miss_streak, params):
     ranked = [c for c,_ in score.most_common()]
     pred = ranked[:2]
 
-    # --- 强制包含所有热号（按顺序替换，最多两个）---
-    for hot in hot_colors:
+    # 强制包含所有热色：按得分顺序，替换掉预测中得分较低的非热色
+    hot_list = [c for c in ranked if c in hot_set]  # 已按得分排序
+    for hot in hot_list:
         if hot not in pred:
             pred[-1] = hot
-            # 去重
             if pred[0] == pred[1]:
                 for c in ranked:
                     if c not in pred:
@@ -240,7 +234,6 @@ def objective(trial, colors):
         "streak_bonus": trial.suggest_float("streak_bonus", 1.0, 3.0),
     }
     hr, max_miss = backtest(colors, params, 100)
-    # 目标：命中率 - 极小的连空惩罚，侧重命中率
     return hr - max_miss * 0.002
 
 def tune_params():
