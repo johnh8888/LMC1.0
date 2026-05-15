@@ -1,0 +1,43 @@
+# HMM + XGBoost Research Framework V6
+
+科研级高噪声离散序列研究框架。
+
+## 功能
+
+- Hidden Markov Model (HMM)
+- XGBoost 分类器
+- Walk-forward validation
+- LogLoss
+- Monte Carlo Simulation
+- 风险指标
+- 显著性检验
+- 资金曲线
+
+---
+
+## 安装依赖
+
+```bash
+pip install numpy pandas xgboost hmmlearn scikit-learn matplotlib
+```
+
+---
+
+## 运行
+
+```bash
+python research_v6.py
+```
+
+---
+
+## 输出文件
+
+- bankroll_curve.png
+- feature_importance.csv
+
+---
+
+## 注意
+
+这是一个统计研究框架，不代表真实存在稳定预测优势。
