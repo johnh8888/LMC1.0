@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（全自动自适应版）
-- 最近7期最热颜色（出现≥2次）强制加入预测
-- 支持每周自动调参
+澳门彩 · 特二色预测（激进热号强制版）
 """
 
 import argparse
@@ -101,18 +99,12 @@ def predict_two_colors(train_colors, miss_streak, params):
     if not train_colors:
         return ["红","蓝"]
 
-    # --- 热号强制：最近7期内出现次数最多的颜色（若出现次数≥2）---
+    # 激进热号：最近7期出现次数最多的颜色（无条件强制）
     recent_window = 7
     recent = train_colors[-recent_window:] if len(train_colors) >= recent_window else train_colors
-    hot_color = None
-    if len(recent) >= 3:
-        freq = Counter(recent)
-        if freq:
-            most_common, cnt = freq.most_common(1)[0]
-            if cnt >= 2:   # 出现次数≥2就强制
-                hot_color = most_common
+    hot_color = Counter(recent).most_common(1)[0][0] if recent else None
 
-    # --- 多窗口加权得分 ---
+    # 多窗口加权
     windows = [
         (params["short_window"], params["w_short"]),
         (params["mid_window"], params["w_mid"]),
@@ -130,7 +122,7 @@ def predict_two_colors(train_colors, miss_streak, params):
                 weight *= recent_boost
             score[c] += weight
 
-    # --- 遗漏加分 ---
+    # 遗漏加分
     omission = {}
     for c in COLORS:
         miss = 0
@@ -140,7 +132,7 @@ def predict_two_colors(train_colors, miss_streak, params):
         omission[c] = miss
         score[c] += min(miss * params["omission_weight"], params["omission_cap"])
 
-    # --- 转移矩阵 ---
+    # 转移矩阵
     last = train_colors[-1] if train_colors else None
     trans = defaultdict(Counter)
     for i in range(len(train_colors)-1):
@@ -151,11 +143,11 @@ def predict_two_colors(train_colors, miss_streak, params):
             for c, v in trans[last].items():
                 score[c] += (v/total) * params["transition_weight"]
 
-    # --- 连续状态奖励 ---
+    # 连续状态奖励
     if len(train_colors) >= 2 and train_colors[-1] == train_colors[-2]:
         score[train_colors[-1]] += params.get("streak_bonus", 1.5)
 
-    # --- 连空保护 ---
+    # 连空保护
     if miss_streak >= 1:
         cold_rank = sorted(omission.items(), key=lambda x: x[1], reverse=True)
         for c,_ in cold_rank[:2]:
@@ -164,7 +156,7 @@ def predict_two_colors(train_colors, miss_streak, params):
     ranked = [c for c,_ in score.most_common()]
     pred = ranked[:2]
 
-    # --- 强制包含热号（如果不在预测中）---
+    # 强制包含热号（如果不在预测中）
     if hot_color and hot_color not in pred:
         pred[-1] = hot_color
         if pred[0] == pred[1]:
@@ -172,6 +164,7 @@ def predict_two_colors(train_colors, miss_streak, params):
                 if c not in pred:
                     pred[1] = c
                     break
+
     return pred
 
 def backtest_with_details(colors, issues, params, lookback=10):
