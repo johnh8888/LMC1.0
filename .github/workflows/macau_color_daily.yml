@@ -2,17 +2,18 @@ name: 澳门彩特二色全自动（每周调参+每日预测）
 
 on:
   schedule:
-    # 每周一凌晨 1:00 UTC+8 调参（使用 UTC 时间）
     - cron: '17 17 * * 0'   # 周日 17:17 UTC = 周一 01:17 UTC+8
-    # 每日 22:00 UTC+8 预测（开奖后）
-    - cron: '0 14 * * *'    # 14:00 UTC = 22:00 UTC+8
-  workflow_dispatch:        # 手动触发
+    - cron: '0 14 * * *'    # 每日 14:00 UTC = 22:00 UTC+8
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 关键：允许推送到仓库
 
 jobs:
   tune:
     if: github.event.schedule == '17 17 * * 0' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 30     # 调参最多30分钟
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -40,7 +41,7 @@ jobs:
           python-version: '3.10'
       - name: 运行预测
         run: python macau_color_only.py
-      - name: 保存预测结果（可选）
+      - name: 保存预测结果
         uses: actions/upload-artifact@v4
         with:
           name: macau-color-prediction
