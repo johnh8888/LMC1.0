@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（修复热号检测版）
+澳门彩 · 特二色预测（冲刺72%命中率版）
+用法:
+    python macau_color_only.py              # 预测
+    python macau_color_only.py --tune       # 调参 (建议300 trials)
 """
 
 import argparse
@@ -30,6 +33,7 @@ DEFAULT_PARAMS = {
     "miss_streak_bonus": 5.0,
     "recent_boost": 2.5,
     "recent_window": 4,
+    "streak_bonus": 1.5,          # 新增：连续状态奖励
 }
 BEST_PARAMS_FILE = "best_params_macau.json"
 
@@ -98,17 +102,16 @@ def predict_two_colors(train_colors, miss_streak, params):
     if not train_colors:
         return ["红","蓝"]
 
-    # 修复：取最近8期（末尾8个）
+    # 热号强制检测（最近8期出现≥3次）
     recent_8 = train_colors[-8:] if len(train_colors) >= 8 else train_colors
     hot_color = None
     if len(recent_8) >= 5:
         freq = Counter(recent_8)
         most_common, cnt = freq.most_common(1)[0]
-        # 触发阈值降低为 3 次（更敏感）
         if cnt >= 3:
             hot_color = most_common
 
-    # 正常预测流程
+    # 多窗口加权（近期加权）
     windows = [
         (params["short_window"], params["w_short"]),
         (params["mid_window"], params["w_mid"]),
@@ -119,25 +122,24 @@ def predict_two_colors(train_colors, miss_streak, params):
     recent_window = params.get("recent_window", 5)
 
     for w, wgt in windows:
-        # 遍历最近 w 期（注意：train_colors 是从早到晚，所以取最后 w 个才是最近）
         recent_w = train_colors[-w:] if len(train_colors) >= w else train_colors
         for i, c in enumerate(recent_w):
             weight = wgt
-            # i=0 对应最近一期，i 越小越近
             if i < recent_window:
                 weight *= recent_boost
             score[c] += weight
 
+    # 遗漏加分
     omission = {}
     for c in COLORS:
         miss = 0
-        for x in reversed(train_colors):  # 从最近向历史查找
+        for x in reversed(train_colors):
             if x == c: break
             miss += 1
         omission[c] = miss
         score[c] += min(miss * params["omission_weight"], params["omission_cap"])
 
-    # 转移矩阵：基于最近一期
+    # 转移矩阵
     last = train_colors[-1] if train_colors else None
     trans = defaultdict(Counter)
     for i in range(len(train_colors)-1):
@@ -148,6 +150,12 @@ def predict_two_colors(train_colors, miss_streak, params):
             for c, v in trans[last].items():
                 score[c] += (v/total) * params["transition_weight"]
 
+    # 新增：连续状态奖励（如果最近2期相同，奖励该颜色）
+    if len(train_colors) >= 2 and train_colors[-1] == train_colors[-2]:
+        streak_color = train_colors[-1]
+        score[streak_color] += params.get("streak_bonus", 1.5)
+
+    # 连空保护
     if miss_streak >= 1:
         cold_rank = sorted(omission.items(), key=lambda x: x[1], reverse=True)
         for c,_ in cold_rank[:2]:
@@ -156,12 +164,10 @@ def predict_two_colors(train_colors, miss_streak, params):
     ranked = [c for c,_ in score.most_common()]
     pred = ranked[:2]
 
-    # 强制热号覆盖：如果检测到热号且不在预测中，替换掉第二个预测
+    # 热号覆盖
     if hot_color and hot_color not in pred:
         pred[-1] = hot_color
-        # 如果替换后仍有重复，去重
         if pred[0] == pred[1]:
-            # 找下一个候选
             for c in ranked:
                 if c not in pred:
                     pred[1] = c
@@ -178,7 +184,7 @@ def backtest_with_details(colors, issues, params, lookback=10):
     max_miss = 0
     details = []
     for idx in test_indices:
-        train = colors[:idx]  # 从最早到 idx-1
+        train = colors[:idx]
         actual = colors[idx]
         pred = predict_two_colors(train, miss_streak, params)
         hit = actual in pred
@@ -195,6 +201,14 @@ def backtest_with_details(colors, issues, params, lookback=10):
             "hit": hit
         })
     return hits/lookback, max_miss, details
+
+def backtest_weighted(colors, params, lookback50=50, lookback100=100):
+    """返回加权命中率（近期权重更高）"""
+    hr50, max_miss50 = backtest(colors, params, lookback50)
+    hr100, max_miss100 = backtest(colors, params, lookback100)
+    weighted_hr = 0.5 * hr50 + 0.5 * hr100
+    max_miss = max(max_miss50, max_miss100)
+    return weighted_hr, max_miss
 
 def backtest(colors, params, lookback=100):
     if len(colors) < 80 + lookback:
@@ -231,9 +245,12 @@ def objective(trial, colors):
         "miss_streak_bonus": trial.suggest_float("miss_streak_bonus", 3.0, 8.0),
         "recent_boost": trial.suggest_float("recent_boost", 1.5, 4.0),
         "recent_window": trial.suggest_int("recent_window", 3, 6),
+        "streak_bonus": trial.suggest_float("streak_bonus", 0.5, 3.0),
     }
-    hr, max_miss = backtest(colors, params, lookback=100)
-    return hr - max_miss * 0.01
+    # 使用加权命中率（50期+100期各半）
+    weighted_hr, max_miss = backtest_weighted(colors, params, lookback50=50, lookback100=100)
+    # 评分 = 加权命中率 - 最大连空 * 0.005（惩罚降低）
+    return weighted_hr - max_miss * 0.005
 
 def tune_params():
     try:
@@ -242,14 +259,14 @@ def tune_params():
         print("请先安装 optuna: pip install optuna")
         return
     print("获取数据用于调参...")
-    rows = fetch_macau_records(400)
+    rows = fetch_macau_records(500)  # 更多数据
     if not rows:
         print("数据获取失败")
         return
     colors = [get_color(r["special_number"]) for r in reversed(rows)]
-    print("开始 Optuna 调参 (150 trials)...")
+    print("开始 Optuna 调参 (300 trials，目标加权命中率)...")
     study = optuna.create_study(direction="maximize")
-    study.optimize(lambda t: objective(t, colors), n_trials=150, show_progress_bar=True)
+    study.optimize(lambda t: objective(t, colors), n_trials=300, show_progress_bar=True)
     best = study.best_params
     for k,v in DEFAULT_PARAMS.items():
         if k not in best:
@@ -257,7 +274,7 @@ def tune_params():
     with open(BEST_PARAMS_FILE, "w", encoding="utf-8") as f:
         json.dump(best, f, ensure_ascii=False, indent=2)
     print("\n最佳参数:\n", json.dumps(best, indent=2, ensure_ascii=False))
-    print(f"评分: {study.best_value:.4f} -> 保存到 {BEST_PARAMS_FILE}")
+    print(f"最佳评分: {study.best_value:.4f} -> 保存到 {BEST_PARAMS_FILE}")
 
 def load_params():
     if os.path.exists(BEST_PARAMS_FILE):
@@ -280,7 +297,7 @@ def main():
         return
 
     print("获取澳门彩数据...")
-    rows = fetch_macau_records(400)
+    rows = fetch_macau_records(500)
     if not rows:
         print("失败")
         return
