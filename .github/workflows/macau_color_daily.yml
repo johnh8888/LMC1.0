@@ -1,6 +1,4 @@
-from pathlib import Path
-
-workflow = r'''name: Research V6 CI
+name: Research V6 CI
 
 on:
   push:
@@ -46,13 +44,3 @@ jobs:
           path: |
             bankroll_curve.png
             feature_importance.csv
-'''
-
-base = Path("/mnt/data/.github/workflows")
-base.mkdir(parents=True, exist_ok=True)
-
-workflow_path = base / "research_v6_ci.yml"
-workflow_path.write_text(workflow, encoding="utf-8")
-
-print("Generated:")
-print(workflow_path)
