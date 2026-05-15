@@ -1,50 +1,58 @@
-name: 澳门彩特二色全自动（每周调参+每日预测）
+from pathlib import Path
+
+workflow = r'''name: Research V6 CI
 
 on:
-  schedule:
-    - cron: '17 17 * * 0'   # 周日 17:17 UTC = 周一 01:17 UTC+8 (调参)
-    - cron: '0 14 * * *'    # 每日 14:00 UTC = 22:00 UTC+8 (预测)
+  push:
+    branches:
+      - main
+      - master
+
+  pull_request:
+    branches:
+      - main
+      - master
+
   workflow_dispatch:
 
-permissions:
-  contents: write   # 允许调参作业推送参数文件
-
 jobs:
-  tune:
-    if: github.event.schedule == '17 17 * * 0' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: 安装依赖
-        run: pip install optuna
-      - name: 运行调参
-        run: python macau_color_only.py --tune
-      - name: 提交新的参数文件
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add best_params_macau.json
-          git commit -m "Weekly auto-tune Macau color params [skip ci]" || exit 0
-          git push
+  run-research-framework:
 
-  predict:
-    if: always() && (github.event.schedule == '0 14 * * *' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-      - name: 运行预测
+          python-version: "3.11"
+
+      - name: Install Dependencies
         run: |
-          python macau_color_only.py | tee prediction_result.txt
-      - name: 上传预测结果
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Research Framework
+        run: |
+          python research_v6.py
+
+      - name: Upload Generated Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macau-color-prediction
-          path: prediction_result.txt
-          retention-days: 7
+          name: research-results
+          path: |
+            bankroll_curve.png
+            feature_importance.csv
+'''
+
+base = Path("/mnt/data/.github/workflows")
+base.mkdir(parents=True, exist_ok=True)
+
+workflow_path = base / "research_v6_ci.yml"
+workflow_path.write_text(workflow, encoding="utf-8")
+
+print("Generated:")
+print(workflow_path)
