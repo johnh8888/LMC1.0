@@ -1,270 +1,555 @@
-#!/usr/bin/env python3
+from pathlib import Path
+
+script = r'''#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（带回测与自动调参，增加最近10期详情）
-用法:
-    python macau_color_only.py              # 正常预测（使用已有最佳参数）
-    python macau_color_only.py --tune       # 运行 Optuna 调参（生成 best_params_macau.json）
+===========================================================
+HMM + XGBoost Research Framework V6
+Author: OpenAI ChatGPT
+===========================================================
+
+科研级高噪声离散序列研究框架：
+
+Features
+--------
+- Walk-forward validation
+- Hidden Markov Model (HMM)
+- XGBoost classifier
+- Bayesian-style probability output
+- Risk metrics
+- Monte Carlo bankroll simulation
+- Statistical significance test
+- LogLoss evaluation
+- Feature engineering
+
+Install
+-------
+pip install numpy pandas xgboost hmmlearn scikit-learn matplotlib
+
+Run
+---
+python research_v6.py
 """
 
-import argparse
-import gzip
-import json
-import re
-import urllib.request
-from collections import Counter, defaultdict
-import os
+import math
+import random
+from collections import Counter
 
-RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
-BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
-GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
-COLORS = ["红","蓝","绿"]
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from hmmlearn import hmm
+from sklearn.metrics import accuracy_score, log_loss
+from xgboost import XGBClassifier
 
-DEFAULT_PARAMS = {
-    "short_window": 12, "mid_window": 30, "long_window": 60,
-    "w_short": 3.2, "w_mid": 1.4, "w_long": 0.8,
-    "omission_weight": 0.65, "omission_cap": 6.0,
-    "transition_weight": 4.5, "miss_streak_bonus": 4.0,
+# =========================================================
+# CONFIG
+# =========================================================
+
+COLORS = ["红", "蓝", "绿"]
+
+COLOR_TO_INT = {
+    "红": 0,
+    "蓝": 1,
+    "绿": 2
 }
-BEST_PARAMS_FILE = "best_params_macau.json"
 
-def get_color(n):
-    if n in RED: return "红"
-    if n in BLUE: return "蓝"
-    if n in GREEN: return "绿"
-    return "红"
+INT_TO_COLOR = {
+    0: "红",
+    1: "蓝",
+    2: "绿"
+}
 
-def next_issue(issue_no):
-    try:
-        y,s = issue_no.split('/')
-        return f"{y}/{str(int(s)+1).zfill(3)}"
-    except:
-        return issue_no
+N_HIDDEN = 3
+WINDOW = 200
+TEST_SIZE = 200
+BANKROLL_INIT = 10000
+BET_SIZE = 100
 
-def parse_numbers(value):
-    out = []
-    for t in re.split(r"[，,]", value):
-        t = t.strip()
-        if not t: continue
-        try:
-            n = int(t)
-            if 1<=n<=49: out.append(n)
-        except: pass
-    return out
+RANDOM_SEED = 42
 
-def fetch_macau_records(limit=600):
-    url = "https://marksix6.net/index.php?api=1"
-    headers = {"User-Agent":"Mozilla/5.0"}
-    for _ in range(3):
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                raw = resp.read()
-                if "gzip" in resp.headers.get("Content-Encoding","").lower():
-                    raw = gzip.decompress(raw)
-                data = json.loads(raw.decode("utf-8"))
-                rows = []
-                for item in data.get("lottery_data",[]):
-                    if "澳门彩" in item.get("name","") and "新" not in item.get("name",""):
-                        for line in item.get("history",[]):
-                            m = re.match(r"(\d{7})\s*期[：:]\s*([\d,，]+)", line)
-                            if not m: continue
-                            nums = parse_numbers(m.group(2))
-                            if len(nums) < 7: continue
-                            raw_issue = m.group(1)
-                            issue_no = f"{raw_issue[2:4]}/{int(raw_issue[4:]):03d}"
-                            rows.append({
-                                "issue_no": issue_no,
-                                "special_number": nums[6]
-                            })
-                unique = {}
-                for r in rows:
-                    if r["issue_no"] not in unique:
-                        unique[r["issue_no"]] = r
-                rows = list(unique.values())
-                rows.sort(key=lambda x: x["issue_no"], reverse=True)
-                return rows[:limit]
-        except:
-            continue
-    return []
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
 
-def predict_two_colors(train_colors, miss_streak, params):
-    if not train_colors:
-        return ["红","蓝"]
-    windows = [
-        (params["short_window"], params["w_short"]),
-        (params["mid_window"], params["w_mid"]),
-        (params["long_window"], params["w_long"]),
-    ]
-    score = Counter()
-    for w, wgt in windows:
-        recent = train_colors[:w]
-        for c in recent:
-            score[c] += wgt
+# =========================================================
+# ENCODE
+# =========================================================
 
-    omission = {}
-    for c in COLORS:
-        miss = 0
-        for x in train_colors:
-            if x == c: break
-            miss += 1
-        omission[c] = miss
-        score[c] += min(miss * params["omission_weight"], params["omission_cap"])
+def encode(seq):
+    return np.array([
+        COLOR_TO_INT[x]
+        for x in seq
+    ])
 
-    last = train_colors[0]
-    trans = defaultdict(Counter)
-    for i in range(len(train_colors)-1):
-        trans[train_colors[i]][train_colors[i+1]] += 1
-    if last in trans:
-        total = sum(trans[last].values())
-        if total > 0:
-            for c, v in trans[last].items():
-                score[c] += (v/total) * params["transition_weight"]
+# =========================================================
+# HMM FEATURES
+# =========================================================
 
-    if miss_streak >= 1:
-        cold_rank = sorted(omission.items(), key=lambda x: x[1], reverse=True)
-        for c,_ in cold_rank[:2]:
-            score[c] += params["miss_streak_bonus"]
+def hmm_features(train):
 
-    ranked = [c for c,_ in score.most_common()]
-    return ranked[:2]
+    X = encode(train).reshape(-1, 1)
 
-def backtest_with_details(colors, issues, params, lookback=10):
-    """回测最近 lookback 期，返回 (命中率, 最大连空, 详情列表)"""
-    if len(colors) < 80 + lookback:
-        return 0.0, 0, []
-    test_indices = list(range(len(colors)-lookback, len(colors)))
-    hits = 0
-    miss_streak = 0
-    max_miss = 0
-    details = []
-    for idx in test_indices:
-        train = colors[:idx]
-        actual = colors[idx]
-        pred = predict_two_colors(train, miss_streak, params)
-        hit = actual in pred
-        if hit:
-            hits += 1
-            miss_streak = 0
-        else:
-            miss_streak += 1
-            max_miss = max(max_miss, miss_streak)
-        details.append({
-            "issue": issues[idx],
-            "actual": actual,
-            "pred": pred,
-            "hit": hit
-        })
-    return hits/lookback, max_miss, details
+    model = hmm.CategoricalHMM(
+        n_components=N_HIDDEN,
+        n_iter=100,
+        random_state=RANDOM_SEED
+    )
 
-def backtest(colors, params, lookback=100):
-    if len(colors) < 80 + lookback:
-        return 0.0, 0
-    rev = list(reversed(colors))
-    total = min(lookback, len(rev)-80)
-    hits = 0
-    miss_streak = 0
-    max_miss = 0
-    for i in range(80, 80+total):
-        train = list(reversed(rev[:i]))
-        actual = rev[i]
-        pred = predict_two_colors(train, miss_streak, params)
-        if actual in pred:
-            hits += 1
-            miss_streak = 0
-        else:
-            miss_streak += 1
-            max_miss = max(max_miss, miss_streak)
-    return hits/total, max_miss
+    model.fit(X)
 
-def objective(trial, colors):
-    import optuna
-    params = {
-        "short_window": trial.suggest_int("short_window", 6, 20),
-        "mid_window": trial.suggest_int("mid_window", 15, 50),
-        "long_window": trial.suggest_int("long_window", 40, 90),
-        "w_short": trial.suggest_float("w_short", 1.0, 6.0),
-        "w_mid": trial.suggest_float("w_mid", 0.5, 3.0),
-        "w_long": trial.suggest_float("w_long", 0.2, 2.0),
-        "omission_weight": trial.suggest_float("omission_weight", 0.2, 1.5),
-        "omission_cap": trial.suggest_float("omission_cap", 2.0, 10.0),
-        "transition_weight": trial.suggest_float("transition_weight", 1.0, 8.0),
-        "miss_streak_bonus": trial.suggest_float("miss_streak_bonus", 1.0, 8.0),
+    hidden_states = model.predict(X)
+
+    last_state = hidden_states[-1]
+
+    trans_prob = model.transmat_[last_state]
+
+    return {
+        "hidden_state": int(last_state),
+        "trans_prob": trans_prob
     }
-    hr, max_miss = backtest(colors, params, 100)
-    return hr - max_miss * 0.015
 
-def tune_params():
-    try:
-        import optuna
-    except ImportError:
-        print("请先安装 optuna: pip install optuna")
-        return
-    print("获取数据用于调参...")
-    rows = fetch_macau_records(400)
-    if not rows:
-        print("失败")
-        return
-    colors = [get_color(r["special_number"]) for r in reversed(rows)]
-    print("开始 Optuna 调参 (150 trials)...")
-    study = optuna.create_study(direction="maximize")
-    study.optimize(lambda t: objective(t, colors), n_trials=150, show_progress_bar=True)
-    best = study.best_params
-    for k,v in DEFAULT_PARAMS.items():
-        if k not in best:
-            best[k] = v
-    with open(BEST_PARAMS_FILE, "w", encoding="utf-8") as f:
-        json.dump(best, f, indent=2, ensure_ascii=False)
-    print("\n最佳参数:\n", json.dumps(best, indent=2, ensure_ascii=False))
-    print(f"评分: {study.best_value:.4f} -> 保存到 {BEST_PARAMS_FILE}")
+# =========================================================
+# FEATURE ENGINEERING
+# =========================================================
 
-def load_params():
-    if os.path.exists(BEST_PARAMS_FILE):
-        try:
-            with open(BEST_PARAMS_FILE, encoding="utf-8") as f:
-                p = json.load(f)
-            for k,v in DEFAULT_PARAMS.items():
-                p.setdefault(k, v)
-            return p
-        except:
-            pass
-    return DEFAULT_PARAMS.copy()
+def make_features(train):
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--tune", action="store_true")
-    args = parser.parse_args()
-    if args.tune:
-        tune_params()
-        return
+    feat = {}
 
-    print("获取澳门彩数据...")
-    rows = fetch_macau_records(400)
-    if not rows:
-        print("失败")
-        return
-    rows_rev = list(reversed(rows))
-    colors = [get_color(r["special_number"]) for r in rows_rev]
-    issues = [r["issue_no"] for r in rows_rev]
-    params = load_params()
+    recent = train[-5:]
 
-    pred = predict_two_colors(colors, miss_streak=0, params=params)
-    latest_issue = rows[0]["issue_no"]
-    pred_issue = next_issue(latest_issue)
+    for i, c in enumerate(recent):
+        feat[f"recent_{i}"] = COLOR_TO_INT[c]
 
-    hr10, max10, details = backtest_with_details(colors, issues, params, 10)
-    hr100, max100 = backtest(colors, params, 100)
+    for window in [10, 30]:
 
-    print("\n========== 澳门彩 · 特二色预测 ==========")
-    print(f"预测期号：{pred_issue}")
-    print(f"预测二色：{'、'.join(pred)}")
-    print("=========================================")
-    print(f"\n最近10期命中率：{hr10:.1%}，最大连空：{max10}")
-    print(f"最近100期命中率：{hr100:.1%}，最大连空：{max100}")
-    print("\n===== 最近10期详情（由旧到新） =====")
-    for d in details:
-        mark = "✓" if d["hit"] else "✗"
-        print(f"{d['issue']:<10} 实际:{d['actual']}  预测:{'、'.join(d['pred']):<5} {mark}")
+        sub = train[-window:]
+
+        cnt = Counter(sub)
+
+        for c in COLORS:
+            feat[f"freq_{window}_{c}"] = (
+                cnt[c] / max(len(sub), 1)
+            )
+
+    for c in COLORS:
+
+        omission = len(train)
+
+        for i, x in enumerate(reversed(train)):
+            if x == c:
+                omission = i
+                break
+
+        feat[f"omission_{c}"] = omission
+
+    hmm_feat = hmm_features(train)
+
+    feat["hidden_state"] = hmm_feat["hidden_state"]
+
+    for i, p in enumerate(hmm_feat["trans_prob"]):
+        feat[f"hmm_trans_{i}"] = float(p)
+
+    return feat
+
+# =========================================================
+# DATASET
+# =========================================================
+
+def build_dataset(series):
+
+    X = []
+    y = []
+
+    for i in range(50, len(series) - 1):
+
+        train = series[:i]
+
+        feat = make_features(train)
+
+        X.append(list(feat.values()))
+
+        y.append(
+            COLOR_TO_INT[series[i]]
+        )
+
+    return np.array(X), np.array(y)
+
+# =========================================================
+# WALK FORWARD
+# =========================================================
+
+def walk_forward_split(X, y):
+
+    split = int(len(X) * 0.8)
+
+    return (
+        X[:split],
+        X[split:],
+        y[:split],
+        y[split:]
+    )
+
+# =========================================================
+# MODEL
+# =========================================================
+
+def train_model(X_train, y_train):
+
+    model = XGBClassifier(
+        n_estimators=120,
+        max_depth=4,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        eval_metric="mlogloss",
+        random_state=RANDOM_SEED
+    )
+
+    model.fit(X_train, y_train)
+
+    return model
+
+# =========================================================
+# METRICS
+# =========================================================
+
+def multiclass_log_loss(prob, actual):
+
+    eps = 1e-15
+
+    p = max(prob[actual], eps)
+
+    return -math.log(p)
+
+def significance_test(p_model, p_random, n):
+
+    se = math.sqrt(
+        p_random * (1 - p_random) / n
+    )
+
+    if se == 0:
+        return "无法计算"
+
+    z = (p_model - p_random) / se
+
+    if abs(z) > 1.96:
+        return f"显著 (z={z:.2f})"
+
+    return f"不显著 (z={z:.2f})"
+
+def risk_metrics(curve):
+
+    arr = np.array(curve)
+
+    peak = np.maximum.accumulate(arr)
+
+    drawdown = (arr - peak) / peak
+
+    returns = np.diff(arr) / arr[:-1]
+
+    sharpe = (
+        np.mean(returns)
+        /
+        (np.std(returns) + 1e-9)
+    )
+
+    return {
+        "final_return":
+            (arr[-1] / arr[0]) - 1,
+
+        "max_drawdown":
+            float(drawdown.min()),
+
+        "volatility":
+            float(np.std(arr)),
+
+        "sharpe":
+            float(sharpe)
+    }
+
+# =========================================================
+# MONTE CARLO
+# =========================================================
+
+def monte_carlo_bankroll(
+    hit_rate,
+    runs=500,
+    trades=200
+):
+
+    final_values = []
+
+    for _ in range(runs):
+
+        bankroll = BANKROLL_INIT
+
+        for _ in range(trades):
+
+            if random.random() < hit_rate:
+                bankroll += BET_SIZE
+            else:
+                bankroll -= BET_SIZE
+
+        final_values.append(bankroll)
+
+    return {
+        "mean_final":
+            np.mean(final_values),
+
+        "std_final":
+            np.std(final_values),
+
+        "worst":
+            np.min(final_values),
+
+        "best":
+            np.max(final_values)
+    }
+
+# =========================================================
+# PLOT
+# =========================================================
+
+def plot_curve(curve):
+
+    plt.figure(figsize=(10, 5))
+
+    plt.plot(curve)
+
+    plt.title("Bankroll Curve")
+
+    plt.xlabel("Trade")
+
+    plt.ylabel("Capital")
+
+    plt.grid(True)
+
+    plt.tight_layout()
+
+    plt.savefig("bankroll_curve.png")
+
+# =========================================================
+# RANDOM BASELINE
+# =========================================================
+
+def random_baseline(y_test):
+
+    pred = np.random.randint(0, 3, size=len(y_test))
+
+    return accuracy_score(y_test, pred)
+
+# =========================================================
+# EXPERIMENT
+# =========================================================
+
+def run_experiment(series):
+
+    print("\n================================================")
+    print("🧪 HMM + XGBoost Research Framework V6")
+    print("================================================\n")
+
+    X, y = build_dataset(series)
+
+    X_train, X_test, y_train, y_test = walk_forward_split(X, y)
+
+    model = train_model(X_train, y_train)
+
+    pred = model.predict(X_test)
+
+    prob = model.predict_proba(X_test)
+
+    acc = accuracy_score(y_test, pred)
+
+    ll = log_loss(y_test, prob)
+
+    random_acc = random_baseline(y_test)
+
+    print(f"Samples           : {len(series)}")
+    print(f"Train Size        : {len(X_train)}")
+    print(f"Test Size         : {len(X_test)}")
+
+    print("\n================ Metrics ================\n")
+
+    print(f"Model Accuracy    : {acc:.4f}")
+    print(f"Random Accuracy   : {random_acc:.4f}")
+    print(f"Average LogLoss   : {ll:.4f}")
+
+    print("\n============= Significance =============\n")
+
+    print(
+        significance_test(
+            acc,
+            random_acc,
+            len(y_test)
+        )
+    )
+
+    bankroll = BANKROLL_INIT
+
+    curve = []
+
+    for p, actual in zip(pred, y_test):
+
+        if p == actual:
+            bankroll += BET_SIZE
+        else:
+            bankroll -= BET_SIZE
+
+        curve.append(bankroll)
+
+    metrics = risk_metrics(curve)
+
+    print("\n=============== Risk ===================\n")
+
+    print(
+        f"Final Return      : "
+        f"{metrics['final_return']:.2%}"
+    )
+
+    print(
+        f"Max Drawdown      : "
+        f"{metrics['max_drawdown']:.2%}"
+    )
+
+    print(
+        f"Volatility        : "
+        f"{metrics['volatility']:.4f}"
+    )
+
+    print(
+        f"Sharpe Ratio      : "
+        f"{metrics['sharpe']:.4f}"
+    )
+
+    mc = monte_carlo_bankroll(acc)
+
+    print("\n=========== Monte Carlo ================\n")
+
+    print(
+        f"Mean Final Capital: "
+        f"{mc['mean_final']:.2f}"
+    )
+
+    print(
+        f"Std Final Capital : "
+        f"{mc['std_final']:.2f}"
+    )
+
+    print(
+        f"Worst Case        : "
+        f"{mc['worst']:.2f}"
+    )
+
+    print(
+        f"Best Case         : "
+        f"{mc['best']:.2f}"
+    )
+
+    plot_curve(curve)
+
+    print("\n📉 bankroll_curve.png 已生成")
+
+    feature_importance = pd.DataFrame({
+        "feature": [f"f{i}" for i in range(X.shape[1])],
+        "importance": model.feature_importances_
+    })
+
+    feature_importance = feature_importance.sort_values(
+        by="importance",
+        ascending=False
+    )
+
+    feature_importance.to_csv(
+        "feature_importance.csv",
+        index=False
+    )
+
+    print("📊 feature_importance.csv 已生成")
+
+    print("\n================ Conclusion ============\n")
+
+    if acc > random_acc * 1.05:
+        print("⚠ 检测到弱非线性结构")
+    else:
+        print("❌ 更接近随机过程")
+
+# =========================================================
+# MAIN
+# =========================================================
 
 if __name__ == "__main__":
-    main()
+
+    # 示例数据
+    # 实际使用时替换为你的真实颜色序列
+
+    sample = [
+        random.choice(COLORS)
+        for _ in range(1200)
+    ]
+
+    run_experiment(sample)
+'''
+
+readme = r'''# HMM + XGBoost Research Framework V6
+
+科研级高噪声离散序列研究框架。
+
+## 功能
+
+- Hidden Markov Model (HMM)
+- XGBoost 分类器
+- Walk-forward validation
+- LogLoss
+- Monte Carlo Simulation
+- 风险指标
+- 显著性检验
+- 资金曲线
+
+---
+
+## 安装依赖
+
+```bash
+pip install numpy pandas xgboost hmmlearn scikit-learn matplotlib
+```
+
+---
+
+## 运行
+
+```bash
+python research_v6.py
+```
+
+---
+
+## 输出文件
+
+- bankroll_curve.png
+- feature_importance.csv
+
+---
+
+## 注意
+
+这是一个统计研究框架，不代表真实存在稳定预测优势。
+'''
+
+requirements = """numpy
+pandas
+matplotlib
+scikit-learn
+xgboost
+hmmlearn
+"""
+
+base = Path("/mnt/data")
+(base / "research_v6.py").write_text(script, encoding="utf-8")
+(base / "README.md").write_text(readme, encoding="utf-8")
+(base / "requirements.txt").write_text(requirements, encoding="utf-8")
+
+print("Files generated:")
+print("- research_v6.py")
+print("- README.md")
+print("- requirements.txt")
