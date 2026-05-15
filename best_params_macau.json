@@ -1,15 +1,15 @@
 {
-  "short_window": 3,
-  "mid_window": 28,
-  "long_window": 36,
-  "w_short": 5.722014997147794,
-  "w_mid": 2.4495614068723,
-  "w_long": 1.2057176183648648,
-  "omission_weight": 0.5386173145529637,
-  "omission_cap": 2.58841909678762,
-  "transition_weight": 4.1009050397998426,
-  "miss_streak_bonus": 3.248820022955306,
-  "recent_boost": 2.8481876723408743,
-  "recent_window": 4,
-  "streak_bonus": 1.646689046958346
+  "short_window": 4,
+  "mid_window": 21,
+  "long_window": 56,
+  "w_short": 5.032298185731687,
+  "w_mid": 1.5964455475276562,
+  "w_long": 0.7447935913763482,
+  "omission_weight": 0.4141173411593714,
+  "omission_cap": 4.608689020752442,
+  "transition_weight": 4.846477915061001,
+  "miss_streak_bonus": 4.18576716100724,
+  "recent_boost": 2.787283522601573,
+  "recent_window": 5,
+  "streak_bonus": 1.771807772377758
 }
