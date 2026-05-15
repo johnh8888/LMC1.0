@@ -1,0 +1,12 @@
+{
+  "short_window": 6,
+  "mid_window": 19,
+  "long_window": 49,
+  "w_short": 2.1963876063785626,
+  "w_mid": 2.111478662339515,
+  "w_long": 0.8425989660152835,
+  "omission_weight": 0.9033185779242443,
+  "omission_cap": 7.605517574703488,
+  "transition_weight": 6.463575598111837,
+  "miss_streak_bonus": 6.721083065565933
+}
