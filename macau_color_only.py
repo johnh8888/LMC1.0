@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（带回测与自动调参）
+澳门彩 · 特二色预测（带回测与开奖详情）
 用法:
     python macau_color_only.py              # 正常预测（使用已有最佳参数）
     python macau_color_only.py --tune       # 运行 Optuna 调参（生成 best_params_macau.json）
@@ -21,7 +21,6 @@ BLUE = {3, 4, 9, 10, 14, 15, 20, 25, 26, 31, 36, 37, 41, 42, 47, 48}
 GREEN = {5, 6, 11, 16, 17, 21, 22, 27, 28, 32, 33, 38, 39, 43, 44, 49}
 COLORS = ["红", "蓝", "绿"]
 
-# 默认参数（经验值）
 DEFAULT_PARAMS = {
     "short_window": 12,
     "mid_window": 30,
@@ -111,9 +110,6 @@ def fetch_macau_records(limit: int = 600) -> list:
 
 
 def predict_two_colors(train_colors: list, miss_streak: int, params: dict) -> list:
-    """
-    使用给定参数预测双色，支持连空保护
-    """
     if not train_colors:
         return ["红", "蓝"]
 
@@ -151,7 +147,6 @@ def predict_two_colors(train_colors: list, miss_streak: int, params: dict) -> li
             for c, v in trans[last].items():
                 score[c] += (v / total) * params["transition_weight"]
 
-    # 连空保护
     if miss_streak >= 1:
         cold_rank = sorted(omission.items(), key=lambda x: x[1], reverse=True)
         for c, _ in cold_rank[:2]:
@@ -161,38 +156,53 @@ def predict_two_colors(train_colors: list, miss_streak: int, params: dict) -> li
     return ranked[:2]
 
 
-def backtest(colors: list, params: dict, lookback: int = 100) -> tuple:
+def backtest_with_details(colors: list, issues: list, params: dict, lookback: int = 10) -> tuple:
     """
-    回测，返回 (命中率, 最大连空)
+    回测并返回详细列表
+    colors: 颜色历史（从早到晚），与 issues 一一对应
+    issues: 期号列表（从早到晚）
+    返回 (命中率, 最大连空, details列表)
+    details: [{"issue": "26/135", "actual": "红", "pred": ["红","蓝"], "hit": True}, ...]
     """
     if len(colors) < 80 + lookback:
-        return 0.0, 0
+        return 0.0, 0, []
 
-    rev = list(reversed(colors))   # 最新在前
-    total = min(lookback, len(rev) - 80)
+    rev_colors = list(reversed(colors))
+    rev_issues = list(reversed(issues))
+    total = min(lookback, len(rev_colors) - 80)
     if total <= 0:
-        return 0.0, 0
+        return 0.0, 0, []
 
     hits = 0
     miss_streak = 0
     max_miss = 0
+    details = []
 
     for i in range(80, 80 + total):
-        train = list(reversed(rev[:i]))
-        actual = rev[i]
+        train = list(reversed(rev_colors[:i]))
+        actual = rev_colors[i]
         pred = predict_two_colors(train, miss_streak, params)
-        if actual in pred:
+        hit = actual in pred
+        if hit:
             hits += 1
             miss_streak = 0
         else:
             miss_streak += 1
             max_miss = max(max_miss, miss_streak)
 
-    return hits / total, max_miss
+        details.append({
+            "issue": rev_issues[i],
+            "actual": actual,
+            "pred": pred,
+            "hit": hit
+        })
+
+    hit_rate = hits / total if total > 0 else 0.0
+    return hit_rate, max_miss, details
 
 
 def objective(trial, colors):
-    """Optuna 目标函数"""
+    import optuna
     params = {
         "short_window": trial.suggest_int("short_window", 6, 20),
         "mid_window": trial.suggest_int("mid_window", 15, 50),
@@ -205,14 +215,11 @@ def objective(trial, colors):
         "transition_weight": trial.suggest_float("transition_weight", 1.0, 8.0),
         "miss_streak_bonus": trial.suggest_float("miss_streak_bonus", 1.0, 8.0),
     }
-    hr, max_miss = backtest(colors, params, lookback=100)
-    # 评分 = 命中率 - 最大连空 * 0.015（与原版一致）
-    score = hr - max_miss * 0.015
-    return score
+    hr, max_miss, _ = backtest_with_details(colors, [], params, lookback=100)
+    return hr - max_miss * 0.015
 
 
 def tune_params():
-    """使用 Optuna 搜索最佳参数并保存"""
     try:
         import optuna
     except ImportError:
@@ -226,19 +233,21 @@ def tune_params():
         return
 
     color_history = [get_color(r["special_number"]) for r in rows]
-    color_history.reverse()  # 从早到晚
+    color_history.reverse()
+    # 用于objective的colors参数需要期号列表占位（实际不需要，但函数签名需兼容）
+    # 这里传空列表，因为backtest_with_details内部不依赖期号做计算，仅用于详情返回
+    # 但为了不报错，传递空列表
+    dummy_issues = [""] * len(color_history)
 
     print("开始 Optuna 调参（约100次试验）...")
     study = optuna.create_study(direction="maximize")
     study.optimize(lambda trial: objective(trial, color_history), n_trials=100, show_progress_bar=True)
 
     best = study.best_params
-    # 补充默认值中未出现在搜索空间的字段（保持兼容）
     for k, v in DEFAULT_PARAMS.items():
         if k not in best:
             best[k] = v
 
-    # 保存最佳参数
     with open(BEST_PARAMS_FILE, "w", encoding="utf-8") as f:
         json.dump(best, f, ensure_ascii=False, indent=2)
 
@@ -249,12 +258,10 @@ def tune_params():
 
 
 def load_params() -> dict:
-    """加载参数（优先使用调参结果）"""
     if os.path.exists(BEST_PARAMS_FILE):
         try:
             with open(BEST_PARAMS_FILE, "r", encoding="utf-8") as f:
                 params = json.load(f)
-            # 确保所有键存在
             for k, v in DEFAULT_PARAMS.items():
                 if k not in params:
                     params[k] = v
@@ -279,18 +286,23 @@ def main():
         print("数据获取失败")
         return
 
-    color_history = [get_color(r["special_number"]) for r in rows]
-    color_history.reverse()  # 从早到晚
+    # rows 最新在前，需要转为从早到晚
+    rows_rev = list(reversed(rows))
+    color_history = [get_color(r["special_number"]) for r in rows_rev]
+    issues = [r["issue_no"] for r in rows_rev]
 
     params = load_params()
+
+    # 预测下一期
     pred = predict_two_colors(color_history, miss_streak=0, params=params)
 
     latest_issue = rows[0]["issue_no"]
     pred_issue = next_issue(latest_issue)
 
-    # 回测
-    hr10, max_miss10 = backtest(color_history, params, lookback=10)
-    hr100, max_miss100 = backtest(color_history, params, lookback=100)
+    # 最近10期回测详情
+    hr10, max_miss10, details10 = backtest_with_details(color_history, issues, params, lookback=10)
+    # 最近100期回测（仅统计数据，不需要详情）
+    hr100, max_miss100, _ = backtest_with_details(color_history, issues, params, lookback=100)
 
     print("\n========== 澳门彩 · 特二色预测 ==========")
     print(f"预测期号：{pred_issue}")
@@ -298,6 +310,15 @@ def main():
     print("=========================================")
     print(f"\n最近10期命中率：{hr10:.1%}，最大连空：{max_miss10}")
     print(f"最近100期命中率：{hr100:.1%}，最大连空：{max_miss100}")
+
+    # 显示最近10期详情（逆序，使得最新一期在底部）
+    print("\n===== 最近10期开奖详情（由旧到新） =====")
+    for d in details10:
+        pred_str = "、".join(d["pred"])
+        mark = "✓" if d["hit"] else "✗"
+        print(f"{d['issue']:<10} 实际:{d['actual']}  预测:{pred_str:<5} {mark}")
+
+    print("\n（说明：预测二色中任一个匹配实际即命中）")
 
 
 if __name__ == "__main__":
