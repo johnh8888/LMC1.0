@@ -1,14 +1,14 @@
 {
-  "short_window": 10,
-  "mid_window": 21,
-  "long_window": 53,
-  "w_short": 4.524475424123771,
-  "w_mid": 0.9221591359832763,
-  "w_long": 0.6292840832828992,
-  "omission_weight": 1.0895342040506963,
-  "omission_cap": 5.148763455342825,
-  "transition_weight": 6.206504927203086,
-  "miss_streak_bonus": 7.457366123380687,
-  "recent_boost": 1.6961927523849534,
-  "recent_window": 6
+  "short_window": 11,
+  "mid_window": 20,
+  "long_window": 54,
+  "w_short": 2.478185909567964,
+  "w_mid": 1.1453589026666415,
+  "w_long": 0.9454897939599192,
+  "omission_weight": 0.9370913315878369,
+  "omission_cap": 7.81125761150772,
+  "transition_weight": 6.459062331739455,
+  "miss_streak_bonus": 5.324208624222015,
+  "recent_boost": 1.5916331513592563,
+  "recent_window": 5
 }
