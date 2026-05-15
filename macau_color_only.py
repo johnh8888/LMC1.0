@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（增强近期热号版）
-用法:
-    python macau_color_only.py              # 预测
-    python macau_color_only.py --tune       # 调参
+澳门彩 · 特二色预测（短期热号强制版）
 """
 
 import argparse
@@ -21,18 +18,18 @@ GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 COLORS = ["红","蓝","绿"]
 
 DEFAULT_PARAMS = {
-    "short_window": 8,
+    "short_window": 6,
     "mid_window": 20,
     "long_window": 50,
-    "w_short": 4.0,
-    "w_mid": 1.2,
-    "w_long": 0.5,
+    "w_short": 4.5,
+    "w_mid": 1.5,
+    "w_long": 0.6,
     "omission_weight": 0.8,
     "omission_cap": 5.0,
     "transition_weight": 3.0,
     "miss_streak_bonus": 5.0,
-    "recent_boost": 1.5,      # 近期窗口权重倍率
-    "recent_window": 5,       # 近期窗口大小
+    "recent_boost": 2.5,      # 提高近期权重
+    "recent_window": 4,       # 缩小近期窗口
 }
 BEST_PARAMS_FILE = "best_params_macau.json"
 
@@ -101,6 +98,16 @@ def predict_two_colors(train_colors, miss_streak, params):
     if not train_colors:
         return ["红","蓝"]
 
+    # 短期热号强制检测（最近8期）
+    recent_8 = train_colors[:8]
+    hot_color = None
+    if len(recent_8) >= 5:
+        freq = Counter(recent_8)
+        most_common, cnt = freq.most_common(1)[0]
+        if cnt >= 4:
+            hot_color = most_common
+
+    # 正常预测流程
     windows = [
         (params["short_window"], params["w_short"]),
         (params["mid_window"], params["w_mid"]),
@@ -142,7 +149,13 @@ def predict_two_colors(train_colors, miss_streak, params):
             score[c] += params["miss_streak_bonus"]
 
     ranked = [c for c,_ in score.most_common()]
-    return ranked[:2]
+    pred = ranked[:2]
+
+    # 强制热号覆盖：如果检测到热号且不在预测中，替换掉第二个预测
+    if hot_color and hot_color not in pred:
+        pred[-1] = hot_color
+
+    return pred
 
 def backtest_with_details(colors, issues, params, lookback=10):
     if len(colors) < 80 + lookback:
@@ -204,8 +217,8 @@ def objective(trial, colors):
         "omission_cap": trial.suggest_float("omission_cap", 3.0, 8.0),
         "transition_weight": trial.suggest_float("transition_weight", 2.0, 7.0),
         "miss_streak_bonus": trial.suggest_float("miss_streak_bonus", 3.0, 8.0),
-        "recent_boost": trial.suggest_float("recent_boost", 1.0, 3.0),
-        "recent_window": trial.suggest_int("recent_window", 3, 8),
+        "recent_boost": trial.suggest_float("recent_boost", 1.5, 4.0),
+        "recent_window": trial.suggest_int("recent_window", 3, 6),
     }
     hr, max_miss = backtest(colors, params, lookback=100)
     return hr - max_miss * 0.01
