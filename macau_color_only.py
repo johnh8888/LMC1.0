@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（冲刺72%+命中率版，增强热号强制）
+澳门彩 · 特二色预测（全自动自适应版）
+- 最近7期最热颜色（出现≥2次）强制加入预测
+- 支持每周自动调参
 """
 
 import argparse
@@ -99,17 +101,18 @@ def predict_two_colors(train_colors, miss_streak, params):
     if not train_colors:
         return ["红","蓝"]
 
-    # 增强热号检测：最近8期出现次数前二的颜色
-    recent_8 = train_colors[-8:] if len(train_colors) >= 8 else train_colors
-    hot_colors = []
-    if len(recent_8) >= 5:
-        freq = Counter(recent_8)
-        most_common = freq.most_common(2)
-        if most_common and most_common[0][1] >= 3:
-            hot_colors.append(most_common[0][0])
-        if len(most_common) > 1 and most_common[1][1] >= 2:
-            hot_colors.append(most_common[1][0])
+    # --- 热号强制：最近7期内出现次数最多的颜色（若出现次数≥2）---
+    recent_window = 7
+    recent = train_colors[-recent_window:] if len(train_colors) >= recent_window else train_colors
+    hot_color = None
+    if len(recent) >= 3:
+        freq = Counter(recent)
+        if freq:
+            most_common, cnt = freq.most_common(1)[0]
+            if cnt >= 2:   # 出现次数≥2就强制
+                hot_color = most_common
 
+    # --- 多窗口加权得分 ---
     windows = [
         (params["short_window"], params["w_short"]),
         (params["mid_window"], params["w_mid"]),
@@ -117,16 +120,17 @@ def predict_two_colors(train_colors, miss_streak, params):
     ]
     score = Counter()
     recent_boost = params.get("recent_boost", 1.0)
-    recent_window = params.get("recent_window", 5)
+    boost_window = params.get("recent_window", 5)
 
     for w, wgt in windows:
         recent_w = train_colors[-w:] if len(train_colors) >= w else train_colors
         for i, c in enumerate(recent_w):
             weight = wgt
-            if i < recent_window:
+            if i < boost_window:
                 weight *= recent_boost
             score[c] += weight
 
+    # --- 遗漏加分 ---
     omission = {}
     for c in COLORS:
         miss = 0
@@ -136,6 +140,7 @@ def predict_two_colors(train_colors, miss_streak, params):
         omission[c] = miss
         score[c] += min(miss * params["omission_weight"], params["omission_cap"])
 
+    # --- 转移矩阵 ---
     last = train_colors[-1] if train_colors else None
     trans = defaultdict(Counter)
     for i in range(len(train_colors)-1):
@@ -146,10 +151,11 @@ def predict_two_colors(train_colors, miss_streak, params):
             for c, v in trans[last].items():
                 score[c] += (v/total) * params["transition_weight"]
 
+    # --- 连续状态奖励 ---
     if len(train_colors) >= 2 and train_colors[-1] == train_colors[-2]:
-        streak_color = train_colors[-1]
-        score[streak_color] += params.get("streak_bonus", 1.5)
+        score[train_colors[-1]] += params.get("streak_bonus", 1.5)
 
+    # --- 连空保护 ---
     if miss_streak >= 1:
         cold_rank = sorted(omission.items(), key=lambda x: x[1], reverse=True)
         for c,_ in cold_rank[:2]:
@@ -158,15 +164,14 @@ def predict_two_colors(train_colors, miss_streak, params):
     ranked = [c for c,_ in score.most_common()]
     pred = ranked[:2]
 
-    # 强制包含热色（前两个）
-    for hot in hot_colors:
-        if hot not in pred:
-            pred[-1] = hot
-            if pred[0] == pred[1]:
-                for c in ranked:
-                    if c not in pred:
-                        pred[1] = c
-                        break
+    # --- 强制包含热号（如果不在预测中）---
+    if hot_color and hot_color not in pred:
+        pred[-1] = hot_color
+        if pred[0] == pred[1]:
+            for c in ranked:
+                if c not in pred:
+                    pred[1] = c
+                    break
     return pred
 
 def backtest_with_details(colors, issues, params, lookback=10):
@@ -248,9 +253,9 @@ def tune_params():
         print("数据获取失败")
         return
     colors = [get_color(r["special_number"]) for r in reversed(rows)]
-    print("开始 Optuna 调参 (300 trials)...")
+    print("开始 Optuna 调参 (200 trials)...")
     study = optuna.create_study(direction="maximize")
-    study.optimize(lambda t: objective(t, colors), n_trials=300, show_progress_bar=True)
+    study.optimize(lambda t: objective(t, colors), n_trials=200, show_progress_bar=True)
     best = study.best_params
     for k,v in DEFAULT_PARAMS.items():
         if k not in best:
