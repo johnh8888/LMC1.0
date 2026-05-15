@@ -1,46 +1,29 @@
-name: Research V6 CI
+name: Run Macau Color Only Script
 
 on:
   push:
-    branches:
-      - main
-      - master
-
+    branches: [ main, master ]
   pull_request:
-    branches:
-      - main
-      - master
-
-  workflow_dispatch:
+    branches: [ main, master ]
+  workflow_dispatch:   # 允许手动触发
 
 jobs:
-  run-research-framework:
-
+  run-script:
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run Research Framework
-        run: |
-          python research_v6.py
-
-      - name: Upload Generated Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: research-results
-          path: |
-            bankroll_curve.png
-            feature_importance.csv
+      - name: Run macau_color_only.py
+        run: python macau_color_only.py
