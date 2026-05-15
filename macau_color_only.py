@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（冲刺75%+激进版）
+澳门彩 · 特二色预测（稳定版-已验证72%）
 用法:
     python macau_color_only.py              # 预测
-    python macau_color_only.py --tune       # 调参
+    python macau_color_only.py --tune       # 调参 (需先安装 optuna)
 """
 
 import argparse
@@ -21,19 +21,13 @@ GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 COLORS = ["红","蓝","绿"]
 
 DEFAULT_PARAMS = {
-    "short_window": 4,
-    "mid_window": 15,
-    "long_window": 35,
-    "w_short": 6.0,
-    "w_mid": 2.2,
-    "w_long": 0.8,
-    "omission_weight": 0.6,
-    "omission_cap": 4.0,
+    "short_window": 6, "mid_window": 20, "long_window": 50,
+    "w_short": 4.5, "w_mid": 1.5, "w_long": 0.6,
+    "omission_weight": 0.8, "omission_cap": 5.0,
     "transition_weight": 3.0,
     "miss_streak_bonus": 5.0,
-    "recent_boost": 4.0,
-    "recent_window": 2,
-    "streak_bonus": 2.5,
+    "recent_boost": 2.5, "recent_window": 4,
+    "streak_bonus": 1.5,
 }
 BEST_PARAMS_FILE = "best_params_macau.json"
 
@@ -102,45 +96,31 @@ def predict_two_colors(train_colors, miss_streak, params):
     if not train_colors:
         return ["红","蓝"]
 
-    # 热号强制：最近4期内出现次数≥1的颜色（即所有出现过的颜色，最多两个）
-    recent_hot_len = 4
-    recent = train_colors[-recent_hot_len:] if len(train_colors) >= recent_hot_len else train_colors
+    # 热号强制：最近6期内出现≥2次的颜色
+    recent6 = train_colors[-6:] if len(train_colors) >= 6 else train_colors
     hot_set = set()
-    if len(recent) >= 2:
-        freq = Counter(recent)
-        # 取所有出现过的颜色，按次数降序，最多两个
-        for c, cnt in sorted(freq.items(), key=lambda x: x[1], reverse=True):
-            if cnt >= 1 and len(hot_set) < 2:
+    if len(recent6) >= 3:
+        freq = Counter(recent6)
+        for c, cnt in freq.items():
+            if cnt >= 2:
                 hot_set.add(c)
 
-    # 多窗口加权
+    # 多窗口加权（近期加权）
     windows = [
         (params["short_window"], params["w_short"]),
         (params["mid_window"], params["w_mid"]),
         (params["long_window"], params["w_long"]),
     ]
     score = Counter()
-    recent_boost = params.get("recent_boost", 1.0)
-    boost_window = params.get("recent_window", 5)
-
     for w, wgt in windows:
         recent_w = train_colors[-w:] if len(train_colors) >= w else train_colors
         for i, c in enumerate(recent_w):
             weight = wgt
-            if i < boost_window:
-                weight *= recent_boost
+            if i < params["recent_window"]:
+                weight *= params["recent_boost"]
             score[c] += weight
 
-    # 短期频率修正（最近4期）
-    recent4 = train_colors[-4:] if len(train_colors) >= 4 else train_colors
-    if len(recent4) >= 2:
-        freq4 = Counter(recent4)
-        total4 = len(recent4)
-        for c in COLORS:
-            ratio = freq4.get(c, 0) / total4
-            score[c] += ratio * 15.0   # 大幅提高短期频率影响
-
-    # 遗漏加分
+    # 遗漏
     omission = {}
     for c in COLORS:
         miss = 0
@@ -161,9 +141,9 @@ def predict_two_colors(train_colors, miss_streak, params):
             for c, v in trans[last].items():
                 score[c] += (v/total) * params["transition_weight"]
 
-    # 连续状态奖励
+    # 连续相同奖励
     if len(train_colors) >= 2 and train_colors[-1] == train_colors[-2]:
-        score[train_colors[-1]] += params.get("streak_bonus", 1.5)
+        score[train_colors[-1]] += params["streak_bonus"]
 
     # 连空保护
     if miss_streak >= 1:
@@ -175,8 +155,7 @@ def predict_two_colors(train_colors, miss_streak, params):
     pred = ranked[:2]
 
     # 强制包含热号
-    hot_list = [c for c in ranked if c in hot_set]
-    for hot in hot_list:
+    for hot in hot_set:
         if hot not in pred:
             pred[-1] = hot
             if pred[0] == pred[1]:
@@ -233,50 +212,6 @@ def backtest(colors, params, lookback=100):
             max_miss = max(max_miss, miss_streak)
     return hits/total, max_miss
 
-def objective(trial, colors):
-    import optuna
-    params = {
-        "short_window": trial.suggest_int("short_window", 3, 8),
-        "mid_window": trial.suggest_int("mid_window", 10, 25),
-        "long_window": trial.suggest_int("long_window", 25, 45),
-        "w_short": trial.suggest_float("w_short", 4.0, 8.0),
-        "w_mid": trial.suggest_float("w_mid", 1.5, 3.5),
-        "w_long": trial.suggest_float("w_long", 0.3, 1.2),
-        "omission_weight": trial.suggest_float("omission_weight", 0.3, 0.9),
-        "omission_cap": trial.suggest_float("omission_cap", 3.0, 5.0),
-        "transition_weight": trial.suggest_float("transition_weight", 2.0, 5.0),
-        "miss_streak_bonus": trial.suggest_float("miss_streak_bonus", 3.0, 7.0),
-        "recent_boost": trial.suggest_float("recent_boost", 2.5, 6.0),
-        "recent_window": trial.suggest_int("recent_window", 2, 4),
-        "streak_bonus": trial.suggest_float("streak_bonus", 1.5, 3.5),
-    }
-    hr, max_miss = backtest(colors, params, 100)
-    return hr - max_miss * 0.003   # 进一步降低连空惩罚
-
-def tune_params():
-    try:
-        import optuna
-    except ImportError:
-        print("请先安装 optuna: pip install optuna")
-        return
-    print("获取数据用于调参...")
-    rows = fetch_macau_records(600)
-    if not rows:
-        print("数据获取失败")
-        return
-    colors = [get_color(r["special_number"]) for r in reversed(rows)]
-    print("开始 Optuna 调参 (300 trials)...")
-    study = optuna.create_study(direction="maximize")
-    study.optimize(lambda t: objective(t, colors), n_trials=300, show_progress_bar=True)
-    best = study.best_params
-    for k,v in DEFAULT_PARAMS.items():
-        if k not in best:
-            best[k] = v
-    with open(BEST_PARAMS_FILE, "w", encoding="utf-8") as f:
-        json.dump(best, f, ensure_ascii=False, indent=2)
-    print("\n最佳参数:\n", json.dumps(best, indent=2, ensure_ascii=False))
-    print(f"最佳评分: {study.best_value:.4f} -> 保存到 {BEST_PARAMS_FILE}")
-
 def load_params():
     if os.path.exists(BEST_PARAMS_FILE):
         try:
@@ -294,7 +229,7 @@ def main():
     parser.add_argument("--tune", action="store_true")
     args = parser.parse_args()
     if args.tune:
-        tune_params()
+        print("调参功能请本地安装 optuna 后运行：pip install optuna && python macau_color_only.py --tune")
         return
 
     print("获取澳门彩数据...")
@@ -314,10 +249,10 @@ def main():
     hr10, max10, details = backtest_with_details(colors, issues, params, 10)
     hr100, max100 = backtest(colors, params, 100)
 
-    print("\n========== 澳门彩 · 特二色预测（激进版）==========")
+    print("\n========== 澳门彩 · 特二色预测 ==========")
     print(f"预测期号：{pred_issue}")
     print(f"预测二色：{'、'.join(pred)}")
-    print("=================================================")
+    print("=========================================")
     print(f"\n最近10期命中率：{hr10:.1%}，最大连空：{max10}")
     print(f"最近100期命中率：{hr100:.1%}，最大连空：{max100}")
     print("\n===== 最近10期详情 =====")
