@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-澳门彩 · 特二色预测（修正版：回测正确显示最近10期）
+澳门彩 · 特二色预测（增强近期适应性版）
 """
 
 import argparse
@@ -17,14 +17,24 @@ BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 COLORS = ["红","蓝","绿"]
 
+# 默认参数（针对近期优化）
 DEFAULT_PARAMS = {
-    "short_window": 12, "mid_window": 30, "long_window": 60,
-    "w_short": 3.2, "w_mid": 1.4, "w_long": 0.8,
-    "omission_weight": 0.65, "omission_cap": 6.0,
-    "transition_weight": 4.5,
-    "miss_streak_bonus": 4.0, "miss_streak_threshold": 2,
-    "state_unilateral_bonus": 2.0, "state_chaos_bonus": 2.5,
+    "short_window": 8,      # 缩小短窗口
+    "mid_window": 20,
+    "long_window": 50,
+    "w_short": 4.0,
+    "w_mid": 1.2,
+    "w_long": 0.5,
+    "omission_weight": 0.8,
+    "omission_cap": 5.0,
+    "transition_weight": 3.0,
+    "miss_streak_bonus": 5.0,
+    "miss_streak_threshold": 1,   # 连空1期就奖励冷色
+    "state_unilateral_bonus": 2.0,
+    "state_chaos_bonus": 2.5,
     "kill_same_color_streak": 3,
+    "recent_boost": 1.5,          # 新增：最近N期权重倍率
+    "recent_boost_window": 5,     # 最近5期加权
 }
 BEST_PARAMS_FILE = "best_params_macau.json"
 
@@ -78,7 +88,6 @@ def fetch_macau_records(limit=600):
                                 "numbers": nums[:6],
                                 "special_number": nums[6]
                             })
-                # 去重
                 unique = {}
                 for r in rows:
                     if r["issue_no"] not in unique:
@@ -93,6 +102,8 @@ def fetch_macau_records(limit=600):
 def predict_two_colors(train_colors, miss_streak, params):
     if not train_colors:
         return ["红","蓝"]
+
+    # 状态识别
     recent = train_colors[:15]
     freq = Counter(recent)
     top_ratio = freq.most_common(1)[0][1] / len(recent)
@@ -103,7 +114,7 @@ def predict_two_colors(train_colors, miss_streak, params):
     else:
         state = "正常"
 
-    use_miss = miss_streak >= params.get("miss_streak_threshold", 2)
+    use_miss = miss_streak >= params.get("miss_streak_threshold", 1)
 
     windows = [
         (params["short_window"], params["w_short"]),
@@ -111,10 +122,19 @@ def predict_two_colors(train_colors, miss_streak, params):
         (params["long_window"], params["w_long"]),
     ]
     score = Counter()
-    for w, wgt in windows:
-        for c in train_colors[:w]:
-            score[c] += wgt
+    recent_boost_window = params.get("recent_boost_window", 5)
+    recent_boost_factor = params.get("recent_boost", 1.5)
 
+    for w, wgt in windows:
+        for i, c in enumerate(train_colors[:w]):
+            # 基础权重
+            weight = wgt
+            # 对最近的 recent_boost_window 期增加权重
+            if i < recent_boost_window:
+                weight *= recent_boost_factor
+            score[c] += weight
+
+    # 遗漏计算
     omission = {}
     for c in COLORS:
         miss = 0
@@ -124,6 +144,7 @@ def predict_two_colors(train_colors, miss_streak, params):
         omission[c] = miss
         score[c] += min(miss * params["omission_weight"], params["omission_cap"])
 
+    # 转移矩阵
     last = train_colors[0]
     trans = defaultdict(Counter)
     for i in range(len(train_colors)-1):
@@ -134,6 +155,7 @@ def predict_two_colors(train_colors, miss_streak, params):
             for c, v in trans[last].items():
                 score[c] += (v/total) * params["transition_weight"]
 
+    # 状态奖励
     if state == "单边":
         hottest = score.most_common(1)[0][0]
         score[hottest] += params["state_unilateral_bonus"]
@@ -141,12 +163,14 @@ def predict_two_colors(train_colors, miss_streak, params):
         coldest = max(omission, key=omission.get)
         score[coldest] += params["state_chaos_bonus"]
 
+    # 连空保护
     if use_miss:
         cold_rank = sorted(omission.items(), key=lambda x: x[1], reverse=True)
         bonus = params["miss_streak_bonus"] * (1 + 0.2 * miss_streak)
         for c,_ in cold_rank[:2]:
             score[c] += bonus
 
+    # 同色过滤
     kill_streak = params.get("kill_same_color_streak", 3)
     if kill_streak > 0:
         last_n = train_colors[:kill_streak]
@@ -162,14 +186,12 @@ def backtest_with_details(colors, issues, params, lookback=10):
     """测试最后 lookback 期（最近N期）"""
     if len(colors) < 80 + lookback:
         return 0.0, 0, []
-    # 取最后 lookback 个索引
     test_indices = list(range(len(colors) - lookback, len(colors)))
     hits = 0
     miss_streak = 0
     max_miss = 0
     details = []
     for idx in test_indices:
-        # 训练数据使用该期之前的所有数据（从0到idx-1）
         train = colors[:idx]
         actual = colors[idx]
         pred = predict_two_colors(train, miss_streak, params)
@@ -191,23 +213,26 @@ def backtest_with_details(colors, issues, params, lookback=10):
 def objective(trial, colors):
     import optuna
     params = {
-        "short_window": trial.suggest_int("short_window", 6, 20),
-        "mid_window": trial.suggest_int("mid_window", 15, 50),
-        "long_window": trial.suggest_int("long_window", 40, 90),
-        "w_short": trial.suggest_float("w_short", 1.0, 6.0),
-        "w_mid": trial.suggest_float("w_mid", 0.5, 3.0),
-        "w_long": trial.suggest_float("w_long", 0.2, 2.0),
-        "omission_weight": trial.suggest_float("omission_weight", 0.2, 1.5),
-        "omission_cap": trial.suggest_float("omission_cap", 2.0, 10.0),
-        "transition_weight": trial.suggest_float("transition_weight", 1.0, 8.0),
-        "miss_streak_bonus": trial.suggest_float("miss_streak_bonus", 1.0, 8.0),
-        "miss_streak_threshold": trial.suggest_int("miss_streak_threshold", 1, 3),
-        "state_unilateral_bonus": trial.suggest_float("state_unilateral_bonus", 1.0, 4.0),
-        "state_chaos_bonus": trial.suggest_float("state_chaos_bonus", 1.0, 4.0),
-        "kill_same_color_streak": trial.suggest_int("kill_same_color_streak", 2, 5),
+        "short_window": trial.suggest_int("short_window", 4, 12),
+        "mid_window": trial.suggest_int("mid_window", 15, 35),
+        "long_window": trial.suggest_int("long_window", 40, 70),
+        "w_short": trial.suggest_float("w_short", 2.0, 6.0),
+        "w_mid": trial.suggest_float("w_mid", 0.8, 2.5),
+        "w_long": trial.suggest_float("w_long", 0.3, 1.5),
+        "omission_weight": trial.suggest_float("omission_weight", 0.5, 1.2),
+        "omission_cap": trial.suggest_float("omission_cap", 3.0, 7.0),
+        "transition_weight": trial.suggest_float("transition_weight", 2.0, 6.0),
+        "miss_streak_bonus": trial.suggest_float("miss_streak_bonus", 3.0, 8.0),
+        "miss_streak_threshold": trial.suggest_int("miss_streak_threshold", 1, 2),
+        "state_unilateral_bonus": trial.suggest_float("state_unilateral_bonus", 1.0, 3.5),
+        "state_chaos_bonus": trial.suggest_float("state_chaos_bonus", 1.0, 3.5),
+        "kill_same_color_streak": trial.suggest_int("kill_same_color_streak", 2, 4),
+        "recent_boost": trial.suggest_float("recent_boost", 1.2, 2.0),
+        "recent_boost_window": trial.suggest_int("recent_boost_window", 3, 8),
     }
+    # 回测最近100期，评分 = 命中率 - 最大连空 * 0.01（降低连空惩罚，鼓励命中率）
     hr, max_miss, _ = backtest_with_details(colors, [""]*len(colors), params, lookback=100)
-    return hr - max_miss * 0.015
+    return hr - max_miss * 0.01
 
 def tune_params():
     try:
@@ -221,9 +246,9 @@ def tune_params():
         print("失败")
         return
     colors = [get_color(r["special_number"]) for r in reversed(rows)]
-    print("开始调参 (150 trials)...")
+    print("开始调参 (200 trials)...")
     study = optuna.create_study(direction="maximize")
-    study.optimize(lambda t: objective(t, colors), n_trials=150, show_progress_bar=True)
+    study.optimize(lambda t: objective(t, colors), n_trials=200, show_progress_bar=True)
     best = study.best_params
     for k,v in DEFAULT_PARAMS.items():
         if k not in best:
