@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 香港六合彩特二色预测 V51 - 短期命中率优化版
+# 香港六合彩特二色预测 - 短期命中率提升版（基于V51搜索结果微调）
 
 import argparse
 import copy
@@ -12,65 +12,51 @@ import time
 import random
 import urllib.request
 import os
-from datetime import datetime, timedelta
 from collections import Counter, defaultdict
-from itertools import product
 
-# ================== 配置参数 ==================
+# ================== 配置（采用短期搜索最佳参数 + 调低阈值）==================
 CONFIG = {
     "odds": {"红": 2.70, "蓝": 2.80, "绿": 2.80},
     "pred_mode": "dual",
     "dual_alloc_mode": "score_proportional",
-    # 窗口权重（加大短期权重）
-    "window_18_weight": 8.0,      # 原 6.8
-    "window_55_weight": 3.5,      # 原 2.6
-    "window_150_weight": 0.8,     # 原 1.0
+
+    # 以下为短期搜索找到的最佳参数（来自 best_params_short.json）
+    "window_18_weight": 6.0,
+    "window_55_weight": 2.0,
+    "window_150_weight": 0.8,          # 原默认1.0，调低长期影响
     "omission_factor": 0.9,
     "omission_max": 11.5,
     "cycle_dev_low": 1.5,
     "cycle_dev_high": 3.0,
     "cycle_score_low": 3.5,
     "cycle_score_high": 7.0,
-    "trans_weight": 7.0,          # 原 6.5，加大转移权重
+    "trans_weight": 7.0,               # 转移权重提高
     "normal_main_weight": 4.0,
     "szsd_trans_weight": 2.0,
-    "normal_szsd_main_weight": 2.5,
-    "beast_trans_weight": 2.0,
-    "normal_beast_main_weight": 2.5,
-    # 过滤参数（短期优化时会自动调整）
-    "min_calibrated_confidence": 65,   # 降低默认阈值，增加投注
-    "min_score_diff": 3,
+    "normal_szsd_main_weight": 5.0,    # 正码大小单双权重大幅提高
+    "beast_trans_weight": 0,           # 搜索显示野兽权重为0
+    "normal_beast_main_weight": 0,
+
+    # 关键调整：降低过滤门槛，增加投注频率
+    "min_calibrated_confidence": 60,   # 原75 → 60，允许更多投注
+    "min_score_diff": 3,               # 原5 → 3，允许更小分差
     "max_skip_streak": 6,
+
+    # 资金管理（降低单注最小金额，减少回撤）
     "bankroll": 10000,
     "kelly_fraction": 0.35,
     "max_bet_ratio_total": 0.10,
-    "min_bet_per_color": 200,
+    "min_bet_per_color": 100,          # 原200 → 100
     "bet_step": 50,
     "confidence_tiers": {"low": (0.03, 0.05), "mid": (0.05, 0.08), "high": (0.08, 0.12)},
+
     "api_url": "https://marksix6.net/index.php?api=1",
     "max_retries": 6,
     "timeout": 30,
     "train_max_len": 420,
     "show_details": 25,
     "min_train": 30,
-    "search_warmup": 150,
-    "search_test": 200,
-    # 搜索空间（加入更多短期相关参数）
-    "search_space": {
-        "min_calibrated_confidence": [60, 65, 70, 75],
-        "min_score_diff": [3, 5, 8],
-        "window_18_weight": [6.0, 8.0, 10.0],
-        "window_55_weight": [2.0, 3.5, 5.0],
-        "trans_weight": [5.0, 7.0, 9.0],
-        "szsd_trans_weight": [0, 2.0, 4.0],
-        "normal_szsd_main_weight": [0, 2.5, 5.0],
-        "beast_trans_weight": [0, 3.0, 6.0],
-        "normal_beast_main_weight": [0, 2.5, 5.0],
-    },
 }
-
-PARAMS_FILE = "best_params_short.json"   # 分开存储短期参数
-LAST_SEARCH_FILE = "last_search_short.txt"
 
 # ================== 颜色 & 生肖定义 ==================
 RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
@@ -175,7 +161,6 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
 
     score = defaultdict(float)
 
-    # 使用动态权重
     for i, c in enumerate(train_colors[:18]):
         score[c] += CONFIG["window_18_weight"] * (1 - i/35)
     for i, c in enumerate(train_colors[:55]):
@@ -412,186 +397,13 @@ def backtest(rows, lookback=200, calib=None):
     final_return = (bankroll - initial) / initial * 100 if initial > 0 else 0
     return hits/total if total>0 else 0, max_miss, final_return, details[::-1]
 
-# ========== 新增强化短期目标的回测评估函数 ==========
-def backtest_short_focused(rows, warmup, test_len, calib, weight_return=0.7, weight_hit=0.3):
-    """
-    返回综合得分 = weight_return * 收益率 + weight_hit * 命中率
-    专门用于优化短期（100期）表现
-    """
-    colors = [r["color"] for r in rows]
-    normals = [r["normal_numbers"] for r in rows]
-    specials = [r["special_number"] for r in rows]
-    total = warmup + test_len
-    if len(colors) < total + CONFIG["min_train"]:
-        return -999.0
-    miss_streak = 0
-    skip_streak = 0
-    bankroll = CONFIG["bankroll"]
-    initial = bankroll
-    hits_test = 0
-    count_test = 0
-    for k in range(total):
-        actual = colors[k]
-        hist_colors = colors[k+1:]
-        hist_normals = normals[k+1:]
-        hist_specials = specials[k+1:]
-        train_colors = hist_colors[:CONFIG["train_max_len"]]
-        train_normals = hist_normals[:CONFIG["train_max_len"]]
-        train_specials = hist_specials[:CONFIG["train_max_len"]]
-        pred_colors, scores, conf, _, _, _, can_bet, reason = professional_predict(
-            train_colors, train_normals, train_specials, miss_streak, skip_streak, calib
-        )
-        ok = actual in pred_colors
-        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        diff = sorted_scores[0][1] - (sorted_scores[1][1] if len(sorted_scores) > 1 else 0)
-        calib.record(diff, ok)
-        if k >= warmup:
-            count_test += 1
-            if ok:
-                hits_test += 1
-            if can_bet:
-                bet_dict, _ = suggest_bet(scores, pred_colors, bankroll, conf)
-                cost = sum(bet_dict.values())
-                ret = 0
-                if ok:
-                    for c, amt in bet_dict.items():
-                        if c == actual:
-                            ret += amt * CONFIG["odds"][c]
-                bankroll += ret - cost
-                skip_streak = 0
-            else:
-                skip_streak += 1
-        else:
-            if can_bet:
-                skip_streak = 0
-            else:
-                skip_streak += 1
-        if ok:
-            miss_streak = 0
-        else:
-            miss_streak += 1
-    final_return = (bankroll - initial) / initial * 100 if initial > 0 else 0
-    hit_rate = hits_test / count_test if count_test > 0 else 0.0
-    # 综合得分：收益率（百分比）乘以权重 + 命中率（百分比）乘以权重
-    score = weight_return * final_return + weight_hit * (hit_rate * 100)
-    return score
-
-# ================== 网格搜索（针对短期优化） ==================
-def run_grid_search_short(rows, force=False):
-    """针对最近100期命中率和收益的网格搜索"""
-    if not force and os.path.exists(LAST_SEARCH_FILE):
-        with open(LAST_SEARCH_FILE, "r") as f:
-            last = f.read().strip()
-            if last:
-                try:
-                    last_date = datetime.strptime(last, "%Y-%m-%d")
-                    if datetime.now() - last_date < timedelta(days=7):
-                        print("距离上次短期搜索不足7天，跳过。如需强制请用 --force-search")
-                        return None
-                except:
-                    pass
-
-    N = len(rows)
-    min_train = CONFIG["min_train"]
-    available = N - min_train
-    if available < 100:
-        print(f"数据量不足（仅 {N} 期），无法进行有效搜索。")
-        return None
-
-    # 专门针对短期优化：warmup 较少，test 集中在最近100期左右
-    warmup = min(100, available // 2)
-    test = min(100, available - warmup)
-    if test < 30:
-        test = available - warmup
-        if test < 20:
-            print(f"测试期数太少（{test}），跳过搜索。")
-            return None
-
-    print(f"短期优化：预热期 {warmup}，测试期 {test} (最近{test}期)")
-    print("="*60)
-    print("🔍 开始网格搜索（目标：提升最近100期命中率+收益）")
-    print("="*60)
-
-    search_space = CONFIG["search_space"]
-    keys = list(search_space.keys())
-    combinations = list(product(*search_space.values()))
-    total_combos = len(combinations)
-    print(f"待测试参数组合: {total_combos} 组\n")
-
-    best_score = -float("inf")
-    best_params = None
-    original_config = copy.deepcopy(CONFIG)
-
-    CONFIG["search_warmup"] = warmup
-    CONFIG["search_test"] = test
-
-    for idx, combo in enumerate(combinations, 1):
-        params = dict(zip(keys, combo))
-        for k, v in params.items():
-            CONFIG[k] = v
-        local_calib = ConfidenceCalibrator()
-        # 综合得分：收益权重0.6，命中率权重0.4
-        score = backtest_short_focused(rows, warmup, test, local_calib, weight_return=0.6, weight_hit=0.4)
-        if score > best_score:
-            best_score = score
-            best_params = params
-        if idx % 30 == 0 or idx == total_combos:
-            print(f"  进度: {idx}/{total_combos}  当前最佳综合得分: {best_score:.1f}")
-
-    CONFIG.update(original_config)
-
-    if best_params:
-        with open(PARAMS_FILE, "w") as f:
-            json.dump(best_params, f, indent=2)
-        with open(LAST_SEARCH_FILE, "w") as f:
-            f.write(datetime.now().strftime("%Y-%m-%d"))
-        print(f"\n✅ 短期最佳参数已保存至 {PARAMS_FILE}")
-        print(f"   综合得分: {best_score:.1f}")
-        for k, v in best_params.items():
-            print(f"   {k}: {v}")
-        return best_params
-    else:
-        print("❌ 未找到有效参数")
-        return None
-
-def load_best_params_short():
-    if os.path.exists(PARAMS_FILE):
-        with open(PARAMS_FILE, "r") as f:
-            params = json.load(f)
-        print("加载已保存的短期最佳参数：")
-        for k, v in params.items():
-            if k in CONFIG:
-                CONFIG[k] = v
-                print(f"  {k}: {v}")
-        return True
-    else:
-        print("未找到短期参数文件，将使用默认配置")
-        return False
-
-# ================== 主程序 ==================
 def main():
-    parser = argparse.ArgumentParser(description="香港六合彩特二色预测 V51 - 短期命中率优化")
-    parser.add_argument("--optimize-short", action="store_true", help="运行短期优化（提升最近100期命中率+收益）")
-    parser.add_argument("--force-search", action="store_true", help="强制重新搜索")
-    parser.add_argument("--auto-tune", action="store_true", help="自动调优（若无参数则搜索）")
-    args = parser.parse_args()
-
     print("获取香港六合彩数据...")
     rows = fetch_hk(800)
     if not rows:
         print("数据获取失败")
         return
 
-    if args.optimize_short:
-        run_grid_search_short(rows, force=args.force_search)
-        return
-
-    if args.auto_tune or args.force_search:
-        run_grid_search_short(rows, force=args.force_search)
-
-    load_best_params_short()
-
-    # 正常预测
     colors = [r["color"] for r in rows]
     normals = [r["normal_numbers"] for r in rows]
     specials = [r["special_number"] for r in rows]
@@ -601,7 +413,7 @@ def main():
         colors, normals, specials, miss_streak=0, skip_streak=0
     )
 
-    print(f"\n【香港六合彩 特二色 V51 短期优化版】")
+    print(f"\n【香港六合彩 特二色 短期命中率提升版】")
     print(f"预测期号: {next_issue(latest_issue)}")
     print(f"推荐颜色: {'、'.join(pred_colors)}   置信度: {conf}% ({level})  状态: {state}")
     print(f"投注允许: {'是' if can_bet else '否'}" + (f" → {reason}" if not can_bet else ""))
@@ -632,7 +444,7 @@ def main():
 
     # 生成 result.md
     with open("result.md", "w", encoding="utf-8") as f:
-        f.write("# 香港六合彩特二色预测报告 (V51短期优化)\n\n")
+        f.write("# 香港六合彩特二色预测报告（短期提升版）\n\n")
         f.write(f"**预测期号**: {next_issue(latest_issue)}\n\n")
         f.write(f"**推荐颜色**: {'、'.join(pred_colors)}\n\n")
         f.write(f"**置信度**: {conf}% ({level})\n\n")
