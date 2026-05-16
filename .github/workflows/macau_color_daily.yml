@@ -1,20 +1,29 @@
-steps:
-  - name: Checkout Code
-    uses: actions/checkout@v4
+name: Macau Color Projection
 
-  - name: Set up Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: '3.11'
+on:
+  workflow_dispatch:   # 允许手动触发
 
-  - name: Install dependencies
-    run: pip install requests
+jobs:
+  run-projection:
+    runs-on: ubuntu-latest
 
-  - name: Run Projection
-    run: python macau_color_only.py            # 👈 改这里
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-  - name: Upload Result Artifact
-    uses: actions/upload-artifact@v4
-    with:
-      name: macau-zodiac-result
-      path: result.md
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Projection
+        run: python macau_color_only.py
+
+      - name: Upload Result Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macau-color-result
+          path: result.md
