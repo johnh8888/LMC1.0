@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 澳门六合彩特二色预测 - 澳门专属优化版（含自动寻优）
+# 澳门六合彩特二色预测 - 自动调参版（参数文件缺失时自动搜索）
 
 import argparse
 import copy
@@ -19,10 +19,8 @@ from itertools import product
 # ================== 配置（澳门优化初始值）==================
 CONFIG = {
     "odds": {"红": 2.70, "蓝": 2.80, "绿": 2.80},
-    "pred_mode": "single",               # 单色预测，集中资金
+    "pred_mode": "single",
     "dual_alloc_mode": "score_proportional",
-
-    # 澳门优化权重
     "window_18_weight": 8.0,
     "window_55_weight": 2.5,
     "window_150_weight": 0.5,
@@ -38,28 +36,21 @@ CONFIG = {
     "normal_szsd_main_weight": 3.0,
     "beast_trans_weight": 0,
     "normal_beast_main_weight": 0,
-
-    # 过滤阈值（降低以增加投注）
     "min_calibrated_confidence": 50,
     "min_score_diff": 2,
     "max_skip_streak": 6,
-
-    # 资金管理
     "bankroll": 10000,
     "kelly_fraction": 0.35,
     "max_bet_ratio_total": 0.10,
     "min_bet_per_color": 100,
     "bet_step": 50,
     "confidence_tiers": {"low": (0.03, 0.05), "mid": (0.05, 0.08), "high": (0.08, 0.12)},
-
     "api_url": "https://marksix6.net/index.php?api=1",
     "max_retries": 6,
     "timeout": 30,
     "train_max_len": 420,
     "show_details": 25,
     "min_train": 30,
-
-    # 网格搜索参数（针对澳门优化）
     "search_warmup": 150,
     "search_test": 200,
     "search_space": {
@@ -557,10 +548,12 @@ def load_best_params():
         print("未找到澳门参数文件，使用默认优化配置")
         return False
 
+# ================== 主程序（自动判断是否需要搜索）==================
 def main():
-    parser = argparse.ArgumentParser(description="澳门六合彩特二色预测（优化版）")
-    parser.add_argument("--optimize", action="store_true", help="运行网格搜索找最佳参数")
-    parser.add_argument("--force-search", action="store_true", help="强制重新搜索")
+    parser = argparse.ArgumentParser(description="澳门六合彩特二色预测（自动调参版）")
+    parser.add_argument("--optimize", action="store_true", help="强制运行网格搜索")
+    parser.add_argument("--force-search", action="store_true", help="强制搜索（忽略时间）")
+    parser.add_argument("--no-auto-search", action="store_true", help="禁止自动搜索，直接预测")
     args = parser.parse_args()
 
     print("获取澳门六合彩数据...")
@@ -568,12 +561,31 @@ def main():
     if not rows:
         return
 
-    if args.optimize or args.force_search:
-        run_grid_search(rows, force=args.force_search)
-        return
+    # 决定是否需要搜索
+    need_search = args.optimize or args.force_search
+    if not need_search and not args.no_auto_search:
+        if not os.path.exists(PARAMS_FILE):
+            need_search = True
+            print("📡 参数文件不存在，自动启动网格搜索...")
+        elif os.path.exists(LAST_SEARCH_FILE):
+            with open(LAST_SEARCH_FILE, "r") as f:
+                last = f.read().strip()
+                if last:
+                    try:
+                        last_date = datetime.strptime(last, "%Y-%m-%d")
+                        if (datetime.now() - last_date).days >= 7:
+                            need_search = True
+                            print("⏰ 参数已过期（超过7天），自动重新搜索...")
+                    except:
+                        pass
 
+    if need_search:
+        run_grid_search(rows, force=args.force_search)
+
+    # 加载参数（如果搜索刚生成了新文件，也会被加载）
     load_best_params()
 
+    # 预测
     colors = [r["color"] for r in rows]
     normals = [r["normal_numbers"] for r in rows]
     specials = [r["special_number"] for r in rows]
@@ -583,7 +595,7 @@ def main():
         colors, normals, specials
     )
 
-    print(f"\n【澳门六合彩 特二色预测（优化版）】")
+    print(f"\n【澳门六合彩 特二色预测（自动调参版）】")
     print(f"预测期号: {next_issue(latest)}")
     print(f"推荐颜色: {'、'.join(pred_colors)}   置信度: {conf}% ({level})  状态: {state}")
     print(f"投注允许: {'是' if can_bet else '否'}" + (f" → {reason}" if not can_bet else ""))
@@ -612,7 +624,7 @@ def main():
     print(f"最近200期 命中率: {hr200:.1%} 最大连空: {miss200} 收益: {ret200:+.1f}%")
 
     with open("result.md", "w", encoding="utf-8") as f:
-        f.write("# 澳门六合彩特二色预测报告（优化版）\n\n")
+        f.write("# 澳门六合彩特二色预测报告（自动调参版）\n\n")
         f.write(f"**预测期号**: {next_issue(latest)}\n\n")
         f.write(f"**推荐颜色**: {'、'.join(pred_colors)}\n\n")
         f.write(f"**置信度**: {conf}% ({level})\n\n")
