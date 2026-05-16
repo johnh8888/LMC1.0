@@ -1,43 +1,50 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 澳门六合彩 特二色预测（基于香港模型适配）
+# 澳门六合彩特二色预测 - 澳门专属优化版（含自动寻优）
 
 import argparse
+import copy
 import gzip
 import json
+import math
 import re
 import time
 import random
 import urllib.request
+import os
+from datetime import datetime, timedelta
 from collections import Counter, defaultdict
+from itertools import product
 
-# ================== 配置参数 ==================
+# ================== 配置（澳门优化初始值）==================
 CONFIG = {
     "odds": {"红": 2.70, "蓝": 2.80, "绿": 2.80},
-    "pred_mode": "dual",
+    "pred_mode": "single",               # 单色预测，集中资金
     "dual_alloc_mode": "score_proportional",
 
-    # 模型权重（沿用香港短期优化版）
-    "window_18_weight": 6.0,
-    "window_55_weight": 2.0,
-    "window_150_weight": 0.8,
+    # 澳门优化权重
+    "window_18_weight": 8.0,
+    "window_55_weight": 2.5,
+    "window_150_weight": 0.5,
     "omission_factor": 0.9,
     "omission_max": 11.5,
     "cycle_dev_low": 1.5,
     "cycle_dev_high": 3.0,
     "cycle_score_low": 3.5,
     "cycle_score_high": 7.0,
-    "trans_weight": 7.0,
+    "trans_weight": 9.0,
     "normal_main_weight": 4.0,
     "szsd_trans_weight": 2.0,
-    "normal_szsd_main_weight": 5.0,
+    "normal_szsd_main_weight": 3.0,
     "beast_trans_weight": 0,
     "normal_beast_main_weight": 0,
 
-    # 过滤与资金管理
-    "min_calibrated_confidence": 60,
-    "min_score_diff": 3,
+    # 过滤阈值（降低以增加投注）
+    "min_calibrated_confidence": 50,
+    "min_score_diff": 2,
     "max_skip_streak": 6,
+
+    # 资金管理
     "bankroll": 10000,
     "kelly_fraction": 0.35,
     "max_bet_ratio_total": 0.10,
@@ -51,9 +58,24 @@ CONFIG = {
     "train_max_len": 420,
     "show_details": 25,
     "min_train": 30,
+
+    # 网格搜索参数（针对澳门优化）
+    "search_warmup": 150,
+    "search_test": 200,
+    "search_space": {
+        "min_calibrated_confidence": [45, 50, 55],
+        "min_score_diff": [2, 3, 5],
+        "pred_mode": ["single", "dual"],
+        "window_18_weight": [6.0, 8.0, 10.0],
+        "window_55_weight": [2.0, 2.5, 3.0],
+        "trans_weight": [7.0, 9.0, 11.0],
+    },
 }
 
-# ================== 颜色定义（与香港六合彩完全相同）==================
+PARAMS_FILE = "macau_best_params.json"
+LAST_SEARCH_FILE = "macau_last_search.txt"
+
+# ================== 颜色 & 生肖定义 ==================
 RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
 BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
@@ -78,7 +100,6 @@ def get_color(n):
     return "红"
 
 def next_issue(issue_no):
-    """期号递增，格式如 2025/001 或 2025001"""
     try:
         if "/" in issue_no:
             y, s = issue_no.split("/")
@@ -91,7 +112,6 @@ def parse_nums(value):
     return [int(x) for x in re.findall(r'\d+', value) if 1 <= int(x) <= 49]
 
 def fetch_macau(limit=800):
-    """拉取澳门六合彩数据（从 marksix6.net API）"""
     headers = {"User-Agent": "Mozilla/5.0"}
     for attempt in range(CONFIG["max_retries"]):
         try:
@@ -104,11 +124,9 @@ def fetch_macau(limit=800):
                 rows = []
                 for item in data.get("lottery_data", []):
                     name = item.get("name", "")
-                    # 筛选澳门六合彩（排除香港、新澳门等）
                     if "澳门" not in name or "新澳门" in name:
                         continue
                     for line in item.get("history", []):
-                        # 解析期号和号码
                         m = re.search(r"(\d{6,7})\s*期[：:]\s*([\d，,\s]+)", line)
                         if not m:
                             continue
@@ -128,16 +146,14 @@ def fetch_macau(limit=800):
                         })
                 if rows:
                     rows = sorted(rows, key=lambda x: x["issue_no"], reverse=True)
-                    print(f"✅ 成功获取澳门六合彩 {len(rows)} 期数据")
-                    print(f"最新开奖: {rows[0]['issue_no']} 特码 {rows[0]['special_number']} → {rows[0]['color']}\n")
+                    print(f"✅ 获取澳门六合彩 {len(rows)} 期数据，最新: {rows[0]['issue_no']} 特码 {rows[0]['special_number']} → {rows[0]['color']}\n")
                     return rows[:limit]
         except Exception as e:
             print(f"获取失败 ({attempt+1}/{CONFIG['max_retries']}): {e}")
             time.sleep(2**attempt + random.random())
-    print("❌ 无法获取澳门六合彩数据")
+    print("❌ 无法获取澳门数据")
     return []
 
-# ================== 置信度校准器 ==================
 class ConfidenceCalibrator:
     def __init__(self):
         self.bins = defaultdict(lambda: [0, 0])
@@ -156,7 +172,6 @@ class ConfidenceCalibrator:
 
 calibrator = ConfidenceCalibrator()
 
-# ================== 预测核心（与香港完全相同）==================
 def professional_predict(train_colors, train_normals, train_specials, miss_streak=0, skip_streak=0, calib=None):
     if calib is None:
         calib = calibrator
@@ -301,7 +316,6 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
     state = "极强单边" if recent30_dom >= 13 else "强单边" if recent30_dom >= 9 else "单边" if recent30_dom >= 6 else "均衡"
     return pred_colors, dict(score), round(conf), level, state, mode, can_bet, filter_reason
 
-# ================== 资金管理 ==================
 def suggest_bet(scores, pred_colors, bankroll=None, conf=50):
     if bankroll is None:
         bankroll = CONFIG["bankroll"]
@@ -341,7 +355,6 @@ def suggest_bet(scores, pred_colors, bankroll=None, conf=50):
         bet = {c: int(v * scale / CONFIG["bet_step"]) * CONFIG["bet_step"] for c, v in bet.items()}
     return bet, sum(bet.values())
 
-# ================== 回测函数 ==================
 def backtest(rows, lookback=200, calib=None):
     if calib is None:
         calib = calibrator
@@ -403,64 +416,204 @@ def backtest(rows, lookback=200, calib=None):
     final_return = (bankroll - initial) / initial * 100 if initial > 0 else 0
     return hits/total if total>0 else 0, max_miss, final_return, details[::-1]
 
-# ================== 主程序 ==================
+def backtest_with_warmup(rows, warmup, test_len, calib):
+    colors = [r["color"] for r in rows]
+    normals = [r["normal_numbers"] for r in rows]
+    specials = [r["special_number"] for r in rows]
+    total = warmup + test_len
+    if len(colors) < total + CONFIG["min_train"]:
+        return 0.0, 0, -999.0
+    miss_streak = 0
+    max_miss = 0
+    skip_streak = 0
+    bankroll = CONFIG["bankroll"]
+    initial = bankroll
+    max_bankroll = bankroll
+    hits_test = 0
+    count_test = 0
+    for k in range(total):
+        actual = colors[k]
+        hist_colors = colors[k+1:]
+        hist_normals = normals[k+1:]
+        hist_specials = specials[k+1:]
+        train_colors = hist_colors[:CONFIG["train_max_len"]]
+        train_normals = hist_normals[:CONFIG["train_max_len"]]
+        train_specials = hist_specials[:CONFIG["train_max_len"]]
+        pred_colors, scores, conf, _, _, _, can_bet, reason = professional_predict(
+            train_colors, train_normals, train_specials, miss_streak, skip_streak, calib
+        )
+        ok = actual in pred_colors
+        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        diff = sorted_scores[0][1] - (sorted_scores[1][1] if len(sorted_scores) > 1 else 0)
+        calib.record(diff, ok)
+        if k >= warmup:
+            count_test += 1
+            if ok:
+                hits_test += 1
+            if can_bet:
+                bet_dict, _ = suggest_bet(scores, pred_colors, bankroll, conf)
+                cost = sum(bet_dict.values())
+                ret = 0
+                if ok:
+                    for c, amt in bet_dict.items():
+                        if c == actual:
+                            ret += amt * CONFIG["odds"][c]
+                bankroll += ret - cost
+                max_bankroll = max(max_bankroll, bankroll)
+                skip_streak = 0
+            else:
+                skip_streak += 1
+        else:
+            if can_bet:
+                skip_streak = 0
+            else:
+                skip_streak += 1
+        if ok:
+            miss_streak = 0
+        else:
+            miss_streak += 1
+            if k >= warmup:
+                max_miss = max(max_miss, miss_streak)
+    hit_rate = hits_test / count_test if count_test > 0 else 0.0
+    final_return = (bankroll - initial) / initial * 100 if initial > 0 else 0
+    return hit_rate, max_miss, final_return
+
+def run_grid_search(rows, force=False):
+    if not force and os.path.exists(LAST_SEARCH_FILE):
+        with open(LAST_SEARCH_FILE, "r") as f:
+            last = f.read().strip()
+            if last:
+                try:
+                    last_date = datetime.strptime(last, "%Y-%m-%d")
+                    if datetime.now() - last_date < timedelta(days=7):
+                        print("距上次搜索不足7天，跳过。如需强制请用 --force-search")
+                        return None
+                except:
+                    pass
+    N = len(rows)
+    min_train = CONFIG["min_train"]
+    available = N - min_train
+    if available < 100:
+        print(f"数据量不足（仅 {N} 期），无法搜索。")
+        return None
+    warmup = min(150, available // 2)
+    test = min(200, available - warmup)
+    if test < 30:
+        test = available - warmup
+        if test < 20:
+            print(f"测试期数太少（{test}），跳过搜索。")
+            return None
+    print(f"澳门优化搜索：预热期 {warmup}，测试期 {test} (最近{test}期)")
+    print("="*60)
+    print("🔍 开始网格搜索（目标：提升最近100期命中率+收益）")
+    print("="*60)
+    search_space = CONFIG["search_space"]
+    keys = list(search_space.keys())
+    combinations = list(product(*search_space.values()))
+    total_combos = len(combinations)
+    print(f"待测试组合: {total_combos} 组\n")
+    best_score = -float("inf")
+    best_params = None
+    original_config = copy.deepcopy(CONFIG)
+    for idx, combo in enumerate(combinations, 1):
+        params = dict(zip(keys, combo))
+        for k, v in params.items():
+            CONFIG[k] = v
+        local_calib = ConfidenceCalibrator()
+        hr, miss, ret = backtest_with_warmup(rows, warmup, test, local_calib)
+        # 综合得分 = 收益 * 0.6 + 命中率 * 40
+        score = ret * 0.6 + hr * 40
+        if score > best_score:
+            best_score = score
+            best_params = params
+        if idx % 30 == 0 or idx == total_combos:
+            print(f"  进度: {idx}/{total_combos}  当前最佳得分: {best_score:.1f}")
+    CONFIG.update(original_config)
+    if best_params:
+        with open(PARAMS_FILE, "w") as f:
+            json.dump(best_params, f, indent=2)
+        with open(LAST_SEARCH_FILE, "w") as f:
+            f.write(datetime.now().strftime("%Y-%m-%d"))
+        print(f"\n✅ 澳门最佳参数已保存至 {PARAMS_FILE}")
+        print(f"   综合得分: {best_score:.1f}")
+        for k, v in best_params.items():
+            print(f"   {k}: {v}")
+        return best_params
+    else:
+        print("❌ 未找到有效参数")
+        return None
+
+def load_best_params():
+    if os.path.exists(PARAMS_FILE):
+        with open(PARAMS_FILE, "r") as f:
+            params = json.load(f)
+        print("加载澳门最佳参数：")
+        for k, v in params.items():
+            if k in CONFIG:
+                CONFIG[k] = v
+                print(f"  {k}: {v}")
+        return True
+    else:
+        print("未找到澳门参数文件，使用默认优化配置")
+        return False
+
 def main():
-    print("正在获取澳门六合彩最新数据...")
+    parser = argparse.ArgumentParser(description="澳门六合彩特二色预测（优化版）")
+    parser.add_argument("--optimize", action="store_true", help="运行网格搜索找最佳参数")
+    parser.add_argument("--force-search", action="store_true", help="强制重新搜索")
+    args = parser.parse_args()
+
+    print("获取澳门六合彩数据...")
     rows = fetch_macau(800)
     if not rows:
-        print("数据获取失败，请检查网络或稍后重试")
         return
+
+    if args.optimize or args.force_search:
+        run_grid_search(rows, force=args.force_search)
+        return
+
+    load_best_params()
 
     colors = [r["color"] for r in rows]
     normals = [r["normal_numbers"] for r in rows]
     specials = [r["special_number"] for r in rows]
-    latest_issue = rows[0]["issue_no"]
+    latest = rows[0]["issue_no"]
 
     pred_colors, scores, conf, level, state, mode, can_bet, reason = professional_predict(
-        colors, normals, specials, miss_streak=0, skip_streak=0
+        colors, normals, specials
     )
 
-    print(f"\n【澳门六合彩 特二色预测】")
-    print(f"预测期号: {next_issue(latest_issue)}")
-    print(f"预测模式: {mode}")
+    print(f"\n【澳门六合彩 特二色预测（优化版）】")
+    print(f"预测期号: {next_issue(latest)}")
     print(f"推荐颜色: {'、'.join(pred_colors)}   置信度: {conf}% ({level})  状态: {state}")
     print(f"投注允许: {'是' if can_bet else '否'}" + (f" → {reason}" if not can_bet else ""))
     print()
 
     if can_bet:
         bet_dict, total_bet = suggest_bet(scores, pred_colors, CONFIG["bankroll"], conf)
-        print("💰 资金管理建议:")
-        expected = 0
+        print("💰 资金建议:")
         for c, amt in bet_dict.items():
-            net = CONFIG["odds"][c] - 1
-            print(f"   {c}色 → {amt:4d} 元   (赔率 {CONFIG['odds'][c]}，净{net:.2f})")
-            expected += amt * net
-        print(f"   本期总投注: {total_bet} 元")
-        print(f"   若命中预计净利: +{expected:.0f} 元\n")
+            print(f"   {c}: {amt}元 (赔率 {CONFIG['odds'][c]})")
+        print(f"   总投注: {total_bet}元\n")
     else:
-        print("💰 本期无投注建议（未满足过滤条件）\n")
+        print("💰 本期无投注建议\n")
 
-    print("🎯 颜色强度得分:")
+    print("🎯 颜色得分:")
     for c in COLORS:
-        print(f"   {c}色: {scores.get(c, 0):.1f} 分")
-    print(f"   最强: 【{max(COLORS, key=lambda c: scores.get(c,0))}】\n")
+        print(f"   {c}: {scores.get(c,0):.1f}")
+    print()
 
-    print("回测中...\n")
-    hr10,  miss10,  ret10,  det10  = backtest(rows, 10)
-    hr100, miss100, ret100, _      = backtest(rows, 100)
-    hr200, miss200, ret200, _      = backtest(rows, 200)
+    hr10, miss10, ret10, _ = backtest(rows, 10)
+    hr100, miss100, ret100, _ = backtest(rows, 100)
+    hr200, miss200, ret200, _ = backtest(rows, 200)
 
-    print(f"===== 最近10期   命中率: {hr10:.1%}    最大连空: {miss10}    模拟收益: {ret10:+.1f}% =====")
-    print(f"===== 最近100期  命中率: {hr100:.1%}   最大连空: {miss100}   模拟收益: {ret100:+.1f}% =====")
-    print(f"===== 最近200期  命中率: {hr200:.1%}   最大连空: {miss200}   模拟收益: {ret200:+.1f}% =====")
+    print(f"最近10期 命中率: {hr10:.1%} 最大连空: {miss10} 收益: {ret10:+.1f}%")
+    print(f"最近100期 命中率: {hr100:.1%} 最大连空: {miss100} 收益: {ret100:+.1f}%")
+    print(f"最近200期 命中率: {hr200:.1%} 最大连空: {miss200} 收益: {ret200:+.1f}%")
 
-    if ret200 < -10 or miss200 >= 6:
-        print("\n⚠️ 风险提示：长期收益为负或连空次数较高，请谨慎参与。")
-
-    # 生成 result.md
     with open("result.md", "w", encoding="utf-8") as f:
-        f.write("# 澳门六合彩特二色预测报告\n\n")
-        f.write(f"**预测期号**: {next_issue(latest_issue)}\n\n")
+        f.write("# 澳门六合彩特二色预测报告（优化版）\n\n")
+        f.write(f"**预测期号**: {next_issue(latest)}\n\n")
         f.write(f"**推荐颜色**: {'、'.join(pred_colors)}\n\n")
         f.write(f"**置信度**: {conf}% ({level})\n\n")
         f.write(f"**模式**: {mode}\n\n**状态**: {state}\n\n")
