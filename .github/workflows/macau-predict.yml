@@ -1,26 +1,39 @@
-name: 澳门六合彩预测
+name: 澳门六合彩自动调参预测
 
 on:
   schedule:
-    # 每天香港时间 21:35 运行（UTC 13:35）
     - cron: '35 13 * * *'
-  workflow_dispatch:   # 支持手动触发
+  workflow_dispatch:
 
 jobs:
   predict:
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 设置 Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
-      - name: 运行澳门六合彩预测
+      
+      - name: 恢复参数缓存
+        id: params-cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            macau_best_params.json
+            macau_last_search.txt
+          key: macau-params
+      
+      - name: 运行自动调参预测
         run: python macau_lottery_predict.py
-
+      
+      - name: 保存参数缓存（如有更新）
+        uses: actions/cache@v3
+        with:
+          path: |
+            macau_best_params.json
+            macau_last_search.txt
+          key: macau-params
+      
       - name: 上传报告
         uses: actions/upload-artifact@v4
         with:
