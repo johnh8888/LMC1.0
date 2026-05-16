@@ -1,73 +1,29 @@
-name: 新澳门彩 · 特二色全自动预测
+name: Macau Zodiac Projection V51
 
 on:
-  schedule:
-    - cron: '30 13 * * *'        # 每天 13:30 UTC
-  workflow_dispatch:
+  workflow_dispatch:   # 支持手动触发
 
 jobs:
-  tune-and-predict:
+  run-projection:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: read
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          persist-credentials: true
+          python-version: '3.11'
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install requests
 
-      - name: 安装依赖
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+      - name: Run Projection
+        run: python macau_zodiac_projection_v51.py
 
-      # ---------- 自动调参判断 ----------
-      - name: 判断是否需要重新调参
-        id: check_params
-        run: |
-          FILE="best_params.json"
-          if [ ! -f "$FILE" ]; then
-            echo "need_tune=true" >> $GITHUB_OUTPUT
-            echo "参数文件不存在，需要调参"
-          else
-            # 文件超过 7 天则重新调参
-            if [ "$(find $FILE -mtime +7)" != "" ]; then
-              echo "need_tune=true" >> $GITHUB_OUTPUT
-              echo "参数文件已过期（>7天），需要重新调参"
-            else
-              echo "need_tune=false" >> $GITHUB_OUTPUT
-              echo "参数文件较新，跳过调参"
-            fi
-          fi
-
-      - name: 运行 Optuna 调参
-        if: steps.check_params.outputs.need_tune == 'true'
-        run: |
-          python color_two.py --tune
-
-      - name: 提交新参数
-        if: steps.check_params.outputs.need_tune == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add best_params.json
-          git diff --cached --quiet || (git commit -m "Auto-tune parameters [skip ci]" && git push)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # ---------- 特二色预测 ----------
-      - name: 特二色预测
-        run: python color_two.py --show
-
-      # ---------- 上传结果 ----------
-      - name: 上传预测报告
+      - name: Upload Result Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: color-prediction
-          path: color_result.txt你看看怎么增加
+          name: macau-zodiac-result
+          path: result.md
