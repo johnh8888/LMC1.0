@@ -10,13 +10,17 @@ jobs:
   search:
     if: github.event.schedule == '0 2 * * 1' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write          # 添加写入权限
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: 运行网格搜索
-        run: python hk_color_two_v50_fixed.py --force-search   # 修改这里
+        run: python hk_color_two_v50_fixed.py --force-search
       - name: 提交最佳参数文件
         run: |
           git config user.name "github-actions[bot]"
@@ -35,13 +39,15 @@ jobs:
   predict:
     needs: [search]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: 运行预测
-        run: python hk_color_two_v50_fixed.py --auto-tune   # 修改这里
+        run: python hk_color_two_v50_fixed.py --auto-tune
       - name: 上传报告
         uses: actions/upload-artifact@v4
         with:
