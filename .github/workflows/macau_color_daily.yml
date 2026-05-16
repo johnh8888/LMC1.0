@@ -1,29 +1,20 @@
-name: Macau Zodiac Projection V51
+steps:
+  - name: Checkout Code
+    uses: actions/checkout@v4
 
-on:
-  workflow_dispatch:   # 支持手动触发
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: '3.11'
 
-jobs:
-  run-projection:
-    runs-on: ubuntu-latest
+  - name: Install dependencies
+    run: pip install requests
 
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+  - name: Run Projection
+    run: python macau_color_only.py            # 👈 改这里
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Run Projection
-        run: python macau_zodiac_projection_v51.py
-
-      - name: Upload Result Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macau-zodiac-result
-          path: result.md
+  - name: Upload Result Artifact
+    uses: actions/upload-artifact@v4
+    with:
+      name: macau-zodiac-result
+      path: result.md
