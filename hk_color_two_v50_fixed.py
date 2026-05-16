@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 香港六合彩特二色预测 V50 完整自动优化版
+# 香港六合彩特二色预测 V50 完整自动优化版（修复参数错误）
 
 import argparse
 import copy
@@ -53,7 +53,7 @@ CONFIG = {
     "min_train": 30,
     "search_warmup": 150,
     "search_test": 200,
-    # 精简的搜索空间（约 96 种组合）
+    # 精简的搜索空间（约 486 种组合，可进一步精简）
     "search_space": {
         "min_calibrated_confidence": [68, 72, 75],
         "min_score_diff": [5, 8],
@@ -330,6 +330,7 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
 
 # ================== 资金管理 ==================
 def suggest_bet(scores, pred_colors, bankroll=None, conf=50):
+    """返回投注字典和总投注额"""
     if bankroll is None:
         bankroll = CONFIG["bankroll"]
     if not pred_colors:
@@ -399,7 +400,7 @@ def backtest(rows, lookback=200, calib=None):
         diff = sorted_scores[0][1] - (sorted_scores[1][1] if len(sorted_scores) > 1 else 0)
         calib.record(diff, ok)
         if can_bet:
-            bet_dict, _ = suggest_bet(scores, pred, bankroll, conf)
+            bet_dict, _ = suggest_bet(scores, pred, bankroll, conf)   # 修正：去掉 miss_streak
             cost = sum(bet_dict.values())
             ret = sum(amt * CONFIG["odds"][c] for c, amt in bet_dict.items() if c == actual) if ok else 0
             bankroll += ret - cost
@@ -465,7 +466,7 @@ def backtest_with_warmup(rows, warmup, test_len, calib):
             if ok:
                 hits_test += 1
             if can_bet:
-                bet_dict, _ = suggest_bet(scores, pred_colors, miss_streak, bankroll, conf)
+                bet_dict, _ = suggest_bet(scores, pred_colors, bankroll, conf)   # 修正：去掉 miss_streak
                 cost = sum(bet_dict.values())
                 ret = 0
                 if ok:
