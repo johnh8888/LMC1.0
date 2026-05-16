@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 香港六合彩特二色预测 V50 稳定版 + 自动参数寻优
+# 香港六合彩特二色预测 V50 完整自动优化版
 
 import argparse
 import copy
@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 from itertools import product
 
-# ========== 配置 ==========
+# ================== 配置参数 ==================
 CONFIG = {
     "odds": {"红": 2.70, "蓝": 2.80, "绿": 2.80},
     "pred_mode": "dual",
@@ -53,28 +53,26 @@ CONFIG = {
     "min_train": 30,
     "search_warmup": 150,
     "search_test": 200,
+    # 精简的搜索空间（约 96 种组合）
     "search_space": {
-        "min_calibrated_confidence": [68, 70, 72],
+        "min_calibrated_confidence": [68, 72, 75],
         "min_score_diff": [5, 8],
-        "pred_mode": ["dual"],
-        "dual_alloc_mode": ["score_proportional"],
-        "szsd_trans_weight": [0, 1.0, 2.0, 3.0],
-        "normal_szsd_main_weight": [0, 1.0, 2.0, 2.5],
-        "beast_trans_weight": [0, 1.0, 2.0, 3.0],
-        "normal_beast_main_weight": [0, 1.0, 2.0, 2.5],
+        "szsd_trans_weight": [0, 2.0, 3.0],
+        "normal_szsd_main_weight": [0, 2.5, 3.0],
+        "beast_trans_weight": [0, 2.0, 3.0],
+        "normal_beast_main_weight": [0, 2.5, 3.0],
     },
 }
 
 PARAMS_FILE = "best_params.json"
 LAST_SEARCH_FILE = "last_search.txt"
 
-# ========== 颜色定义 ==========
+# ================== 颜色 & 生肖定义 ==================
 RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
 BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 COLORS = ["红", "蓝", "绿"]
 
-# ========== 生肖与野兽/家禽 ==========
 ZODIAC_ORDER = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
 BEAST_SET = {"鼠","虎","兔","龙","蛇","猴"}
 NUM_TO_BEAST_TYPE = {}
@@ -83,10 +81,18 @@ for num in range(1, 50):
     zodiac = ZODIAC_ORDER[idx]
     NUM_TO_BEAST_TYPE[num] = "野兽" if zodiac in BEAST_SET else "家禽"
 
-def get_beast_type(n): return NUM_TO_BEAST_TYPE.get(n, "家禽")
-def get_size(n): return "小" if 1 <= n <= 24 else "大"
-def get_odd_even(n): return "单" if n % 2 == 1 else "双"
-def get_szsd_type(n): return f"{get_size(n)}{get_odd_even(n)}"
+def get_beast_type(n):
+    return NUM_TO_BEAST_TYPE.get(n, "家禽")
+
+def get_size(n):
+    return "小" if 1 <= n <= 24 else "大"
+
+def get_odd_even(n):
+    return "单" if n % 2 == 1 else "双"
+
+def get_szsd_type(n):
+    return f"{get_size(n)}{get_odd_even(n)}"
+
 def get_color(n):
     if n in RED: return "红"
     if n in BLUE: return "蓝"
@@ -106,6 +112,7 @@ def parse_nums(value):
     return [int(x) for x in re.findall(r'\d+', value) if 1 <= int(x) <= 49]
 
 def fetch_hk(limit=800):
+    """拉取香港六合彩数据"""
     headers = {"User-Agent": "Mozilla/5.0"}
     for attempt in range(CONFIG["max_retries"]):
         try:
@@ -148,6 +155,7 @@ def fetch_hk(limit=800):
     print("❌ 无法获取数据")
     return []
 
+# ================== 置信度校准器 ==================
 class ConfidenceCalibrator:
     def __init__(self):
         self.bins = defaultdict(lambda: [0, 0])
@@ -166,6 +174,7 @@ class ConfidenceCalibrator:
 
 calibrator = ConfidenceCalibrator()
 
+# ================== 预测核心 ==================
 def professional_predict(train_colors, train_normals, train_specials, miss_streak=0, skip_streak=0, calib=None):
     if calib is None:
         calib = calibrator
@@ -173,6 +182,8 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
         return ["红", "绿"], {c: 50.0 for c in COLORS}, 50, "中", "数据不足", "二色", False, ""
 
     score = defaultdict(float)
+
+    # 窗口加权
     for i, c in enumerate(train_colors[:18]):
         score[c] += CONFIG["window_18_weight"] * (1 - i/35)
     for i, c in enumerate(train_colors[:55]):
@@ -180,10 +191,12 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
     for i, c in enumerate(train_colors[:150]):
         score[c] += CONFIG["window_150_weight"] * (1 - i/260)
 
+    # 遗漏值
     omission = {c: next((i for i, x in enumerate(train_colors) if x == c), len(train_colors)) for c in COLORS}
     for c in COLORS:
         score[c] += min(omission[c] * CONFIG["omission_factor"], CONFIG["omission_max"])
 
+    # 周期偏离
     for c in COLORS:
         positions = [i for i, x in enumerate(train_colors) if x == c]
         if len(positions) >= 5:
@@ -196,6 +209,7 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
             elif dev > CONFIG["cycle_dev_low"]:
                 score[c] += CONFIG["cycle_score_low"]
 
+    # 颜色转移
     if len(train_colors) > 1:
         trans = defaultdict(Counter)
         for i in range(len(train_colors)-1):
@@ -206,6 +220,7 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
             for c, v in trans[last_prev].items():
                 score[c] += (v / total) * CONFIG["trans_weight"]
 
+    # 正码颜色特征
     if train_normals and len(train_normals) > 1:
         last_norm = train_normals[0]
         main_color = Counter(get_color(n) for n in last_norm).most_common(1)[0][0]
@@ -220,6 +235,7 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
                 for c, v in normal_trans[main_color].items():
                     score[c] += (v / total) * CONFIG["normal_main_weight"]
 
+    # 特码大小单双转移
     if CONFIG["szsd_trans_weight"] > 0 and train_specials and len(train_specials) > 1:
         last_szsd = get_szsd_type(train_specials[0])
         szsd_trans = defaultdict(Counter)
@@ -232,6 +248,7 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
                 for c, v in szsd_trans[last_szsd].items():
                     score[c] += (v / total) * CONFIG["szsd_trans_weight"]
 
+    # 正码主要大小单双特征
     if CONFIG["normal_szsd_main_weight"] > 0 and train_normals and len(train_normals) > 1:
         last_norm_nums = train_normals[0]
         szsd_counts = Counter(get_szsd_type(n) for n in last_norm_nums)
@@ -247,6 +264,7 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
                 for c, v in normal_szsd_trans[main_szsd].items():
                     score[c] += (v / total) * CONFIG["normal_szsd_main_weight"]
 
+    # 特码野兽/家禽转移
     if CONFIG["beast_trans_weight"] > 0 and train_specials and len(train_specials) > 1:
         last_beast = get_beast_type(train_specials[0])
         beast_trans = defaultdict(Counter)
@@ -259,6 +277,7 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
                 for c, v in beast_trans[last_beast].items():
                     score[c] += (v / total) * CONFIG["beast_trans_weight"]
 
+    # 正码主导野兽/家禽特征
     if CONFIG["normal_beast_main_weight"] > 0 and train_normals and len(train_normals) > 1:
         last_norm_nums = train_normals[0]
         beast_counts = Counter(get_beast_type(n) for n in last_norm_nums)
@@ -276,6 +295,7 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
 
     ranked = sorted(score.items(), key=lambda x: x[1], reverse=True)
     ranked_colors = [c for c, _ in ranked]
+
     if miss_streak >= 5 or (miss_streak == 4 and max(omission.values()) >= 9):
         pred_colors = [max(COLORS, key=lambda c: omission[c])]
         mode = "单色冷补"
@@ -298,6 +318,7 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
         filter_reason = f"置信度不足({conf}% < {CONFIG['min_calibrated_confidence']}%)"
     elif diff < CONFIG["min_score_diff"]:
         filter_reason = f"得分差不足({diff:.1f} < {CONFIG['min_score_diff']})"
+
     can_bet = (not filter_reason) or (skip_streak >= CONFIG["max_skip_streak"])
     if skip_streak >= CONFIG["max_skip_streak"] and filter_reason:
         filter_reason += "，但连续未投已达上限，强制投注"
@@ -307,6 +328,7 @@ def professional_predict(train_colors, train_normals, train_specials, miss_strea
     state = "极强单边" if recent30_dom >= 13 else "强单边" if recent30_dom >= 9 else "单边" if recent30_dom >= 6 else "均衡"
     return pred_colors, dict(score), round(conf), level, state, mode, can_bet, filter_reason
 
+# ================== 资金管理 ==================
 def suggest_bet(scores, pred_colors, bankroll=None, conf=50):
     if bankroll is None:
         bankroll = CONFIG["bankroll"]
@@ -321,7 +343,7 @@ def suggest_bet(scores, pred_colors, bankroll=None, conf=50):
     bet = {}
     if len(pred_colors) == 1:
         c = pred_colors[0]
-        kelly = max(0, min((1.0 * (CONFIG["odds"][c]-1) - 0) / (CONFIG["odds"][c]-1), 0.24))
+        kelly = max(0, min((1.0 * (CONFIG["odds"][c]-1)) / (CONFIG["odds"][c]-1), 0.24))
         raw = int(bankroll * kelly / CONFIG["bet_step"]) * CONFIG["bet_step"]
         bet[c] = max(CONFIG["min_bet_per_color"], min(raw, int(bankroll * 0.25)))
     else:
@@ -346,6 +368,7 @@ def suggest_bet(scores, pred_colors, bankroll=None, conf=50):
         bet = {c: int(v * scale / CONFIG["bet_step"]) * CONFIG["bet_step"] for c, v in bet.items()}
     return bet, sum(bet.values())
 
+# ================== 回测函数 ==================
 def backtest(rows, lookback=200, calib=None):
     if calib is None:
         calib = calibrator
@@ -372,8 +395,8 @@ def backtest(rows, lookback=200, calib=None):
             miss_streak, skip_streak, calib
         )
         ok = actual in pred
-        diff = sorted(scores.items(), key=lambda x: x[1], reverse=True)[0][1] - \
-               (sorted(scores.items(), key=lambda x: x[1], reverse=True)[1][1] if len(scores) > 1 else 0)
+        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        diff = sorted_scores[0][1] - (sorted_scores[1][1] if len(sorted_scores) > 1 else 0)
         calib.record(diff, ok)
         if can_bet:
             bet_dict, _ = suggest_bet(scores, pred, bankroll, conf)
@@ -430,7 +453,7 @@ def backtest_with_warmup(rows, warmup, test_len, calib):
         train_colors = hist_colors[:CONFIG["train_max_len"]]
         train_normals = hist_normals[:CONFIG["train_max_len"]]
         train_specials = hist_specials[:CONFIG["train_max_len"]]
-        pred_colors, scores, conf, level, state, mode, can_bet, reason = professional_predict(
+        pred_colors, scores, conf, _, _, _, can_bet, reason = professional_predict(
             train_colors, train_normals, train_specials, miss_streak, skip_streak, calib
         )
         ok = actual in pred_colors
@@ -469,8 +492,9 @@ def backtest_with_warmup(rows, warmup, test_len, calib):
     final_return = (bankroll - initial) / initial * 100 if initial > 0 else 0
     return hit_rate, max_miss, final_return
 
+# ================== 网格搜索 + 动态参数 ==================
 def run_grid_search(rows, force=False):
-    """执行网格搜索，保存最佳参数到文件，返回最佳参数字典"""
+    """执行网格搜索，根据数据量动态调整预热和测试期数，保存最佳参数"""
     if not force and os.path.exists(LAST_SEARCH_FILE):
         with open(LAST_SEARCH_FILE, "r") as f:
             last = f.read().strip()
@@ -482,17 +506,42 @@ def run_grid_search(rows, force=False):
                         return None
                 except:
                     pass
+
+    N = len(rows)
+    min_train = CONFIG["min_train"]
+    available = N - min_train
+    if available < 100:
+        print(f"数据量不足（仅 {N} 期，可用训练期 {available}），无法进行有效搜索。")
+        return None
+
+    # 动态 warmup / test
+    warmup = min(150, available // 2)
+    test = min(200, available - warmup)
+    if test < 30:
+        test = available - warmup
+        if test < 20:
+            print(f"测试期数太少（{test}），跳过搜索。")
+            return None
+
+    print(f"动态设置：预热期 {warmup}，测试期 {test}，总需 {warmup+test+min_train} 期，实际 {N} 期")
     print("="*60)
     print("🔍 开始网格搜索自动寻优")
     print("="*60)
+
     search_space = CONFIG["search_space"]
     keys = list(search_space.keys())
     combinations = list(product(*search_space.values()))
     total_combos = len(combinations)
     print(f"待测试参数组合: {total_combos} 组\n")
+
     best_return = -float("inf")
     best_params = None
     original_config = copy.deepcopy(CONFIG)
+
+    # 临时覆盖搜索参数
+    CONFIG["search_warmup"] = warmup
+    CONFIG["search_test"] = test
+
     for idx, combo in enumerate(combinations, 1):
         params = dict(zip(keys, combo))
         for k, v in params.items():
@@ -509,14 +558,16 @@ def run_grid_search(rows, force=False):
             best_params = params
         if idx % 20 == 0 or idx == total_combos:
             print(f"  进度: {idx}/{total_combos}  当前最佳收益: {best_return:+.1f}%")
+
     CONFIG.update(original_config)
+
     if best_params:
         with open(PARAMS_FILE, "w") as f:
             json.dump(best_params, f, indent=2)
         with open(LAST_SEARCH_FILE, "w") as f:
             f.write(datetime.now().strftime("%Y-%m-%d"))
         print(f"\n✅ 最佳参数已保存至 {PARAMS_FILE}")
-        print(f"   200期模拟收益: {best_return:+.1f}%")
+        print(f"   {test}期模拟收益: {best_return:+.1f}%")
         for k, v in best_params.items():
             print(f"   {k}: {v}")
         return best_params
@@ -539,7 +590,7 @@ def load_best_params():
         print("未找到最佳参数文件，将使用默认配置")
         return False
 
-# ========== 主程序 ==========
+# ================== 主程序 ==================
 def main():
     parser = argparse.ArgumentParser(description="香港六合彩特二色预测 + 自动参数寻优")
     parser.add_argument("--optimize", action="store_true", help="仅运行网格搜索（不预测）")
@@ -557,14 +608,12 @@ def main():
         run_grid_search(rows, force=True)
         return
 
-    # 处理自动调优或强制搜索
     if args.auto_tune or args.force_search:
         run_grid_search(rows, force=args.force_search)
 
-    # 加载最佳参数（如果存在）
     load_best_params()
 
-    # 正常预测模式
+    # 正常预测
     colors = [r["color"] for r in rows]
     normals = [r["normal_numbers"] for r in rows]
     specials = [r["special_number"] for r in rows]
@@ -574,7 +623,7 @@ def main():
         colors, normals, specials, miss_streak=0, skip_streak=0
     )
 
-    print(f"\n【香港六合彩 特二色 V50 全自动权重版】")
+    print(f"\n【香港六合彩 特二色 V50 自动优化版】")
     print(f"预测期号: {next_issue(latest_issue)}")
     print(f"预测模式: {mode}")
     print(f"推荐颜色: {'、'.join(pred_colors)}   置信度: {conf}% ({level})  状态: {state}")
