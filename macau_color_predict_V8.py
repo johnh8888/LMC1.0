@@ -210,7 +210,7 @@ def fetch_new_macau(limit=30):
 
             req,
 
-            timeout=20
+            timeout=60
 
         ).read()
 
@@ -1030,9 +1030,11 @@ class BackTest816:
 
             "halfhalf":[0,0],
 
-            "top1":[0,0],
+            "top3":[0,0],
 
-            "top3":[0,0]
+            "top4":[0,0],
+
+            "top5":[0,0]
 
         }
 
@@ -1086,9 +1088,11 @@ class BackTest816:
 
             result["halfhalf"][1]+=1
 
-            result["top1"][1]+=1
-
             result["top3"][1]+=1
+
+            result["top4"][1]+=1
+
+            result["top5"][1]+=1
 
 
 
@@ -1147,27 +1151,6 @@ class BackTest816:
                 result["halfhalf"][0]+=1
 
 
-
-
-
-            if (
-
-                pred["candidates"]
-
-                and
-
-                pred["candidates"][0]["halfhalf"]
-
-                ==actual["halfhalf"]
-
-            ):
-
-                result["top1"][0]+=1
-
-
-
-
-
             if actual["halfhalf"] in [
 
                 x["halfhalf"]
@@ -1177,6 +1160,28 @@ class BackTest816:
             ]:
 
                 result["top3"][0]+=1
+
+
+            if actual["halfhalf"] in [
+
+                x["halfhalf"]
+
+                for x in pred["candidates"][:4]
+
+            ]:
+
+                result["top4"][0]+=1
+
+
+            if actual["halfhalf"] in [
+
+                x["halfhalf"]
+
+                for x in pred["candidates"][:5]
+
+            ]:
+
+                result["top5"][0]+=1
 
 
 
