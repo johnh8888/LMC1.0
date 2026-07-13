@@ -2,18 +2,16 @@
 # -*- coding: utf-8 -*-
 
 """
-新澳门彩短周期预测系统 V8.6 PRO
+新澳门彩颜色预测系统 V8.6-30
 
-升级:
-1. 只针对新澳门彩
-2. 短周期窗口预测
-3. 自动选择最佳历史窗口
-4. 增加冷热转换
-5. 增加遗漏补偿
-6. 半波/半半波独立评分
-7. 滚动回测
-8. GitHub Actions兼容
+优化:
+1. 只分析最近30期
+2. 锁定新澳门彩
+3. 减少旧数据干扰
+4. 最近走势权重增强
+5. 适合预测下一期
 """
+
 
 import os
 import re
@@ -23,55 +21,47 @@ import argparse
 import urllib.request
 
 from itertools import product
-from collections import defaultdict
+from collections import Counter
+
 
 
 # =====================================================
-# 参数
+# 配置
 # =====================================================
+
 
 CONFIG = {
 
-    # 短周期窗口
-    "windows":[20,30,50],
+    # 最近分析期数
+    "history_limit":30,
 
-    # 最近权重
-    "recent_weight":{
-
-        "5":0.5,
-        "15":0.3,
-        "30":0.2
-
-    },
-
-    # 模型权重
-
-    "color_weight":40,
-
-    "half_weight":30,
-
-    "halfhalf_weight":30,
+    # 权重
+    "trend_weight":45,
+    "frequency_weight":25,
+    "missing_weight":20,
+    "pattern_weight":10,
 
 
-    # 自动搜索
+    # 自动调参范围
 
     "search_space":{
 
-        "color_weight":[35,40,45],
+        "trend_weight":[40,45,50],
 
-        "half_weight":[25,30,35],
+        "frequency_weight":[20,25,30],
 
-        "halfhalf_weight":[25,30,35]
+        "missing_weight":[15,20,25],
+
+        "pattern_weight":[5,10]
 
     },
 
-
-    # 新澳门彩接口
 
     "api_url":
     "https://marksix6.net/index.php?api=1"
 
 }
+
 
 
 PARAM_FILE="macau_v86_params.json"
@@ -80,52 +70,51 @@ REPORT_FILE="result.md"
 
 
 
+
+
 # =====================================================
 # 颜色定义
 # =====================================================
 
+
 RED={
-1,2,7,8,
-12,13,
-18,19,
-23,24,
-29,30,
-34,35,
+1,2,7,8,12,13,
+18,19,23,24,
+29,30,34,35,
 40,45,46
 }
 
 
 BLUE={
-3,4,9,10,
-14,15,
-20,25,26,
-31,36,37,
-41,42,47,48
+3,4,9,10,14,
+15,20,25,26,
+31,36,37,41,
+42,47,48
 }
 
 
 GREEN={
-5,6,11,
-16,17,
-21,22,
-27,28,
-32,33,
-38,39,
+5,6,11,16,17,
+21,22,27,28,
+32,33,38,39,
 43,44,49
 }
 
 
+
 COLORS=[
-"红",
-"蓝",
-"绿"
+    "红",
+    "蓝",
+    "绿"
 ]
 
 
 
+
 # =====================================================
-# 属性
+# 属性计算
 # =====================================================
+
 
 def get_color(num):
 
@@ -139,15 +128,24 @@ def get_color(num):
 
 
 
+
 def get_size(num):
 
-    return "大" if num>=25 else "小"
+    if num>=25:
+        return "大"
+
+    return "小"
+
 
 
 
 def get_odd(num):
 
-    return "单" if num%2 else "双"
+    if num%2:
+        return "单"
+
+    return "双"
+
 
 
 
@@ -165,17 +163,24 @@ def get_half(num):
 
 
 
+
 def get_halfhalf(num):
 
     return (
 
         get_color(num)
+
         +
+
         get_size(num)
+
         +
+
         get_odd(num)
 
     )
+
+
 
 
 
@@ -183,12 +188,14 @@ def get_halfhalf(num):
 # 数据解析
 # =====================================================
 
+
 def parse_numbers(text):
 
     nums=re.findall(
         r"\d+",
-        str(text)
+        text
     )
+
 
     return [
 
@@ -202,11 +209,16 @@ def parse_numbers(text):
 
 
 
+
+
+
 # =====================================================
 # 获取新澳门彩
 # =====================================================
 
-def fetch_macau(limit=800):
+
+def fetch_new_macau(limit=30):
+
 
     rows=[]
 
@@ -217,6 +229,7 @@ def fetch_macau(limit=800):
         "Mozilla/5.0"
 
     }
+
 
 
     try:
@@ -231,11 +244,12 @@ def fetch_macau(limit=800):
         )
 
 
-        raw=urllib.request.urlopen(
+
+        data=urllib.request.urlopen(
 
             req,
 
-            timeout=20
+            timeout=40
 
         ).read()
 
@@ -243,9 +257,10 @@ def fetch_macau(limit=800):
 
         data=json.loads(
 
-            raw.decode("utf-8")
+            data.decode("utf-8")
 
         )
+
 
 
         print("扫描彩种:")
@@ -253,6 +268,7 @@ def fetch_macau(limit=800):
 
 
         target=None
+
 
 
         for item in data.get(
@@ -265,6 +281,7 @@ def fetch_macau(limit=800):
                 "name",
                 ""
             ).strip()
+
 
 
             print(name)
@@ -283,23 +300,34 @@ def fetch_macau(limit=800):
 
 
 
+
         if not target:
 
             print(
-                "未找到新澳门彩"
+                "没有找到新澳门彩"
             )
 
             return []
 
 
 
-        for line in target.get(
+
+        history=target.get(
+
             "history",
+
             []
-        ):
+
+        )
+
+
+
+        for line in history:
+
 
 
             nums=parse_numbers(line)
+
 
 
             if len(nums)<7:
@@ -311,9 +339,11 @@ def fetch_macau(limit=800):
             special=nums[-1]
 
 
+
             if not 1<=special<=49:
 
                 continue
+
 
 
 
@@ -323,35 +353,40 @@ def fetch_macau(limit=800):
 
                 r"(20\d{5,7})",
 
-                str(line)
+                line
 
             )
 
 
-            if not m:
+
+            if m:
+
+
+                raw=m.group(1)
+
+
+
+                issue=(
+
+                    raw[:4]
+
+                    +
+
+                    "/"
+
+                    +
+
+                    str(
+                        int(raw[4:])
+                    ).zfill(3)
+
+                )
+
+
+            else:
 
                 continue
 
-
-
-            raw_issue=m.group(1)
-
-
-            issue=(
-
-                raw_issue[:4]
-
-                +
-
-                "/"
-
-                +
-
-                str(
-                    int(raw_issue[4:])
-                ).zfill(3)
-
-            )
 
 
 
@@ -369,9 +404,12 @@ def fetch_macau(limit=800):
 
                 "half":get_half(special),
 
-                "halfhalf":get_halfhalf(special)
+                "halfhalf":
+                get_halfhalf(special)
 
             })
+
+
 
 
 
@@ -385,20 +423,29 @@ def fetch_macau(limit=800):
 
 
 
-    # 去重
 
-    cache={}
+    # 去重复
+
+
+    result={}
 
 
     for r in rows:
 
-        cache[r["issue"]]=r
+
+        result[r["issue"]]=r
 
 
 
     rows=list(
-        cache.values()
+
+        result.values()
+
     )
+
+
+
+    # 最新排序
 
 
     rows.sort(
@@ -410,631 +457,297 @@ def fetch_macau(limit=800):
     )
 
 
+
+    rows=rows[:limit]
+
+
+
     print(
-        "获取新澳门彩:",
-        len(rows),
-        "期"
+
+        f"获取新澳门彩:{len(rows)}期"
+
     )
 
 
-    return rows[:limit]
+
+    return rows
     # =====================================================
-# 短周期权重
+# V8.6 预测核心
 # =====================================================
 
-def recent_weight(index):
 
-    if index < 5:
-
-        return 0.5
-
-    elif index < 15:
-
-        return 0.3
-
-    else:
-
-        return 0.2
+class PredictEngine:
 
 
+    def __init__(self, rows):
 
-# =====================================================
-# 颜色短周期模型
-# =====================================================
-
-class ColorEngine:
+        self.rows = rows[:30]
 
 
-    def predict(self,rows,window):
+    # -----------------------------
+    # 颜色趋势
+    # -----------------------------
 
+    def color_score(self):
 
-        data=rows[:window]
-
-
-        score={
-
-            c:0
-
-            for c in COLORS
-
+        score = {
+            "红":0,
+            "蓝":0,
+            "绿":0
         }
 
 
-        # 最近趋势
+        for i,r in enumerate(self.rows):
 
-        for i,r in enumerate(data):
+            weight = 30-i
 
-
-            w=recent_weight(i)
-
-
-            score[r["color"]] += (
-
-                (window-i)
-
-                *
-
-                w
-
-            )
+            score[r["color"]] += weight
 
 
 
         # 遗漏补偿
 
-        for c in COLORS:
+        for c in score:
 
+            miss = 0
 
-            miss=0
+            for r in self.rows:
 
-
-            for r in data:
-
-
-                if r["color"]==c:
+                if r["color"] == c:
 
                     break
 
-
-                miss+=1
-
+                miss += 1
 
 
-            score[c]+=min(
-
+            score[c] += min(
                 miss*2,
-
                 20
-
             )
-
-
-
-        # 连续惩罚
-
-        if len(data)>=3:
-
-
-            last=[
-
-                x["color"]
-
-                for x in data[:3]
-
-            ]
-
-
-            if len(set(last))==1:
-
-
-                score[last[0]]*=0.75
-
-
-
-        # 平衡修正
-
-        avg=sum(score.values())/3
-
-
-        for c in COLORS:
-
-            score[c]+=(
-                score[c]-avg
-            )*0.3
 
 
         return score
 
 
 
-color_engine=ColorEngine()
+    # -----------------------------
+    # 半波
+    # -----------------------------
+
+    def half_score(self):
+
+        score = defaultdict(float)
 
 
+        for i,r in enumerate(self.rows):
 
-# =====================================================
-# 半波模型
-# =====================================================
-
-HALF_WAVES=[
-
-"红大",
-"红小",
-"红单",
-"红双",
-
-"蓝大",
-"蓝小",
-"蓝单",
-"蓝双",
-
-"绿大",
-"绿小",
-"绿单",
-"绿双"
-
-]
-
-
-
-class HalfEngine:
-
-
-    def predict(self,rows,window):
-
-
-        score={
-
-            h:0
-
-            for h in HALF_WAVES
-
-        }
-
-
-
-        data=rows[:window]
-
-
-        for i,r in enumerate(data):
+            weight = 30-i
 
 
             for h in r["half"]:
 
-
-                score[h]+=(
-                    window-i
-                )*recent_weight(i)
+                score[h]+=weight
 
 
-
-        # 遗漏
 
         for h in HALF_WAVES:
 
-
             miss=0
 
-
-            for r in data:
-
+            for r in self.rows:
 
                 if h in r["half"]:
-
                     break
-
 
                 miss+=1
 
 
-
             score[h]+=min(
-
                 miss*1.5,
-
-                15
-
+                20
             )
 
 
-        return score
+        return dict(score)
 
 
 
-half_engine=HalfEngine()
+    # -----------------------------
+    # 半半波
+    # -----------------------------
+
+    def halfhalf_score(self):
+
+        score = defaultdict(float)
+
+
+        for i,r in enumerate(self.rows):
+
+            weight = 30-i
+
+            score[r["halfhalf"]] += weight
 
 
 
-# =====================================================
-# 半半波模型
-# =====================================================
+        for h in HALF_HALF_WAVES:
 
-HALF_HALF=[
+            miss=0
 
-"红大单",
-"红大双",
-"红小单",
-"红小双",
+            for r in self.rows:
 
-"蓝大单",
-"蓝大双",
-"蓝小单",
-"蓝小双",
+                if r["halfhalf"]==h:
+                    break
 
-"绿大单",
-"绿大双",
-"绿小单",
-"绿小双"
+                miss+=1
 
-]
+
+            score[h]+=min(
+                miss*1.5,
+                20
+            )
+
+
+        return dict(score)
 
 
 
-class HalfHalfEngine:
+
+    # -----------------------------
+    # 综合
+    # -----------------------------
+
+    def predict(self):
 
 
-    def predict(self,rows,window):
+        color=self.color_score()
+
+        half=self.half_score()
+
+        halfhalf=self.halfhalf_score()
 
 
-        score={
 
-            h:0
+        final={
 
-            for h in HALF_HALF
+            "红":0,
+            "蓝":0,
+            "绿":0
 
         }
 
 
 
-        data=rows[:window]
+        # 颜色权重
 
+        for k,v in color.items():
 
+            final[k]+=v*0.45
 
-        for i,r in enumerate(data):
 
 
-            h=r["halfhalf"]
+        # 半波贡献
 
+        for k,v in half.items():
 
-            score[h]+=(
-                window-i
-            )*recent_weight(i)
+            final[k[0]]+=v*0.35
 
 
 
-        # 组合遗漏
+        # 半半波贡献
 
-        for h in HALF_HALF:
+        for k,v in halfhalf.items():
 
+            final[k[0]]+=v*0.20
 
-            miss=0
 
 
-            for r in data:
+        return {
 
+            "color":
 
-                if r["halfhalf"]==h:
+                sorted(
+                    color.items(),
+                    key=lambda x:x[1],
+                    reverse=True
+                ),
 
-                    break
 
+            "half":
 
-                miss+=1
+                sorted(
+                    half.items(),
+                    key=lambda x:x[1],
+                    reverse=True
+                )[:5],
 
 
+            "halfhalf":
 
-            score[h]+=min(
+                sorted(
+                    halfhalf.items(),
+                    key=lambda x:x[1],
+                    reverse=True
+                )[:5],
 
-                miss*2,
 
-                20
+            "final":
 
-            )
+                sorted(
+                    final.items(),
+                    key=lambda x:x[1],
+                    reverse=True
+                )
 
+        }
 
-
-        return score
-
-
-
-halfhalf_engine=HalfHalfEngine()
-
-
-
-# =====================================================
-# 综合预测
-# =====================================================
-
-def predict_window(rows,window):
-
-
-    color=color_engine.predict(
-
-        rows,
-
-        window
-
-    )
-
-
-    half=half_engine.predict(
-
-        rows,
-
-        window
-
-    )
-
-
-    halfhalf=halfhalf_engine.predict(
-
-        rows,
-
-        window
-
-    )
-
-
-
-    final={
-
-        c:0
-
-        for c in COLORS
-
-    }
-
-
-
-    for c,v in color.items():
-
-
-        final[c]+=(
-            v*
-            CONFIG["color_weight"]
-            /
-            100
-        )
-
-
-
-    for h,v in half.items():
-
-
-        final[h[0]]+=(
-            v*
-            CONFIG["half_weight"]
-            /
-            100
-        )
-
-
-
-    for h,v in halfhalf.items():
-
-
-        final[h[0]]+=(
-            v*
-            CONFIG["halfhalf_weight"]
-            /
-            100
-        )
-
-
-
-    return {
-
-        "window":window,
-
-        "color":color,
-
-        "half":half,
-
-        "halfhalf":halfhalf,
-
-        "final":final
-
-    }
-
-
-
-# =====================================================
-# 自动选择窗口
-# =====================================================
-
-def choose_window(rows):
-
-
-    best=None
-
-    best_score=-1
-
-
-
-    for w in CONFIG["windows"]:
-
-
-        if len(rows)<=w+10:
-
-            continue
-
-
-
-        result=predict_window(
-
-            rows[w:],
-
-            w
-
-        )
-
-
-        score=max(
-
-            result["final"].values()
-
-        )
-
-
-
-        if score>best_score:
-
-
-            best_score=score
-
-            best=w
-
-
-
-    return best or 30
 
 
 
 
 # =====================================================
-# 排序
+# 回测 V8.6
 # =====================================================
 
-def rank(score,n=5):
+
+def backtest_v86(rows, test=50):
 
 
-    return sorted(
+    hit_color=0
 
-        score.items(),
+    hit_half=0
 
-        key=lambda x:x[1],
-
-        reverse=True
-
-    )[:n]
+    hit_halfhalf=0
 
 
-
-def probability(score):
-
-
-    total=sum(score.values())
-
-
-    return {
-
-        k:round(
-
-            v/total*100,
-
-            2
-
-        )
-
-        for k,v in score.items()
-
-    }
-
-
-
-# =====================================================
-# 最终预测
-# =====================================================
-
-def predict(rows):
-
-
-    window=choose_window(rows)
-
-
-    result=predict_window(
-
-        rows,
-
-        window
-
-    )
-
-
-    return {
-
-
-        "window":window,
-
-
-        "color":
-
-        rank(
-            result["final"],
-            3
-        ),
-
-
-        "half":
-
-        rank(
-            result["half"],
-            5
-        ),
-
-
-        "halfhalf":
-
-        rank(
-            result["halfhalf"],
-            5
-        ),
-
-
-        "prob":
-
-        probability(
-            result["final"]
-        ),
-
-
-        "raw":result
-
-    }
-    # =====================================================
-# 回测
-# =====================================================
-
-def backtest(rows,limit=100):
-
-
-    total=0
-
-    color_hit=0
-
-    half_hit=0
-
-    halfhalf_hit=0
-
-
-
-    limit=min(
-
-        limit,
-
-        len(rows)-60
-
+    total=min(
+        test,
+        len(rows)-31
     )
 
 
 
-    for i in range(limit):
+    for i in range(total):
 
 
         history=rows[i+1:]
+
+
+        engine=PredictEngine(history)
+
+
+        result=engine.predict()
+
 
 
         actual=rows[i]
 
 
 
-        result=predict(history)
-
-
-
         # 颜色TOP1
 
-        if result["color"][0][0]==actual["color"]:
+        if result["final"][0][0]==actual["color"]:
 
-            color_hit+=1
+            hit_color+=1
 
 
 
@@ -1051,19 +764,18 @@ def backtest(rows,limit=100):
 
         if any(
 
-            x in actual["half"]
+            h in actual["half"]
 
-            for x in half_list
+            for h in half_list
 
         ):
 
-            half_hit+=1
+            hit_half+=1
 
 
 
-        # 半半波TOP3
 
-        hh_list=[
+        hh=[
 
             x[0]
 
@@ -1072,14 +784,9 @@ def backtest(rows,limit=100):
         ]
 
 
+        if actual["halfhalf"] in hh:
 
-        if actual["halfhalf"] in hh_list:
-
-            halfhalf_hit+=1
-
-
-
-        total+=1
+            hit_halfhalf+=1
 
 
 
@@ -1089,74 +796,36 @@ def backtest(rows,limit=100):
         "color":
 
         round(
-
-            color_hit/total*100,
-
+            hit_color/total*100,
             2
-
         ),
 
 
         "half":
 
         round(
-
-            half_hit/total*100,
-
+            hit_half/total*100,
             2
-
         ),
 
 
         "halfhalf":
 
         round(
-
-            halfhalf_hit/total*100,
-
+            hit_halfhalf/total*100,
             2
-
         )
 
     }
-
-
-
-
-
-# =====================================================
-# 自动调参
+    # =====================================================
+# 参数自动优化 V8.6
 # =====================================================
 
-def auto_search(rows):
 
+def auto_search_v86(rows):
 
-    print(
-
-        "开始V8.6自动调参..."
-
-    )
-
-
-
-    keys=list(
-
-        CONFIG["search_space"]
-
-        .keys()
-
-    )
-
-
-
-    values=list(
-
-        CONFIG["search_space"]
-
-        .values()
-
-    )
-
+    print()
+    print("开始V8.6自动调参...")
 
 
     best_score=-1
@@ -1165,81 +834,81 @@ def auto_search(rows):
 
 
 
-    for idx,combo in enumerate(
+    search=list(product(
 
-        product(*values),
+        CONFIG["search_space"]["trend_weight"],
 
-        1
+        CONFIG["search_space"]["frequency_weight"],
 
-    ):
+        CONFIG["search_space"]["missing_weight"],
 
+        CONFIG["search_space"]["pattern_weight"]
 
-        params=dict(
-
-            zip(
-
-                keys,
-
-                combo
-
-            )
-
-        )
+    ))
 
 
 
-        for k,v in params.items():
-
-            CONFIG[k]=v
+    for index,p in enumerate(search,1):
 
 
+        score=0
 
-        bt=backtest(
 
+        CONFIG["trend_weight"]=p[0]
+        CONFIG["frequency_weight"]=p[1]
+        CONFIG["missing_weight"]=p[2]
+        CONFIG["pattern_weight"]=p[3]
+
+
+
+        bt=backtest_v86(
             rows,
-
-            80
-
+            min(20,len(rows)-1)
         )
 
 
 
         score=(
 
-            bt["color"]*0.4
+            bt["color"]*0.45
 
             +
 
-            bt["half"]*0.3
+            bt["half"]*0.35
 
             +
 
-            bt["halfhalf"]*0.3
+            bt["halfhalf"]*0.20
 
         )
 
 
 
         print(
-
             "参数",
-
-            idx,
-
+            index,
             "得分",
-
             round(score,2)
-
         )
 
 
 
         if score>best_score:
 
-
             best_score=score
 
-            best=params.copy()
+            best={
+
+                "trend_weight":p[0],
+
+                "frequency_weight":p[1],
+
+                "missing_weight":p[2],
+
+                "pattern_weight":p[3]
+
+            }
+
 
 
 
@@ -1270,11 +939,8 @@ def auto_search(rows):
             )
 
 
-
         print(
-
-            "最佳参数保存"
-
+            "V8.6最佳参数保存"
         )
 
 
@@ -1285,21 +951,17 @@ def auto_search(rows):
 # 加载参数
 # =====================================================
 
-def load_params():
+
+def load_v86_params():
 
 
-    if not os.path.exists(
-
-        PARAM_FILE
-
-    ):
+    if not os.path.exists(PARAM_FILE):
 
         return
 
 
 
     try:
-
 
         with open(
 
@@ -1325,10 +987,9 @@ def load_params():
 
 
         print(
-
             "加载V8.6参数"
-
         )
+
 
 
     except:
@@ -1340,13 +1001,11 @@ def load_params():
 
 
 # =====================================================
-# 显示
+# 显示预测
 # =====================================================
 
-def show_latest(rows):
 
-
-    r=rows[0]
+def show_prediction(result):
 
 
     print()
@@ -1354,64 +1013,55 @@ def show_latest(rows):
     print("====================")
 
     print(
-
-        "最新新澳门彩开奖结果"
-
+        "新澳门彩 V8.6预测"
     )
 
+
+    print()
 
     print(
-
-        "期号:",
-
-        r["issue"]
-
+        "颜色TOP:"
     )
 
+
+    for x in result["final"]:
+
+        print(
+            x[0],
+            round(x[1],2)
+        )
+
+
+
+    print()
 
     print(
-
-        "特码:",
-
-        r["special"]
-
+        "半波TOP:"
     )
 
+
+    for x in result["half"]:
+
+        print(
+            x[0],
+            round(x[1],2)
+        )
+
+
+
+    print()
 
     print(
-
-        "颜色:",
-
-        r["color"]
-
+        "半半波TOP:"
     )
 
 
-    print(
+    for x in result["halfhalf"]:
 
-        "大小:",
-
-        r["size"]
-
-    )
-
-
-    print(
-
-        "单双:",
-
-        r["odd"]
-
-    )
-
-
-    print(
-
-        "半半波:",
-
-        r["halfhalf"]
-
-    )
+        print(
+            x[0],
+            round(x[1],2)
+        )
 
 
     print("====================")
@@ -1420,26 +1070,25 @@ def show_latest(rows):
 
 
 
-def show_recent(rows,n=10):
+# =====================================================
+# 最近走势
+# =====================================================
+
+
+def show_recent(rows):
 
 
     print()
 
     print(
-
-        "最近",
-
-        n,
-
-        "期开奖结果"
-
+        "最近30期开奖结果"
     )
-
 
     print("--------------------")
 
 
-    for r in rows[:n]:
+    for r in rows[:30]:
+
 
         print(
 
@@ -1462,103 +1111,12 @@ def show_recent(rows,n=10):
 
 
 
-def print_prediction(result):
-
-
-    print()
-
-    print("====================")
-
-    print(
-
-        "新澳门彩 V8.6预测"
-
-    )
-
-
-    print()
-
-    print(
-
-        "使用窗口:",
-
-        result["window"]
-
-    )
-
-
-    print()
-
-    print("颜色TOP:")
-
-
-    for x in result["color"]:
-
-        print(
-
-            x[0],
-
-            round(x[1],2)
-
-        )
-
-
-
-    print()
-
-    print("半波TOP:")
-
-
-    for x in result["half"]:
-
-        print(
-
-            x[0],
-
-            round(x[1],2)
-
-        )
-
-
-
-    print()
-
-    print("半半波TOP:")
-
-
-    for x in result["halfhalf"]:
-
-        print(
-
-            x[0],
-
-            round(x[1],2)
-
-        )
-
-
-    print()
-
-    print(
-
-        "综合概率:",
-
-        result["prob"]
-
-    )
-
-
-    print("====================")
-
-
-
-
-
 # =====================================================
 # 报告
 # =====================================================
 
-def create_report(rows,result,bt):
+
+def create_report_v86(rows,result,bt):
 
 
     with open(
@@ -1572,80 +1130,70 @@ def create_report(rows,result,bt):
     ) as f:
 
 
-        f.write(
 
+        f.write(
             "# 新澳门彩 V8.6预测报告\n\n"
+        )
 
+
+        f.write(
+            "## 最新开奖\n\n"
+        )
+
+
+        r=rows[0]
+
+
+        f.write(
+
+f"""
+期号:
+{r['issue']}
+
+特码:
+{r['special']}
+
+颜色:
+{r['color']}
+
+半半波:
+{r['halfhalf']}
+
+
+"""
+
+        )
+
+
+
+        f.write(
+            "\n## 下一期预测\n\n"
+        )
+
+
+        f.write(
+            str(result["final"])
+        )
+
+
+        f.write(
+            "\n\n## 回测\n"
         )
 
 
         f.write(
 
-            "预测窗口:\n"
+f"""
+颜色:
+{bt['color']}%
 
-            +
+半波:
+{bt['half']}%
 
-            str(result["window"])
+半半波:
+{bt['halfhalf']}%
 
-            +
-
-            "\n\n"
-
-        )
-
-
-        f.write(
-
-            "颜色:\n"
-
-            +
-
-            str(result["color"])
-
-            +
-
-            "\n\n"
-
-        )
-
-
-        f.write(
-
-            "半波:\n"
-
-            +
-
-            str(result["half"])
-
-            +
-
-            "\n\n"
-
-        )
-
-
-        f.write(
-
-            "半半波:\n"
-
-            +
-
-            str(result["halfhalf"])
-
-            +
-
-            "\n\n"
-
-        )
-
-
-        f.write(
-
-            "回测:\n"
-
-            +
-
-            str(bt)
+"""
 
         )
 
@@ -1657,82 +1205,58 @@ def create_report(rows,result,bt):
 # 主程序
 # =====================================================
 
+
 def main():
 
 
-    parser=argparse.ArgumentParser()
-
-
-    parser.add_argument(
-
-        "--search",
-
-        action="store_true"
-
-    )
-
-
-    args=parser.parse_args()
-
-
-
     print(
-
         "正在获取新澳门彩..."
-
     )
 
 
-    rows=fetch_macau()
+    rows=fetch_new_macau(30)
 
 
 
-    if not rows:
+    if len(rows)<10:
 
         print(
-
-            "无数据"
-
+            "数据不足"
         )
 
         return
 
 
 
-    show_latest(rows)
-
-
     show_recent(rows)
 
 
 
-    if (
+    if not os.path.exists(PARAM_FILE):
 
-        args.search
-
-        or
-
-        not os.path.exists(PARAM_FILE)
-
-    ):
-
-        auto_search(rows)
+        auto_search_v86(rows)
 
 
 
-    load_params()
+    load_v86_params()
 
 
 
-    result=predict(rows)
+    engine=PredictEngine(rows)
+
+
+    result=engine.predict()
 
 
 
-    print_prediction(result)
+    show_prediction(result)
 
 
 
-    bt=backtest(rows)
+    bt=backtest_v86(
+        rows,
+        20
+    )
 
 
 
@@ -1741,37 +1265,45 @@ def main():
     print("====================")
 
     print(
-
-        "V8.6回测"
-
+        "V8.6最近回测"
     )
 
 
-    print(bt)
+    print(
+        "颜色:",
+        bt["color"],
+        "%"
+    )
+
+
+    print(
+        "半波:",
+        bt["half"],
+        "%"
+    )
+
+
+    print(
+        "半半波:",
+        bt["halfhalf"],
+        "%"
+    )
 
 
     print("====================")
 
 
 
-    create_report(
-
+    create_report_v86(
         rows,
-
         result,
-
         bt
-
     )
 
 
-
     print(
-
         "报告生成:",
-
         REPORT_FILE
-
     )
 
 
