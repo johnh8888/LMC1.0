@@ -1,67 +1,75 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-澳门颜色趋势分析 V8
-自动参数优化 + 滚动回测 + 稳定性分析版
-说明：
-本程序用于历史数据统计分析、模型测试和趋势研究。
-"""
 
+"""
+澳门颜色趋势分析 V8
+
+功能：
+- 历史数据获取
+- 特征评分
+- 自动参数搜索
+- 滚动回测
+- 自动生成报告
+
+"""
 
 import argparse
 import copy
-import gzip
 import json
-import math
 import os
 import random
 import re
 import time
 import urllib.request
 
-from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 from itertools import product
+from datetime import datetime
 
 
-# =========================================================
-# 基础配置
-# =========================================================
+# =====================================================
+# 配置
+# =====================================================
 
 CONFIG = {
 
     "api_url":
     "https://marksix6.net/index.php?api=1",
 
-    "max_retries": 6,
-    "timeout": 30,
+    "timeout":30,
 
-    "train_max_len": 420,
-    "min_train": 40,
+    "max_retry":5,
 
 
-    # 原始权重
-    "window_recent": 8.0,
-    "window_middle": 3.0,
-    "window_long": 1.0,
+    "min_train":50,
 
-    "omission_weight": 1.2,
-    "transition_weight": 8.0,
+    "train_length":420,
 
 
-    # 输出
-    "show_details":20,
+    # 特征权重
+
+    "recent_weight":8.0,
+
+    "medium_weight":3.0,
+
+    "long_weight":1.0,
+
+    "omission_weight":1.2,
+
+    "transition_weight":8.0,
 
 
-    # 自动搜索
+    # 自动搜索范围
+
     "search_space":{
 
-        "window_recent":[6,8,10],
+        "recent_weight":[6,8,10],
 
-        "window_middle":[2,3,4],
+        "medium_weight":[2,3,4],
 
         "transition_weight":[6,8,10],
 
-        "omission_weight":[0.8,1.2,1.5],
+        "omission_weight":[0.8,1.2,1.5]
 
     }
 
@@ -71,30 +79,34 @@ CONFIG = {
 PARAM_FILE="macau_v8_best.json"
 
 
-# =========================================================
+
+# =====================================================
 # 颜色定义
-# =========================================================
+# =====================================================
 
 
 RED={
-1,2,7,8,12,13,18,19,
-23,24,29,30,34,35,
-40,45,46
+1,2,7,8,
+12,13,18,19,
+23,24,29,30,
+34,35,40,45,46
 }
 
 
 BLUE={
-3,4,9,10,14,15,
-20,25,26,31,
-36,37,41,42,47,48
+3,4,9,10,
+14,15,20,
+25,26,31,
+36,37,41,
+42,47,48
 }
 
 
 GREEN={
-5,6,11,16,17,
-21,22,27,28,
-32,33,38,39,
-43,44,49
+5,6,11,
+16,17,21,22,
+27,28,32,33,
+38,39,43,44,49
 }
 
 
@@ -106,71 +118,65 @@ COLORS=[
 
 
 
-def get_color(n):
+def get_color(num):
 
-    if n in RED:
+    if num in RED:
         return "红"
 
-    if n in BLUE:
+    if num in BLUE:
         return "蓝"
 
-    if n in GREEN:
+    if num in GREEN:
         return "绿"
 
     return "红"
 
 
 
-# =========================================================
-# 数字解析
-# =========================================================
+# =====================================================
+# 数据解析
+# =====================================================
 
 
-def parse_nums(text):
+def parse_numbers(text):
 
-    return [
-        int(x)
-        for x in re.findall(r"\d+",text)
-        if 1<=int(x)<=49
-    ]
+    nums=[]
+
+    for x in re.findall(
+        r"\d+",
+        text
+    ):
+
+        n=int(x)
+
+        if 1<=n<=49:
+            nums.append(n)
 
 
-
-def next_issue(issue):
-
-    try:
-
-        if "/" in issue:
-
-            y,n=issue.split("/")
-
-            return (
-                f"{y}/"
-                f"{str(int(n)+1).zfill(3)}"
-            )
-
-        return issue
-
-    except:
-
-        return issue
+    return nums
 
 
 
-# =========================================================
-# 获取历史数据
-# =========================================================
+# =====================================================
+# 获取澳门数据
+# =====================================================
 
 
 def fetch_macau(limit=800):
 
+
     headers={
+
         "User-Agent":
         "Mozilla/5.0"
+
     }
 
 
-    for i in range(CONFIG["max_retries"]):
+    for retry in range(
+        CONFIG["max_retry"]
+    ):
+
 
         try:
 
@@ -183,26 +189,23 @@ def fetch_macau(limit=800):
             with urllib.request.urlopen(
                 req,
                 timeout=CONFIG["timeout"]
-            ) as r:
+            ) as response:
 
 
-                raw=r.read()
-
-
-                if "gzip" in str(
-                    r.headers
-                ).lower():
-
-                    raw=gzip.decompress(raw)
+                raw=response.read()
 
 
 
-                data=json.loads(
-                    raw.decode("utf-8")
+            data=json.loads(
+                raw.decode(
+                    "utf-8"
                 )
+            )
+
 
 
             rows=[]
+
 
 
             for item in data.get(
@@ -232,19 +235,8 @@ def fetch_macau(limit=800):
                 ):
 
 
-                    m=re.search(
-                        r"(\d{6,7}).*?([\d,\s，]+)",
+                    nums=parse_numbers(
                         line
-                    )
-
-
-                    if not m:
-                        continue
-
-
-
-                    nums=parse_nums(
-                        m.group(2)
                     )
 
 
@@ -253,13 +245,10 @@ def fetch_macau(limit=800):
 
 
 
-                    issue=m.group(1)
-
-
                     rows.append({
 
                         "issue":
-                        issue,
+                        line[:7],
 
                         "normal":
                         nums[:6],
@@ -268,13 +257,16 @@ def fetch_macau(limit=800):
                         nums[6],
 
                         "color":
-                        get_color(nums[6])
+                        get_color(
+                            nums[6]
+                        )
 
                     })
 
 
 
             if rows:
+
 
                 rows.sort(
                     key=lambda x:x["issue"],
@@ -283,8 +275,9 @@ def fetch_macau(limit=800):
 
 
                 print(
-                    "获取数据:",
-                    len(rows)
+                    "成功获取数据:",
+                    len(rows),
+                    "期"
                 )
 
 
@@ -294,61 +287,311 @@ def fetch_macau(limit=800):
 
         except Exception as e:
 
+
             print(
                 "获取失败:",
                 e
             )
 
-            time.sleep(2)
+
+            time.sleep(
+                2
+            )
 
 
 
     return []
+    # =====================================================
+# V8 特征评分模型
+# =====================================================
+
+
+class FeatureEngine:
+
+
+    def __init__(self):
+
+        self.colors=COLORS
 
 
 
-# =========================================================
-# V8 特征稳定分析
-# =========================================================
+    # ---------------------------------
+    # 遗漏计算
+    # ---------------------------------
+
+    def omission_score(
+        self,
+        colors
+    ):
+
+        score={
+            c:0
+            for c in COLORS
+        }
 
 
-class StabilityModel:
+        for c in COLORS:
 
 
-    def monte_carlo(
+            miss=0
+
+
+            for x in colors:
+
+                if x==c:
+                    break
+
+                miss+=1
+
+
+
+            score[c]=min(
+                miss *
+                CONFIG["omission_weight"],
+                15
+            )
+
+
+        return score
+
+
+
+    # ---------------------------------
+    # 最近趋势
+    # ---------------------------------
+
+    def recent_score(
+        self,
+        colors
+    ):
+
+
+        score={
+            c:0
+            for c in COLORS
+        }
+
+
+        for i,c in enumerate(
+            colors[:30]
+        ):
+
+
+            score[c]+=(
+                CONFIG["recent_weight"]
+                *
+                (1-i/40)
+            )
+
+
+        return score
+
+
+
+    # ---------------------------------
+    # 中长期平衡
+    # ---------------------------------
+
+    def balance_score(
+        self,
+        colors
+    ):
+
+
+        score={
+            c:0
+            for c in COLORS
+        }
+
+
+
+        sample=colors[:200]
+
+
+        if len(sample)==0:
+
+            return score
+
+
+
+        avg=len(sample)/3
+
+
+
+        for c in COLORS:
+
+            diff=avg-sample.count(c)
+
+
+            if diff>0:
+
+                score[c]+=diff
+
+
+
+        return score
+
+
+
+    # ---------------------------------
+    # 转换关系
+    # ---------------------------------
+
+    def transition_score(
+        self,
+        colors
+    ):
+
+
+        score={
+            c:0
+            for c in COLORS
+        }
+
+
+        if len(colors)<3:
+
+            return score
+
+
+
+        table=defaultdict(
+            Counter
+        )
+
+
+        for i in range(
+            len(colors)-1
+        ):
+
+            table[
+                colors[i]
+            ][
+                colors[i+1]
+            ]+=1
+
+
+
+        last=colors[0]
+
+
+        if last in table:
+
+
+            total=sum(
+                table[last].values()
+            )
+
+
+            for c,v in table[last].items():
+
+                score[c]+=(
+                    v/total
+                    *
+                    CONFIG[
+                        "transition_weight"
+                    ]
+                )
+
+
+        return score
+
+
+
+
+    # ---------------------------------
+    # 综合评分
+    # ---------------------------------
+
+    def calculate(
+        self,
+        colors
+    ):
+
+
+        score={
+            c:0
+            for c in COLORS
+        }
+
+
+
+        models=[
+
+            self.recent_score(colors),
+
+            self.omission_score(colors),
+
+            self.balance_score(colors),
+
+            self.transition_score(colors)
+
+        ]
+
+
+
+        for model in models:
+
+            for c,v in model.items():
+
+                score[c]+=v
+
+
+
+        return score
+
+
+
+feature_engine=FeatureEngine()
+
+
+
+# =====================================================
+# 稳定性模拟
+# =====================================================
+
+
+class StabilityAnalyzer:
+
+
+
+    def simulate(
         self,
         scores,
         times=3000
     ):
 
 
-        total={
+        result={
             c:0
             for c in COLORS
         }
 
 
-        s=sum(
+        total=sum(
             max(v,0)
             for v in scores.values()
         )
 
 
-        if s<=0:
+        if total<=0:
 
             return {
-                c:0
+                c:33.33
                 for c in COLORS
             }
 
 
 
-        prob={
+        probability={
 
             c:
-            max(scores.get(c,0),0)
+            max(
+                scores[c],
+                0
+            )
             /
-            s
+            total
 
             for c in COLORS
 
@@ -358,19 +601,23 @@ class StabilityModel:
 
         for _ in range(times):
 
+
             r=random.random()
+
 
             acc=0
 
 
-            for c,p in prob.items():
+
+            for c,p in probability.items():
+
 
                 acc+=p
 
 
                 if r<=acc:
 
-                    total[c]+=1
+                    result[c]+=1
 
                     break
 
@@ -380,7 +627,7 @@ class StabilityModel:
 
             c:
             round(
-                total[c]/times*100,
+                result[c]/times*100,
                 2
             )
 
@@ -391,54 +638,18 @@ class StabilityModel:
 
 
 
-stability=StabilityModel()
-# =========================================================
-# V8 连续走势修正
-# =========================================================
+stability_analyzer=StabilityAnalyzer()
+# =====================================================
+# V8 核心预测模块
+# =====================================================
 
 
-def streak_adjust(score, colors):
-
-    if len(colors)<5:
-        return score
-
-
-    last=colors[0]
-
-    count=0
-
-    for c in colors:
-
-        if c==last:
-            count+=1
-        else:
-            break
-
-
-    # 连续过长，降低追涨权重
-
-    if count>=4:
-
-        score[last]-=(
-            count-3
-        )*3
-
-
-    return score
-
-
-
-# =========================================================
-# V8 概率转换
-# =========================================================
-
-
-def score_to_probability(score):
+def normalize_probability(scores):
 
 
     total=sum(
         max(v,0)
-        for v in score.values()
+        for v in scores.values()
     )
 
 
@@ -450,13 +661,16 @@ def score_to_probability(score):
         }
 
 
+
     return {
 
         c:
         round(
-            max(score[c],0)
+            max(scores[c],0)
             /
-            total*100,
+            total
+            *
+            100,
             2
         )
 
@@ -466,304 +680,252 @@ def score_to_probability(score):
 
 
 
-# =========================================================
-# V8核心预测模型
-# =========================================================
-
-
-def professional_predict(
-        train_colors,
-        train_normals,
-        train_specials
+def anti_streak(
+    scores,
+    colors
 ):
 
 
-    if len(train_colors)<CONFIG["min_train"]:
+    if len(colors)<5:
 
-        return (
+        return scores
+
+
+
+    last=colors[0]
+
+    streak=0
+
+
+
+    for c in colors:
+
+
+        if c==last:
+
+            streak+=1
+
+        else:
+
+            break
+
+
+
+    # 连续过热修正
+
+    if streak>=4:
+
+        scores[last]-=(
+            streak-3
+        )*2.5
+
+
+
+    return scores
+
+
+
+
+def predict(
+    colors
+):
+
+
+    if len(colors)<CONFIG["min_train"]:
+
+
+        return {
+
+            "predict":
             ["红","蓝"],
+
+            "score":
             {},
+
+            "probability":
             {},
-            50,
-            "数据不足"
-        )
+
+            "confidence":
+            50
+
+        }
 
 
 
-    score={
-        c:0
-        for c in COLORS
-    }
-
-
-
-    # -----------------------------------------------------
-    # 1. 最近走势
-    # -----------------------------------------------------
-
-    for i,c in enumerate(
-        train_colors[:30]
-    ):
-
-        score[c]+=(
-            CONFIG["window_recent"]
-            *
-            (1-i/40)
-        )
-
-
-
-    # -----------------------------------------------------
-    # 2. 中期趋势
-    # -----------------------------------------------------
-
-    for i,c in enumerate(
-        train_colors[:80]
-    ):
-
-        score[c]+=(
-            CONFIG["window_middle"]
-            *
-            (1-i/100)
-        )
-
-
-
-    # -----------------------------------------------------
-    # 3. 长周期平衡
-    # -----------------------------------------------------
-
-    for c in COLORS:
-
-        cnt=train_colors[:200].count(c)
-
-        avg=200/3
-
-
-        if cnt<avg:
-
-            score[c]+=
-            (
-                avg-cnt
-            )
-
-
-
-    # -----------------------------------------------------
-    # 4. 遗漏周期
-    # -----------------------------------------------------
-
-    for c in COLORS:
-
-
-        miss=0
-
-
-        for x in train_colors:
-
-            if x==c:
-                break
-
-            miss+=1
-
-
-        score[c]+=(
-            min(
-                miss*CONFIG["omission_weight"],
-                15
-            )
-        )
-
-
-
-    # -----------------------------------------------------
-    # 5. 转换模型
-    # -----------------------------------------------------
-
-
-    transition=defaultdict(
-        Counter
-    )
-
-
-    for i in range(
-        len(train_colors)-1
-    ):
-
-        now=train_colors[i]
-
-        nxt=train_colors[i+1]
-
-
-        transition[now][nxt]+=1
-
-
-
-    last=train_colors[0]
-
-
-    if last in transition:
-
-
-        total=sum(
-            transition[last].values()
-        )
-
-
-        for c,v in transition[last].items():
-
-            score[c]+=(
-                v/total
-                *
-                CONFIG["transition_weight"]
-            )
-
-
-
-    # -----------------------------------------------------
-    # 6. 连续走势修正
-    # -----------------------------------------------------
-
-    score=streak_adjust(
-        score,
-        train_colors
+    scores=feature_engine.calculate(
+        colors
     )
 
 
 
-    # -----------------------------------------------------
-    # 7. 蒙特卡洛稳定检测
-    # -----------------------------------------------------
-
-
-    probability=score_to_probability(
-        score
-    )
-
-
-    stability_result=stability.monte_carlo(
-        score
+    scores=anti_streak(
+        scores,
+        colors
     )
 
 
 
-    ranked=sorted(
-        score.items(),
+    probability=normalize_probability(
+        scores
+    )
+
+
+    stability=stability_analyzer.simulate(
+        scores
+    )
+
+
+
+    ranking=sorted(
+
+        scores.items(),
+
         key=lambda x:x[1],
+
         reverse=True
+
     )
 
 
-    best=ranked[0][0]
+
+    first=ranking[0][0]
+
+    second=ranking[1][0]
 
 
-    second=ranked[1][0]
 
+    # 自动双色判断
 
+    diff=(
 
-    # 双色模式
+        ranking[0][1]
 
-    if abs(
-        ranked[0][1]
         -
-        ranked[1][1]
-    )<3:
+
+        ranking[1][1]
+
+    )
 
 
-        predict=[
-            best,
+
+    if diff<3:
+
+        prediction=[
+
+            first,
+
             second
+
         ]
 
     else:
 
-        predict=[
-            best
+        prediction=[
+
+            first
+
         ]
 
 
 
     confidence=max(
-        stability_result.values()
+        stability.values()
     )
 
 
-    return (
 
-        predict,
+    return {
 
-        dict(score),
 
+        "predict":
+        prediction,
+
+
+        "score":
+        scores,
+
+
+        "probability":
         probability,
 
+
+        "stability":
+        stability,
+
+
+        "confidence":
         round(
             confidence,
             2
-        ),
+        )
 
-        stability_result
-
-    )
+    }
 
 
 
-# =========================================================
-# 滚动回测
-# =========================================================
+
+# =====================================================
+# 回测系统
+# =====================================================
 
 
-def rolling_backtest(
-        rows,
-        rounds=80
+def backtest(
+    rows,
+    periods=100
 ):
 
 
     colors=[
+
         x["color"]
+
         for x in rows
+
     ]
 
 
+
     total=0
+
     hit=0
 
 
-    result=[]
+
+    details=[]
 
 
 
-    max_round=min(
-        rounds,
-        len(colors)-50
+    max_test=min(
+        periods,
+        len(colors)-CONFIG["min_train"]
     )
 
 
+
     for i in range(
-        max_round
+        max_test
     ):
 
 
         history=colors[i+1:]
 
 
-        pred,score,prob,conf,stab=professional_predict(
 
-            history[:420],
-
-            [],
-
-            []
-
+        result=predict(
+            history
         )
+
 
 
         actual=colors[i]
 
 
-        ok=actual in pred
+        ok=actual in result["predict"]
+
 
 
         total+=1
+
 
 
         if ok:
@@ -772,16 +934,19 @@ def rolling_backtest(
 
 
 
-        result.append({
+        details.append({
 
             "actual":
             actual,
 
+
             "predict":
-            pred,
+            result["predict"],
+
 
             "confidence":
-            conf,
+            result["confidence"],
+
 
             "hit":
             ok
@@ -791,38 +956,27 @@ def rolling_backtest(
 
 
     rate=(
+
         hit/total
+
         if total
+
         else 0
+
     )
 
 
-    return rate,result
-    # =========================================================
-# V8 自动参数搜索
-# =========================================================
+    return rate,details
+    # =====================================================
+# 自动调参搜索
+# =====================================================
 
 
-def evaluate_config(
-        rows
-):
-
-    rate,_=rolling_backtest(
-        rows,
-        rounds=80
-    )
-
-    return rate
-
-
-
-def run_grid_search(
-        rows
-):
+def search_parameters(rows):
 
 
     print(
-        "\n开始V8自动参数搜索..."
+        "\n开始自动参数优化..."
     )
 
 
@@ -836,23 +990,26 @@ def run_grid_search(
     )
 
 
-    combos=list(
+    combinations=list(
         product(*values)
     )
 
 
-    best_score=-1
 
-    best_params=None
+    best_rate=0
+
+    best=None
 
 
 
-    old=copy.deepcopy(CONFIG)
+    backup=copy.deepcopy(
+        CONFIG
+    )
 
 
 
     for index,combo in enumerate(
-        combos,
+        combinations,
         1
     ):
 
@@ -865,39 +1022,47 @@ def run_grid_search(
         )
 
 
+
         for k,v in params.items():
 
             CONFIG[k]=v
 
 
 
-        score=evaluate_config(
-            rows
+        rate,_=backtest(
+            rows,
+            150
         )
-
-
-
-        if score>best_score:
-
-            best_score=score
-
-            best_params=params.copy()
 
 
 
         print(
-            f"{index}/{len(combos)}",
+
+            f"{index}/{len(combinations)}",
+
             "命中率:",
-            f"{score:.2%}"
+
+            f"{rate:.2%}"
+
         )
 
 
 
-    CONFIG.update(old)
+        if rate>best_rate:
+
+            best_rate=rate
+
+            best=params.copy()
 
 
 
-    if best_params:
+    CONFIG.update(
+        backup
+    )
+
+
+
+    if best:
 
 
         with open(
@@ -906,11 +1071,17 @@ def run_grid_search(
             encoding="utf-8"
         ) as f:
 
+
             json.dump(
-                best_params,
+
+                best,
+
                 f,
+
                 ensure_ascii=False,
+
                 indent=2
+
             )
 
 
@@ -920,30 +1091,27 @@ def run_grid_search(
         )
 
         print(
-            best_params
+            best
         )
 
         print(
-            "历史测试:",
-            f"{best_score:.2%}"
+            "测试命中率:",
+            f"{best_rate:.2%}"
         )
 
 
-        return best_params
 
-
-
-    return None
+    return best
 
 
 
 
-# =========================================================
+# =====================================================
 # 加载参数
-# =========================================================
+# =====================================================
 
 
-def load_params():
+def load_parameters():
 
 
     if not os.path.exists(
@@ -963,11 +1131,11 @@ def load_params():
             encoding="utf-8"
         ) as f:
 
-            data=json.load(f)
+            params=json.load(f)
 
 
 
-        for k,v in data.items():
+        for k,v in params.items():
 
             if k in CONFIG:
 
@@ -976,11 +1144,12 @@ def load_params():
 
 
         print(
-            "已加载最佳参数"
+            "加载历史最佳参数成功"
         )
 
 
         return True
+
 
 
     except:
@@ -991,18 +1160,15 @@ def load_params():
 
 
 
-# =========================================================
-# 输出报告
-# =========================================================
+# =====================================================
+# 生成 Markdown 报告
+# =====================================================
 
 
-def save_report(
-        issue,
-        pred,
-        prob,
-        conf,
-        stab,
-        rate
+def create_report(
+    issue,
+    result,
+    rate
 ):
 
 
@@ -1015,13 +1181,25 @@ def save_report(
 
 
         f.write(
-            "# 澳门颜色分析 V8\n\n"
+            "# 澳门颜色趋势分析 V8\n\n"
         )
+
 
 
         f.write(
-            f"预测期号: {issue}\n\n"
+
+            "预测期号："
+
+            +
+
+            str(issue)
+
+            +
+
+            "\n\n"
+
         )
+
 
 
         f.write(
@@ -1030,22 +1208,32 @@ def save_report(
 
 
         f.write(
-            "、".join(pred)
+
+            "、".join(
+                result["predict"]
+            )
+
             +
+
             "\n\n"
+
         )
+
 
 
         f.write(
-            "## 概率评分\n\n"
+            "## 概率分析\n\n"
         )
 
 
-        for c,p in prob.items():
+        for c,p in result["probability"].items():
 
             f.write(
+
                 f"{c}: {p}%\n"
+
             )
+
 
 
         f.write(
@@ -1053,39 +1241,52 @@ def save_report(
         )
 
 
-        for c,p in stab.items():
+        for c,p in result["stability"].items():
 
             f.write(
+
                 f"{c}: {p}%\n"
+
             )
 
 
 
         f.write(
-            "\n## 回测\n\n"
+
+            "\n## 历史回测\n\n"
+
         )
 
 
         f.write(
-            f"滚动命中率: {rate:.2%}\n"
+
+            f"近150期测试命中率: {rate:.2%}\n"
+
         )
-
-
-
-# =========================================================
+        # =====================================================
 # 主程序
-# =========================================================
+# =====================================================
 
 
 def main():
 
 
-    parser=argparse.ArgumentParser()
+    parser=argparse.ArgumentParser(
+
+        description=
+        "澳门颜色趋势分析 V8"
+
+    )
 
 
     parser.add_argument(
+
         "--search",
-        action="store_true"
+
+        action="store_true",
+
+        help="强制重新搜索参数"
+
     )
 
 
@@ -1107,63 +1308,65 @@ def main():
 
     if not rows:
 
+
         print(
-            "无数据"
+            "没有获取到数据"
         )
+
 
         return
 
 
 
-    if args.search or not os.path.exists(
-        PARAM_FILE
+
+    # 自动搜索参数
+
+
+    if (
+
+        args.search
+
+        or
+
+        not os.path.exists(
+            PARAM_FILE
+        )
+
     ):
 
-        run_grid_search(
+
+        search_parameters(
             rows
         )
 
 
 
-    load_params()
+    load_parameters()
 
 
 
     colors=[
+
         x["color"]
+
         for x in rows
+
     ]
 
 
 
-    normals=[
-        x["normal"]
-        for x in rows
-    ]
-
-
-    specials=[
-        x["special"]
-        for x in rows
-    ]
-
-
-
-    pred,score,prob,conf,stab=professional_predict(
-
-        colors,
-
-        normals,
-
-        specials
-
+    result=predict(
+        colors
     )
 
 
 
-    rate,_=rolling_backtest(
+    rate,_=backtest(
+
         rows,
-        100
+
+        150
+
     )
 
 
@@ -1172,54 +1375,77 @@ def main():
 
 
 
-    print("\n===================")
+    print("\n====================")
 
     print(
+
         "预测期:",
-        next_issue(latest)
+
+        latest
+
     )
 
-    print(
-        "推荐:",
-        "、".join(pred)
-    )
 
     print(
+
+        "推荐颜色:",
+
+        "、".join(
+            result["predict"]
+        )
+
+    )
+
+
+    print(
+
         "概率:",
-        prob
+
+        result["probability"]
+
     )
 
+
     print(
+
         "稳定度:",
-        stab
+
+        result["stability"]
+
     )
 
+
     print(
+
         "历史测试:",
+
         f"{rate:.2%}"
-    )
 
-    print(
-        "===================\n"
     )
 
 
+    print("====================\n")
 
-    save_report(
 
-        next_issue(latest),
 
-        pred,
 
-        prob,
+    create_report(
 
-        conf,
+        latest,
 
-        stab,
+        result,
 
         rate
 
     )
+
+
+
+    print(
+        "报告已生成 result.md"
+    )
+
+
 
 
 
