@@ -286,7 +286,7 @@ def fetch_macau(limit=800):
         )
 
 
-        for item in data.get(
+for item in data.get(
     "lottery_data",
     []
 ):
@@ -301,7 +301,6 @@ def fetch_macau(limit=800):
         "name",
         ""
     ).strip()
-
 
 
             if name not in [
