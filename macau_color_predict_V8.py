@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 
 """
-新澳门彩预测系统 V8.16 - 全自动优化完整版
+新澳门彩预测系统 V8.16 BALANCE
 
-核心功能:
+升级:
+
 1. 冷热颜色平衡
 2. 防连续追色
 3. 大小模型增强
@@ -15,7 +16,8 @@
 8. 多模型集成（Attribute + Markov + Frequency + Trend）
 9. 网格搜索最优参数
 10. 滚动回测 + 动态调参
-11. 全自动权重优化（主权重 + 单双 + 颜色 + 大小 + 多模型集成）
+11. 单双预测优化（奇偶交替 + 马尔可夫 + 尾数分析）
+12. 全自动权重优化（主权重 + 单双 + 颜色 + 大小 + 多模型集成）
 
 """
 
@@ -33,7 +35,7 @@ from collections import defaultdict
 
 CONFIG = {
 
-    "history_limit":30,
+    "history_limit":10,
 
     "api_url":
     "https://marksix6.net/index.php?api=1",
@@ -60,7 +62,6 @@ REPORT_FILE="result_v816.md"
 # 新增：各维度内部权重配置（将被自动优化覆盖）
 # =====================================================
 
-# 颜色内部权重
 COLOR_WEIGHTS = {
     "frequency": 0.20,
     "trend": 0.20,
@@ -69,7 +70,6 @@ COLOR_WEIGHTS = {
     "zone": 0.20
 }
 
-# 大小内部权重
 SIZE_WEIGHTS = {
     "frequency": 0.20,
     "trend": 0.20,
@@ -78,7 +78,6 @@ SIZE_WEIGHTS = {
     "consecutive": 0.20
 }
 
-# 单双内部权重
 ODD_WEIGHTS = {
     "frequency": 0.25,
     "trend": 0.20,
@@ -87,7 +86,6 @@ ODD_WEIGHTS = {
     "consecutive": 0.15
 }
 
-# 多模型集成权重
 ENSEMBLE_WEIGHTS = {
     "attribute": 0.35,
     "markov": 0.25,
@@ -125,8 +123,6 @@ GREEN={
 }
 
 
-
-
 # =====================================================
 # 属性
 # =====================================================
@@ -145,23 +141,14 @@ def get_color(n):
     return "绿"
 
 
-
-
-
 def get_size(n):
 
     return "大" if n>=25 else "小"
 
 
-
-
-
 def get_odd(n):
 
     return "单" if n%2 else "双"
-
-
-
 
 
 def get_halfhalf(n):
@@ -214,7 +201,7 @@ def parse_numbers(text):
 # =====================================================
 
 
-def fetch_new_macau(limit=30):
+def fetch_new_macau(limit=10):
 
 
     rows=[]
@@ -438,7 +425,7 @@ class ColorPredictor:
     """颜色预测增强模型 - 多维度融合"""
     
     def __init__(self, rows, weights=None):
-        self.rows = rows[:30]
+        self.rows = rows[:10]
         self.weights = weights or COLOR_WEIGHTS
         self.all_colors = ["红", "蓝", "绿"]
     
@@ -451,8 +438,8 @@ class ColorPredictor:
     
     def trend_score(self):
         score = defaultdict(float)
-        for i, r in enumerate(self.rows[:15]):
-            weight = (15 - i) * 0.3
+        for i, r in enumerate(self.rows[:8]):
+            weight = (8 - i) * 0.3
             score[r["color"]] += weight
         total = sum(score.values()) or 1
         return {k: v / total * 100 for k, v in score.items()}
@@ -489,7 +476,7 @@ class ColorPredictor:
     def zone_score(self):
         """号码区间分布"""
         score = defaultdict(float)
-        for r in self.rows[:10]:
+        for r in self.rows[:8]:
             score[r["color"]] += 1
         total = sum(score.values()) or 1
         return {k: v / total * 100 for k, v in score.items()}
@@ -522,7 +509,7 @@ class SizePredictor:
     """大小预测增强模型 - 多维度融合"""
     
     def __init__(self, rows, weights=None):
-        self.rows = rows[:30]
+        self.rows = rows[:10]
         self.weights = weights or SIZE_WEIGHTS
     
     def frequency_score(self):
@@ -534,8 +521,8 @@ class SizePredictor:
     
     def trend_score(self):
         score = defaultdict(float)
-        for i, r in enumerate(self.rows[:15]):
-            weight = (15 - i) * 0.3
+        for i, r in enumerate(self.rows[:8]):
+            weight = (8 - i) * 0.3
             score[r["size"]] += weight
         total = sum(score.values()) or 1
         return {k: v / total * 100 for k, v in score.items()}
@@ -569,7 +556,7 @@ class SizePredictor:
     
     def consecutive_score(self):
         score = defaultdict(float)
-        recent = [r["size"] for r in self.rows[:8]]
+        recent = [r["size"] for r in self.rows[:6]]
         if len(recent) < 3:
             return {"大": 50, "小": 50}
         
@@ -622,7 +609,7 @@ class OddPredictor:
     """单双预测增强模型 - 多维度融合"""
     
     def __init__(self, rows, weights=None):
-        self.rows = rows[:30]
+        self.rows = rows[:10]
         self.weights = weights or ODD_WEIGHTS
     
     def frequency_score(self):
@@ -634,8 +621,8 @@ class OddPredictor:
     
     def trend_score(self):
         score = defaultdict(float)
-        for i, r in enumerate(self.rows[:15]):
-            weight = (15 - i) * 0.3
+        for i, r in enumerate(self.rows[:8]):
+            weight = (8 - i) * 0.3
             score[r["odd"]] += weight
         total = sum(score.values()) or 1
         return {k: v / total * 100 for k, v in score.items()}
@@ -661,7 +648,7 @@ class OddPredictor:
         score = defaultdict(float)
         tail_odd = 0
         tail_even = 0
-        for r in self.rows[:10]:
+        for r in self.rows[:8]:
             tail = r["special"] % 10
             if tail % 2 == 1:
                 tail_odd += 1
@@ -674,7 +661,7 @@ class OddPredictor:
     
     def consecutive_score(self):
         score = defaultdict(float)
-        recent = [r["odd"] for r in self.rows[:8]]
+        recent = [r["odd"] for r in self.rows[:6]]
         if len(recent) < 3:
             return {"单": 50, "双": 50}
         
@@ -729,7 +716,7 @@ class AttributeModel:
 
     def __init__(self,rows):
 
-        self.rows=rows[:30]
+        self.rows=rows[:10]
 
 
 
@@ -742,11 +729,11 @@ class AttributeModel:
 
         for size,weight in [
 
-            (10,0.5),
+            (5,0.5),
 
-            (20,0.3),
+            (8,0.3),
 
-            (30,0.2)
+            (10,0.2)
 
         ]:
 
@@ -767,9 +754,6 @@ class AttributeModel:
 
 
         return score
-        # =====================================================
-# V8.16 冷热平衡模型
-# =====================================================
 
 
     def miss_score(self,attr,values):
@@ -979,11 +963,11 @@ class AttributeModel:
 
         for size,weight in [
 
-            (10,0.5),
+            (5,0.5),
 
-            (20,0.3),
+            (8,0.3),
 
-            (30,0.2)
+            (10,0.2)
 
         ]:
 
@@ -1285,13 +1269,13 @@ class BackTest816:
 
 
 
-        # 最近10期盲测
+        # 最近5期盲测
 
         total=min(
 
-            10,
+            5,
 
-            len(self.rows)-10
+            len(self.rows)-5
 
         )
 
@@ -1419,7 +1403,7 @@ class BackTest816:
 
         print(
 
-            "V8.16 最近10期盲测"
+            "V8.16 最近5期盲测"
 
         )
 
@@ -1481,7 +1465,7 @@ class ExactBetBackTest:
             "绿小单": 11.82, "绿小双": 15.76,
         }
     
-    def simulate_mode(self, mode="TOP3", test_days=10):
+    def simulate_mode(self, mode="TOP3", test_days=5):
         """
         模拟下注模式
         mode: 'TOP3', 'TOP4', 'TOP5'
@@ -1576,7 +1560,7 @@ class ExactBetBackTest:
             "balance_history": balance_history
         }
     
-    def print_report(self, mode="TOP3", test_days=10):
+    def print_report(self, mode="TOP3", test_days=5):
         """打印详细报告"""
         data = self.simulate_mode(mode, test_days)
         
@@ -1643,7 +1627,7 @@ class ExactBetBackTest:
         
         return data
     
-    def compare_modes(self, test_days=10):
+    def compare_modes(self, test_days=5):
         """对比TOP3、TOP4、TOP5三种模式"""
         modes = ["TOP3", "TOP4", "TOP5"]
         results = {}
@@ -1689,7 +1673,7 @@ class ExactBetBackTest:
 
 class MarkovModel:
     def __init__(self, rows):
-        self.rows = rows[:100]
+        self.rows = rows[:10]
         self.transition_matrix = defaultdict(lambda: defaultdict(int))
         self._build_matrix()
     
@@ -1738,7 +1722,7 @@ class MarkovModel:
 
 class FrequencyModel:
     def __init__(self, rows):
-        self.rows = rows[:100]
+        self.rows = rows[:10]
     
     def predict(self, attr="halfhalf"):
         freq = defaultdict(int)
@@ -1763,7 +1747,7 @@ class FrequencyModel:
 
 class TrendModel:
     def __init__(self, rows):
-        self.rows = rows[:50]
+        self.rows = rows[:10]
     
     def predict(self, attr="halfhalf"):
         all_values = ["红大单", "红大双", "红小单", "红小双",
@@ -1773,8 +1757,8 @@ class TrendModel:
         score = defaultdict(float)
         
         # 近期趋势权重
-        for i, r in enumerate(self.rows[:10]):
-            weight = (10 - i) * 0.5
+        for i, r in enumerate(self.rows[:6]):
+            weight = (6 - i) * 0.5
             score[r["halfhalf"]] += weight
         
         # 最近遗漏补偿
@@ -1852,7 +1836,7 @@ class GridSearchOptimizer:
     def __init__(self, rows):
         self.rows = rows
     
-    def grid_search(self, test_days=10):
+    def grid_search(self, test_days=5):
         """网格搜索最优参数"""
         # 参数网格
         param_grid = {
@@ -1904,7 +1888,7 @@ class GridSearchOptimizer:
             "top_10_results": results[:10]
         }
     
-    def _backtest_with_params(self, weights, test_days=10):
+    def _backtest_with_params(self, weights, test_days=5):
         """使用指定参数回测"""
         start_idx = min(test_days, len(self.rows) - 1)
         
@@ -1949,7 +1933,7 @@ class GridSearchOptimizer:
 # =====================================================
 
 class RollingBacktestOptimizer:
-    def __init__(self, rows, window_size=20, step=5):
+    def __init__(self, rows, window_size=6, step=2):
         self.rows = rows
         self.window_size = window_size  # 训练窗口大小
         self.step = step                # 滚动步长
@@ -1968,7 +1952,7 @@ class RollingBacktestOptimizer:
         print(f"{'='*60}")
         
         # 从最早开始滚动
-        for start in range(0, len(self.rows) - self.window_size - 5, self.step):
+        for start in range(0, len(self.rows) - self.window_size - 2, self.step):
             train_end = start + self.window_size
             test_start = train_end
             test_end = min(test_start + self.step, len(self.rows))
@@ -1981,12 +1965,12 @@ class RollingBacktestOptimizer:
             # 测试数据
             test_rows = self.rows[test_start:test_end]
             
-            if len(train_rows) < 10 or len(test_rows) < 1:
+            if len(train_rows) < 3 or len(test_rows) < 1:
                 continue
             
             # 在训练集上做网格搜索
             grid = GridSearchOptimizer(train_rows)
-            search_result = grid.grid_search(test_days=min(10, len(test_rows)))
+            search_result = grid.grid_search(test_days=min(3, len(test_rows)))
             best_params = search_result["best_params"]
             
             # 使用最优参数在测试集上预测
@@ -2091,9 +2075,9 @@ class AutoWeightOptimizer:
     """全自动权重优化器 - 主权重（颜色/大小/单双/半半波）"""
     
     def __init__(self, rows):
-        self.rows = rows[:30]
+        self.rows = rows[:10]
     
-    def evaluate_weights(self, weights, test_days=10):
+    def evaluate_weights(self, weights, test_days=5):
         """评估一组权重在真实回测中的表现"""
         if len(self.rows) < test_days + 1:
             return -100
@@ -2128,7 +2112,7 @@ class AutoWeightOptimizer:
         roi = (total_profit / total_bet * 100) if total_bet > 0 else -100
         return roi
     
-    def random_search(self, test_days=10, iterations=300):
+    def random_search(self, test_days=5, iterations=300):
         """随机搜索主权重"""
         print("\n🔍 正在搜索主权重最优组合...")
         print(f"  测试期数: {test_days}期")
@@ -2177,9 +2161,9 @@ class ColorWeightOptimizer:
     """颜色预测内部权重自动优化"""
     
     def __init__(self, rows):
-        self.rows = rows[:30]
+        self.rows = rows[:10]
     
-    def evaluate_color_weights(self, weights, test_days=10):
+    def evaluate_color_weights(self, weights, test_days=5):
         """评估颜色内部权重"""
         if len(self.rows) < test_days + 1:
             return 33
@@ -2201,7 +2185,7 @@ class ColorWeightOptimizer:
         
         return correct / total * 100 if total > 0 else 33
     
-    def random_search(self, test_days=10, iterations=300):
+    def random_search(self, test_days=5, iterations=300):
         """随机搜索颜色内部权重"""
         print("\n🔍 正在搜索颜色内部最优权重...")
         
@@ -2249,9 +2233,9 @@ class SizeWeightOptimizer:
     """大小预测内部权重自动优化"""
     
     def __init__(self, rows):
-        self.rows = rows[:30]
+        self.rows = rows[:10]
     
-    def evaluate_size_weights(self, weights, test_days=10):
+    def evaluate_size_weights(self, weights, test_days=5):
         """评估大小内部权重"""
         if len(self.rows) < test_days + 1:
             return 50
@@ -2273,7 +2257,7 @@ class SizeWeightOptimizer:
         
         return correct / total * 100 if total > 0 else 50
     
-    def random_search(self, test_days=10, iterations=300):
+    def random_search(self, test_days=5, iterations=300):
         """随机搜索大小内部权重"""
         print("\n🔍 正在搜索大小内部最优权重...")
         
@@ -2321,9 +2305,9 @@ class OddWeightOptimizer:
     """单双内部权重自动优化"""
     
     def __init__(self, rows):
-        self.rows = rows[:30]
+        self.rows = rows[:10]
     
-    def evaluate_odd_weights(self, weights, test_days=10):
+    def evaluate_odd_weights(self, weights, test_days=5):
         """评估单双内部权重"""
         if len(self.rows) < test_days + 1:
             return 50
@@ -2345,7 +2329,7 @@ class OddWeightOptimizer:
         
         return correct / total * 100 if total > 0 else 50
     
-    def random_search(self, test_days=10, iterations=300):
+    def random_search(self, test_days=5, iterations=300):
         """随机搜索单双内部权重"""
         print("\n🔍 正在搜索单双内部最优权重...")
         
@@ -2393,9 +2377,9 @@ class EnsembleWeightOptimizer:
     """多模型集成权重自动优化"""
     
     def __init__(self, rows):
-        self.rows = rows[:30]
+        self.rows = rows[:10]
     
-    def evaluate_ensemble_weights(self, weights, test_days=10):
+    def evaluate_ensemble_weights(self, weights, test_days=5):
         """评估多模型集成权重"""
         if len(self.rows) < test_days + 1:
             return -100
@@ -2430,7 +2414,7 @@ class EnsembleWeightOptimizer:
         roi = (total_profit / total_bet * 100) if total_bet > 0 else -100
         return roi
     
-    def random_search(self, test_days=10, iterations=300):
+    def random_search(self, test_days=5, iterations=300):
         """随机搜索多模型集成权重"""
         print("\n🔍 正在搜索多模型集成最优权重...")
         
@@ -2491,7 +2475,7 @@ def save_report(result):
 
         f.write(
 
-            "# 新澳门彩 V8.16 BALANCE\n\n"
+            "# 新澳门彩 V8.16 BALANCE (10期数据版)\n\n"
 
         )
 
@@ -2568,18 +2552,18 @@ def main():
 
     rows=fetch_new_macau(
 
-        30
+        10
 
     )
 
 
 
-    if len(rows)<10:
+    if len(rows)<5:
 
 
         print(
 
-            "数据不足"
+            "数据不足（需要至少5期）"
 
         )
 
@@ -2587,14 +2571,14 @@ def main():
 
 
     # =====================================================
-    # 新增：第一步 - 自动优化主权重（颜色/大小/单双/半半波）
+    # 第一步 - 自动优化主权重（颜色/大小/单双/半半波）
     # =====================================================
     print("\n" + "=" * 60)
     print("🎯 第一步：自动优化主权重")
     print("=" * 60)
     
     main_optimizer = AutoWeightOptimizer(rows)
-    main_result = main_optimizer.random_search(test_days=10, iterations=300)
+    main_result = main_optimizer.random_search(test_days=5, iterations=300)
     
     print(f"\n📊 主权重优化结果:")
     print(f"  最优ROI: {main_result['best_roi']:.1f}%")
@@ -2602,18 +2586,17 @@ def main():
     for k, v in main_result['best_weights'].items():
         print(f"    {k}: {v:.3f}")
     
-    # 更新全局权重
     CONFIG["weights"] = main_result['best_weights']
     
     # =====================================================
-    # 新增：第二步 - 自动优化颜色内部权重
+    # 第二步 - 自动优化颜色内部权重
     # =====================================================
     print("\n" + "=" * 60)
     print("🎯 第二步：自动优化颜色内部权重")
     print("=" * 60)
     
     color_optimizer = ColorWeightOptimizer(rows)
-    color_result = color_optimizer.random_search(test_days=10, iterations=300)
+    color_result = color_optimizer.random_search(test_days=5, iterations=300)
     
     print(f"\n📊 颜色内部权重优化结果:")
     print(f"  最优准确率: {color_result['best_accuracy']:.1f}%")
@@ -2621,18 +2604,17 @@ def main():
     for k, v in color_result['best_weights'].items():
         print(f"    {k}: {v:.3f}")
     
-    # 更新颜色权重
     COLOR_WEIGHTS = color_result['best_weights']
     
     # =====================================================
-    # 新增：第三步 - 自动优化大小内部权重
+    # 第三步 - 自动优化大小内部权重
     # =====================================================
     print("\n" + "=" * 60)
     print("🎯 第三步：自动优化大小内部权重")
     print("=" * 60)
     
     size_optimizer = SizeWeightOptimizer(rows)
-    size_result = size_optimizer.random_search(test_days=10, iterations=300)
+    size_result = size_optimizer.random_search(test_days=5, iterations=300)
     
     print(f"\n📊 大小内部权重优化结果:")
     print(f"  最优准确率: {size_result['best_accuracy']:.1f}%")
@@ -2640,18 +2622,17 @@ def main():
     for k, v in size_result['best_weights'].items():
         print(f"    {k}: {v:.3f}")
     
-    # 更新大小权重
     SIZE_WEIGHTS = size_result['best_weights']
     
     # =====================================================
-    # 新增：第四步 - 自动优化单双内部权重
+    # 第四步 - 自动优化单双内部权重
     # =====================================================
     print("\n" + "=" * 60)
     print("🎯 第四步：自动优化单双内部权重")
     print("=" * 60)
     
     odd_optimizer = OddWeightOptimizer(rows)
-    odd_result = odd_optimizer.random_search(test_days=10, iterations=300)
+    odd_result = odd_optimizer.random_search(test_days=5, iterations=300)
     
     print(f"\n📊 单双内部权重优化结果:")
     print(f"  最优准确率: {odd_result['best_accuracy']:.1f}%")
@@ -2659,18 +2640,17 @@ def main():
     for k, v in odd_result['best_weights'].items():
         print(f"    {k}: {v:.3f}")
     
-    # 更新单双权重
     ODD_WEIGHTS = odd_result['best_weights']
     
     # =====================================================
-    # 新增：第五步 - 自动优化多模型集成权重
+    # 第五步 - 自动优化多模型集成权重
     # =====================================================
     print("\n" + "=" * 60)
     print("🎯 第五步：自动优化多模型集成权重")
     print("=" * 60)
     
     ensemble_optimizer = EnsembleWeightOptimizer(rows)
-    ensemble_result = ensemble_optimizer.random_search(test_days=10, iterations=300)
+    ensemble_result = ensemble_optimizer.random_search(test_days=5, iterations=300)
     
     print(f"\n📊 多模型集成权重优化结果:")
     print(f"  最优ROI: {ensemble_result['best_roi']:.1f}%")
@@ -2678,14 +2658,13 @@ def main():
     for k, v in ensemble_result['best_weights'].items():
         print(f"    {k}: {v:.3f}")
     
-    # 更新集成权重
     ENSEMBLE_WEIGHTS = ensemble_result['best_weights']
     
     # =====================================================
-    # 新增：打印最终配置
+    # 打印最终配置
     # =====================================================
     print("\n" + "=" * 60)
-    print("✅ 全自动优化完成！最终配置:")
+    print("✅ 全自动优化完成！最终配置 (10期数据):")
     print("=" * 60)
     print(f"\n主权重:")
     for k, v in CONFIG["weights"].items():
@@ -2708,7 +2687,7 @@ def main():
 
     print(
 
-        "最近30期开奖结果"
+        "最近10期开奖结果"
 
     )
 
@@ -2742,7 +2721,7 @@ def main():
 
     print(
 
-        "新澳门彩 V8.16 BALANCE预测"
+        "新澳门彩 V8.16 BALANCE预测 (10期数据版)"
 
     )
 
@@ -2891,7 +2870,7 @@ def main():
     )
 
 
-    # ===== 新增：精确投注回测 =====
+    # ===== 精确投注回测 =====
     print()
     print("=" * 60)
     print("💰 真实盈利回测 (含本金)")
@@ -2900,14 +2879,14 @@ def main():
     exact_test = ExactBetBackTest(rows, bet_amount=50)
     
     # 对比三种模式
-    exact_test.compare_modes(test_days=10)
+    exact_test.compare_modes(test_days=5)
     
     # 详细显示TOP3模式
     print()
-    exact_test.print_report(mode="TOP3", test_days=10)
+    exact_test.print_report(mode="TOP3", test_days=5)
 
 
-    # ===== 新增：多模型集成 + 滚动回测 + 动态调参 =====
+    # ===== 多模型集成 + 滚动回测 + 动态调参 =====
     print()
     print("=" * 60)
     print("🤖 多模型集成 + 滚动回测 + 动态调参")
@@ -2921,9 +2900,9 @@ def main():
         print(f"  {i}. {hh}: {score}%")
     
     # 2. 网格搜索最优参数
-    print("\n🔍 网格搜索最优参数 (最近10期):")
+    print("\n🔍 网格搜索最优参数 (最近5期):")
     grid = GridSearchOptimizer(rows)
-    search_result = grid.grid_search(test_days=10)
+    search_result = grid.grid_search(test_days=5)
     print(f"  最优ROI: {search_result['best_roi']:+.2f}%")
     print(f"  最优参数: {search_result['best_params']}")
     print(f"  TOP3参数组合:")
@@ -2932,7 +2911,7 @@ def main():
     
     # 3. 滚动回测 + 动态调参
     print("\n🔄 滚动回测 + 动态调参:")
-    rolling = RollingBacktestOptimizer(rows, window_size=20, step=5)
+    rolling = RollingBacktestOptimizer(rows, window_size=6, step=2)
     best_params = rolling.find_best_params()
     
     # 4. 使用最优参数进行最终预测
