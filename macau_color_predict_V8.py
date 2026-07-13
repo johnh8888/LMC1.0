@@ -2,19 +2,21 @@
 # -*- coding: utf-8 -*-
 
 """
-新澳门彩颜色预测系统 V8.14 DYNAMIC
+新澳门彩预测系统 V8.15 DYNAMIC BALANCE
 
 升级:
 
-1. 最近30期训练
-2. 动态窗口10/20/30
-3. 颜色/大小/单双/半半波四模型
-4. 动态权重学习
-5. TOP2颜色融合
-6. 最近10期盲测回测
-7. 防止偷看未来数据
+1. 颜色/大小/单双/半半波四模型
+2. 最近10/20/30窗口
+3. 动态权重平衡
+4. 热冷平衡
+5. 连续颜色防追
+6. 半半波参与最终评分
+7. 最近10/20/30盲测
+8. 严格禁止偷看未来数据
 
 """
+
 
 import re
 import json
@@ -23,11 +25,13 @@ import urllib.request
 from collections import defaultdict
 
 
+
 # =====================================================
 # 配置
 # =====================================================
 
-CONFIG = {
+
+CONFIG={
 
     "history_limit":30,
 
@@ -37,12 +41,14 @@ CONFIG = {
 }
 
 
-REPORT_FILE="result_v814.md"
+
+REPORT_FILE="result_v815.md"
+
 
 
 
 # =====================================================
-# 波色定义
+# 波色
 # =====================================================
 
 
@@ -77,8 +83,9 @@ GREEN={
 
 
 
+
 # =====================================================
-# 属性
+# 属性计算
 # =====================================================
 
 
@@ -100,21 +107,31 @@ def get_size(n):
 
 
 
+
 def get_odd(n):
 
     return "单" if n%2 else "双"
 
 
 
+
 def get_halfhalf(n):
 
     return (
+
         get_color(n)
+
         +
+
         get_size(n)
+
         +
+
         get_odd(n)
+
     )
+
+
 
 
 
@@ -125,10 +142,15 @@ def get_halfhalf(n):
 
 def parse_numbers(text):
 
+
     nums=re.findall(
+
         r"\d+",
+
         text
+
     )
+
 
     return [
 
@@ -142,6 +164,9 @@ def parse_numbers(text):
 
 
 
+
+
+
 # =====================================================
 # 获取数据
 # =====================================================
@@ -149,23 +174,24 @@ def parse_numbers(text):
 
 def fetch_new_macau(limit=30):
 
+
     rows=[]
-
-    headers={
-
-        "User-Agent":
-        "Mozilla/5.0"
-
-    }
 
 
     try:
+
 
         req=urllib.request.Request(
 
             CONFIG["api_url"],
 
-            headers=headers
+            headers={
+
+                "User-Agent":
+
+                "Mozilla/5.0"
+
+            }
 
         )
 
@@ -179,6 +205,7 @@ def fetch_new_macau(limit=30):
         ).read()
 
 
+
         data=json.loads(
 
             data.decode("utf-8")
@@ -186,28 +213,41 @@ def fetch_new_macau(limit=30):
         )
 
 
+
         target=None
 
 
+
         for item in data.get(
+
             "lottery_data",
+
             []
+
         ):
 
+
             name=item.get(
+
                 "name",
+
                 ""
+
             ).strip()
+
 
 
             print(name)
 
 
+
             if name=="新澳门彩":
+
 
                 target=item
 
                 break
+
 
 
 
@@ -217,19 +257,18 @@ def fetch_new_macau(limit=30):
 
 
 
-        history=target.get(
+        for line in target.get(
 
             "history",
 
             []
 
-        )
+        ):
 
-
-        for line in history:
 
 
             nums=parse_numbers(line)
+
 
 
             if len(nums)<7:
@@ -238,7 +277,9 @@ def fetch_new_macau(limit=30):
 
 
 
+
             special=nums[-1]
+
 
 
             m=re.search(
@@ -259,6 +300,7 @@ def fetch_new_macau(limit=30):
             raw=m.group(1)
 
 
+
             issue=(
 
                 raw[:4]
@@ -270,14 +312,18 @@ def fetch_new_macau(limit=30):
                 +
 
                 str(
+
                     int(raw[4:])
+
                 ).zfill(3)
 
             )
 
 
 
+
             rows.append({
+
 
                 "issue":issue,
 
@@ -291,22 +337,30 @@ def fetch_new_macau(limit=30):
 
                 "halfhalf":get_halfhalf(special)
 
+
             })
 
 
 
     except Exception as e:
 
+
         print(
+
             "获取失败:",
+
             e
+
         )
 
         return []
 
 
 
+
+
     cache={}
+
 
 
     for r in rows:
@@ -315,7 +369,9 @@ def fetch_new_macau(limit=30):
 
 
 
+
     rows=list(cache.values())
+
 
 
     rows.sort(
@@ -327,16 +383,17 @@ def fetch_new_macau(limit=30):
     )
 
 
+
     return rows[:limit]
 
 
 
 # =====================================================
-# 动态预测核心
+# 基础预测引擎
 # =====================================================
 
 
-class DynamicPredictEngine:
+class PredictEngine:
 
 
     def __init__(self,rows):
@@ -347,10 +404,13 @@ class DynamicPredictEngine:
 
     def window_score(self,attr):
 
+
         score=defaultdict(float)
 
 
+
         for size,weight in [
+
 
             (10,0.5),
 
@@ -358,30 +418,35 @@ class DynamicPredictEngine:
 
             (30,0.2)
 
+
         ]:
 
 
-            data=self.rows[:size]
+            for i,r in enumerate(
+
+                self.rows[:size]
+
+            ):
 
 
-            for i,r in enumerate(data):
 
+                score[r[attr]] += (
 
-                value=r[attr]
-
-
-                score[value]+=(
                     size-i
+
                 )*weight
+
 
 
         return score
 
 
 
-    def miss_bonus(self,values,attr):
+    def miss_score(self,values,attr):
+
 
         bonus=defaultdict(float)
+
 
 
         for v in values:
@@ -406,47 +471,25 @@ class DynamicPredictEngine:
 
                 miss*1.5,
 
-                15
+                10
 
             )
+
 
 
         return bonus
-
-
-
-    def normalize(self,score):
-
-        total=sum(score.values())
-
-
-        if total==0:
-
-            return {}
-
-
-        return {
-
-            k:round(
-
-                v/total*100,
-
-                2
-
-            )
-
-            for k,v in score.items()
-
-        }
-
+        # =====================================================
+# V8.15 属性预测
+# =====================================================
 
 
     def predict_attr(self,attr,values):
 
+
         score=self.window_score(attr)
 
 
-        bonus=self.miss_bonus(
+        miss=self.miss_score(
 
             values,
 
@@ -455,55 +498,168 @@ class DynamicPredictEngine:
         )
 
 
+
         for v in values:
 
-            score[v]+=bonus[v]
-
-
-        return self.normalize(score)
+            score[v]+=miss[v]
 
 
 
-    def predict_color(self):
+        # ==========================
+        # 连续趋势修正
+        # ==========================
+
+
+        recent=[
+
+            r[attr]
+
+            for r in self.rows[:5]
+
+        ]
+
+
+
+        count={
+
+            v:recent.count(v)
+
+            for v in values
+
+        }
+
+
+
+        for v,c in count.items():
+
+
+            if c>=3:
+
+                # 连续追热降低
+
+                score[v]-=c*2
+
+
+
+
+        total=sum(score.values())
+
+
+
+        if total<=0:
+
+            total=1
+
+
+
+        return {
+
+
+            k:round(
+
+                score[k]/total*100,
+
+                2
+
+            )
+
+            for k in values
+
+        }
+
+
+
+
+
+    # =================================================
+    # 颜色
+    # =================================================
+
+
+    def color(self):
+
 
         return self.predict_attr(
 
             "color",
 
-            ["红","蓝","绿"]
+            [
+
+                "红",
+
+                "蓝",
+
+                "绿"
+
+            ]
 
         )
 
 
 
-    def predict_size(self):
+
+    # =================================================
+    # 大小
+    # =================================================
+
+
+    def size(self):
+
 
         return self.predict_attr(
 
             "size",
 
-            ["大","小"]
+            [
+
+                "大",
+
+                "小"
+
+            ]
 
         )
 
 
 
-    def predict_odd(self):
+
+    # =================================================
+    # 单双
+    # =================================================
+
+
+    def odd(self):
+
 
         return self.predict_attr(
 
             "odd",
 
-            ["单","双"]
+            [
+
+                "单",
+
+                "双"
+
+            ]
 
         )
-            # =================================================
-    # 半半波预测
+
+
+
+
+
+
+    # =================================================
+    # 半半波
     # =================================================
 
-    def predict_halfhalf(self,color=None):
+
+    def halfhalf(self,color=None):
+
 
         score=defaultdict(float)
+
 
 
         for size,weight in [
@@ -527,36 +683,29 @@ class DynamicPredictEngine:
                 hh=r["halfhalf"]
 
 
+
                 if color:
+
 
                     if not hh.startswith(color):
 
                         continue
 
 
+
                 score[hh]+=(
+
                     size-i
+
                 )*weight
+
 
 
 
         # 遗漏补偿
 
-        all_values=[]
 
-
-        for c in ["红","蓝","绿"]:
-
-            for s in ["大","小"]:
-
-                for o in ["单","双"]:
-
-                    all_values.append(
-                        c+s+o
-                    )
-
-
-        for hh in all_values:
+        for k in list(score.keys()):
 
 
             miss=0
@@ -565,7 +714,7 @@ class DynamicPredictEngine:
             for r in self.rows:
 
 
-                if r["halfhalf"]==hh:
+                if r["halfhalf"]==k:
 
                     break
 
@@ -573,16 +722,20 @@ class DynamicPredictEngine:
                 miss+=1
 
 
-            score[hh]+=min(
+
+            score[k]+=min(
 
                 miss,
 
-                10
+                8
 
             )
 
 
+
+
         total=sum(score.values())
+
 
 
         if total==0:
@@ -592,6 +745,7 @@ class DynamicPredictEngine:
 
 
         return {
+
 
             k:round(
 
@@ -611,251 +765,49 @@ class DynamicPredictEngine:
 
             )
 
-            if (
-
-                color is None
-
-                or
-
-                k.startswith(color)
-
-            )
-
-        }
-
-
-
-# =====================================================
-# 动态权重学习
-# =====================================================
-
-
-class WeightLearner:
-
-
-    def __init__(self,rows):
-
-        self.rows=rows
-
-
-
-    def test_model(self,mode,test=10):
-
-
-        hit=0
-
-        total=0
-
-
-
-        max_test=min(
-
-            test,
-
-            len(self.rows)-10
-
-        )
-
-
-        for i in range(max_test):
-
-
-            history=self.rows[i+1:i+31]
-
-
-            if len(history)<5:
-
-                continue
-
-
-
-            engine=DynamicPredictEngine(
-
-                history
-
-            )
-
-
-            actual=self.rows[i]
-
-
-
-            if mode=="color":
-
-
-                pred=max(
-
-                    engine.predict_color(),
-
-                    key=engine.predict_color().get
-
-                )
-
-
-
-            elif mode=="size":
-
-
-                pred=max(
-
-                    engine.predict_size(),
-
-                    key=engine.predict_size().get
-
-                )
-
-
-
-            elif mode=="odd":
-
-
-                pred=max(
-
-                    engine.predict_odd(),
-
-                    key=engine.predict_odd().get
-
-                )
-
-
-            else:
-
-                continue
-
-
-
-            if pred==actual[mode]:
-
-                hit+=1
-
-
-
-            total+=1
-
-
-
-        if total==0:
-
-            return 0
-
-
-
-        return round(
-
-            hit/total*100,
-
-            2
-
-        )
-
-
-
-
-
-    def learn(self):
-
-
-        scores={}
-
-
-
-        for m in [
-
-            "color",
-
-            "size",
-
-            "odd"
-
-        ]:
-
-
-            scores[m]=self.test_model(
-
-                m
-
-            )
-
-
-
-        total=sum(
-
-            scores.values()
-
-        )
-
-
-        if total==0:
-
-            return {
-
-                "color":0.4,
-
-                "size":0.3,
-
-                "odd":0.3
-
-            }
-
-
-
-        return {
-
-            k:round(
-
-                v/total,
-
-                3
-
-            )
-
-            for k,v in scores.items()
-
         }
 
 
 
 
+
 # =====================================================
-# 综合融合预测
+# V8.15 综合融合
 # =====================================================
 
 
-class FinalFusion:
+class FusionPredict:
+
 
 
     def __init__(self,rows):
 
+
         self.rows=rows
+
+
+
+        self.engine=PredictEngine(
+
+            rows
+
+        )
+
+
 
 
 
     def predict(self):
 
 
-        engine=DynamicPredictEngine(
 
-            self.rows
-
-        )
+        color=self.engine.color()
 
 
-        learner=WeightLearner(
-
-            self.rows
-
-        )
+        size=self.engine.size()
 
 
-        weight=learner.learn()
-
-
-
-        color=engine.predict_color()
-
-        size=engine.predict_size()
-
-        odd=engine.predict_odd()
+        odd=self.engine.odd()
 
 
 
@@ -878,10 +830,12 @@ class FinalFusion:
 
 
 
+
         for c,cp in top_colors:
 
 
-            half=engine.predict_halfhalf(
+
+            hh=self.engine.halfhalf(
 
                 c
 
@@ -889,61 +843,80 @@ class FinalFusion:
 
 
 
-            for hh,hp in list(
+            for h,hp in list(
 
-                half.items()
+                hh.items()
 
-            )[:3]:
+            )[:5]:
+
+
+
+                # --------------------------
+                # 半半波拆分
+                # --------------------------
+
+
+                h_size=h[1]
+
+                h_odd=h[2]
+
 
 
                 score=(
 
 
-                    cp*weight["color"]
-
-
-                    +
-
-                    hp*0.45
+                    cp*0.35
 
 
                     +
 
                     size.get(
 
-                        hh[1],
+                        h_size,
 
                         0
 
-                    )*weight["size"]
+                    )*0.25
+
 
 
                     +
 
                     odd.get(
 
-                        hh[-1],
+                        h_odd,
 
                         0
 
-                    )*weight["odd"]
+                    )*0.25
+
+
+
+                    +
+
+                    hp*0.15
+
 
                 )
 
 
+
                 candidates.append({
 
-                    "halfhalf":hh,
 
-                    "score":round(
+                    "halfhalf":h,
 
-                        score,
 
-                        2
+                    "color":c,
 
-                    )
+
+                    "score":
+
+                    round(score,2)
+
 
                 })
+
 
 
 
@@ -956,25 +929,29 @@ class FinalFusion:
         )
 
 
+
         return {
 
-            "weight":weight,
 
             "color":color,
 
+
             "size":size,
 
+
             "odd":odd,
+
 
             "candidates":candidates[:5]
 
         }
         # =====================================================
-# V8.14 最近10期盲测回测
+# V8.15 盲测回测
 # =====================================================
 
 
-class BackTester:
+class BackTest:
+
 
 
     def __init__(self,rows):
@@ -983,7 +960,8 @@ class BackTester:
 
 
 
-    def run(self,period=10):
+
+    def test_window(self,window):
 
 
         result={
@@ -1004,135 +982,100 @@ class BackTester:
 
 
 
-        count=min(
+        # 禁止偷看未来
+        # 使用历史之后的数据预测当前期
 
-            period,
 
-            len(self.rows)-10
+        max_test=min(
+
+            10,
+
+            len(self.rows)-window
 
         )
 
 
 
-        for i in range(count):
+        for i in range(max_test):
 
 
-            # 关键:
-            # 不包含当前开奖
-            # 只使用历史数据
-
-
-            history=self.rows[i+1:i+31]
-
-
-
-            engine=DynamicPredictEngine(
-
-                history
-
-            )
-
-
-            fusion=FinalFusion(
-
-                history
-
-            ).predict()
-
-
+            history=self.rows[i+1:]
 
             actual=self.rows[i]
 
 
 
-            # 颜色
+            engine=FusionPredict(
 
-            color_pred=max(
-
-                engine.predict_color(),
-
-                key=engine.predict_color().get
+                history
 
             )
 
 
 
-            if color_pred==actual["color"]:
+            pred=engine.predict()
+
+
+
+            result["total"]+=1
+
+
+
+
+            # 颜色
+
+            if max(
+
+                pred["color"],
+
+                key=pred["color"].get
+
+            )==actual["color"]:
 
                 result["color"]+=1
 
 
 
+
             # 大小
 
-            size_pred=max(
+            if max(
 
-                engine.predict_size(),
+                pred["size"],
 
-                key=engine.predict_size().get
+                key=pred["size"].get
 
-            )
-
-
-            if size_pred==actual["size"]:
+            )==actual["size"]:
 
                 result["size"]+=1
 
 
 
+
+
             # 单双
 
-            odd_pred=max(
+            if max(
 
-                engine.predict_odd(),
+                pred["odd"],
 
-                key=engine.predict_odd().get
+                key=pred["odd"].get
 
-            )
-
-
-            if odd_pred==actual["odd"]:
+            )==actual["odd"]:
 
                 result["odd"]+=1
 
 
 
 
+
             # 半半波
-
-            hh=engine.predict_halfhalf(
-
-                actual["color"]
-
-            )
-
-
-            if hh:
-
-
-                hh_pred=max(
-
-                    hh,
-
-                    key=hh.get
-
-                )
-
-
-                if hh_pred==actual["halfhalf"]:
-
-                    result["halfhalf"]+=1
-
-
-
-
-            # 综合TOP5
 
             top=[
 
                 x["halfhalf"]
 
-                for x in fusion["candidates"]
+                for x in pred["candidates"]
 
             ]
 
@@ -1140,13 +1083,16 @@ class BackTester:
 
             if actual["halfhalf"] in top:
 
+                result["halfhalf"]+=1
+
+
+
+
+            # 综合第一名
+
+            if pred["candidates"][0]["halfhalf"]==actual["halfhalf"]:
+
                 result["combo"]+=1
-
-
-
-
-            result["total"]+=1
-
 
 
 
@@ -1157,75 +1103,95 @@ class BackTester:
 
 
 
-
-def show_backtest(data):
-
-
-    total=data["total"]
+    def report(self):
 
 
-    print("\n")
+        print("\n")
 
-    print("="*30)
-
-    print(
-
-        "V8.14 最近10期盲测回测"
-
-    )
-
-    print("="*30)
-
-
-
-    if total==0:
-
-        print("无数据")
-
-        return
-
-
-
-    for k in [
-
-        "color",
-
-        "size",
-
-        "odd",
-
-        "halfhalf",
-
-        "combo"
-
-    ]:
-
+        print("="*30)
 
         print(
 
-            k,
-
-            ":",
-
-            data[k],
-
-            "/",
-
-            total,
-
-            "=",
-
-            round(
-
-                data[k]/total*100,
-
-                2
-
-            ),
-
-            "%"
+            "V8.15 多窗口盲测"
 
         )
+
+        print("="*30)
+
+
+
+        for w in [
+
+            10,
+
+            20,
+
+            30
+
+        ]:
+
+
+            r=self.test_window(w)
+
+
+
+            print()
+
+            print(
+
+                "窗口",
+
+                w
+
+            )
+
+
+
+            for k in [
+
+                "color",
+
+                "size",
+
+                "odd",
+
+                "halfhalf",
+
+                "combo"
+
+            ]:
+
+
+                if r["total"]:
+
+
+                    print(
+
+                        k,
+
+                        ":",
+
+                        r[k],
+
+                        "/",
+
+                        r["total"],
+
+                        "=",
+
+                        round(
+
+                            r[k]/r["total"]*100,
+
+                            2
+
+                        ),
+
+                        "%"
+
+                    )
+
+
 
 
 
@@ -1237,12 +1203,175 @@ def show_backtest(data):
 # =====================================================
 
 
-def print_history(rows):
+def save_report(result):
 
 
-    print("\n最近30期开奖结果")
+    with open(
 
-    print("-"*30)
+        REPORT_FILE,
+
+        "w",
+
+        encoding="utf-8"
+
+    ) as f:
+
+
+
+        f.write(
+
+            "# 新澳门彩 V8.15 DYNAMIC BALANCE\n\n"
+
+        )
+
+
+
+        f.write(
+
+            "## 颜色预测\n\n"
+
+        )
+
+
+        for k,v in sorted(
+
+            result["color"].items(),
+
+            key=lambda x:x[1],
+
+            reverse=True
+
+        ):
+
+            f.write(
+
+                f"- {k}: {v}%\n"
+
+            )
+
+
+
+
+        f.write(
+
+            "\n## 大小预测\n\n"
+
+        )
+
+
+        for k,v in result["size"].items():
+
+            f.write(
+
+                f"- {k}: {v}%\n"
+
+            )
+
+
+
+
+        f.write(
+
+            "\n## 单双预测\n\n"
+
+        )
+
+
+
+        for k,v in result["odd"].items():
+
+            f.write(
+
+                f"- {k}: {v}%\n"
+
+            )
+
+
+
+
+        f.write(
+
+            "\n## 最终TOP5\n\n"
+
+        )
+
+
+        for i,c in enumerate(
+
+            result["candidates"],
+
+            1
+
+        ):
+
+
+            f.write(
+
+                f"{i}. "
+
+                f"{c['halfhalf']} "
+
+                f"{c['score']}\n"
+
+            )
+
+
+
+
+
+# =====================================================
+# 主程序
+# =====================================================
+
+
+def main():
+
+
+
+    print(
+
+        "正在获取新澳门彩..."
+
+    )
+
+
+
+    rows=fetch_new_macau(
+
+        30
+
+    )
+
+
+
+    if len(rows)<10:
+
+
+        print(
+
+            "数据不足"
+
+        )
+
+        return
+
+
+
+
+    print()
+
+    print(
+
+        "最近30期开奖结果"
+
+    )
+
+    print(
+
+        "-"*30
+
+    )
+
 
 
     for r in rows:
@@ -1265,138 +1394,13 @@ def print_history(rows):
 
 
 
-
-def save_report(result,back):
-
-
-    with open(
-
-        REPORT_FILE,
-
-        "w",
-
-        encoding="utf-8"
-
-    ) as f:
-
-
-        f.write(
-
-            "# 新澳门彩 V8.14预测报告\n\n"
-
-        )
-
-
-        f.write(
-
-            "## 权重\n\n"
-
-        )
-
-
-        for k,v in result["weight"].items():
-
-            f.write(
-
-                f"{k}:{v}\n"
-
-            )
-
-
-        f.write(
-
-            "\n## 综合TOP5\n\n"
-
-        )
-
-
-        for i,x in enumerate(
-
-            result["candidates"],
-
-            1
-
-        ):
-
-
-            f.write(
-
-                f"{i}. {x['halfhalf']} "
-
-                f"{x['score']}\n"
-
-            )
-
-
-
-        f.write(
-
-            "\n## 最近10期盲测\n\n"
-
-        )
-
-
-        f.write(
-
-            str(back)
-
-        )
-
-
-
-
-
-# =====================================================
-# 主程序
-# =====================================================
-
-
-def main():
-
-
-    print(
-
-        "正在获取新澳门彩..."
-
-    )
-
-
-
-    rows=fetch_new_macau(
-
-        30
-
-    )
-
-
-
-    if len(rows)<10:
-
-        print(
-
-            "数据不足"
-
-        )
-
-        return
-
-
-
-    print_history(
-
-        rows
-
-    )
-
-
-
-    print("\n")
+    print()
 
     print("="*30)
 
     print(
 
-        "新澳门彩 V8.14 DYNAMIC预测"
+        "新澳门彩 V8.15 DYNAMIC BALANCE"
 
     )
 
@@ -1404,7 +1408,7 @@ def main():
 
 
 
-    model=FinalFusion(
+    model=FusionPredict(
 
         rows
 
@@ -1416,21 +1420,9 @@ def main():
 
 
 
-    print("\n动态权重:")
-
-    for k,v in result["weight"].items():
-
-        print(
-
-            k,
-
-            v
-
-        )
-
-
 
     print("\n颜色预测:")
+
 
     for k,v in sorted(
 
@@ -1441,6 +1433,7 @@ def main():
         reverse=True
 
     ):
+
 
         print(
 
@@ -1454,7 +1447,10 @@ def main():
 
 
 
+
+
     print("\n大小预测:")
+
 
     for k,v in result["size"].items():
 
@@ -1470,7 +1466,10 @@ def main():
 
 
 
+
+
     print("\n单双预测:")
+
 
     for k,v in result["odd"].items():
 
@@ -1486,10 +1485,12 @@ def main():
 
 
 
+
     print("\n最终综合TOP5:")
 
 
-    for i,x in enumerate(
+
+    for i,c in enumerate(
 
         result["candidates"],
 
@@ -1502,52 +1503,42 @@ def main():
 
             i,
 
-            x["halfhalf"],
+            c["halfhalf"],
 
-            x["score"]
+            c["score"]
 
         )
 
 
 
-    # 最近10期盲测
 
-    back=BackTester(
+    BackTest(
 
         rows
 
-    ).run(
-
-        10
-
-    )
-
-
-
-    show_backtest(
-
-        back
-
-    )
+    ).report()
 
 
 
     save_report(
 
-        result,
-
-        back
+        result
 
     )
 
 
+
+    print()
+
     print(
 
-        "\n报告生成:",
+        "报告生成:",
 
         REPORT_FILE
 
     )
+
+
 
 
 
