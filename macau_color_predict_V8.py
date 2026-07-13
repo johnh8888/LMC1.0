@@ -17,13 +17,14 @@
 9. 网格搜索最优参数
 10. 滚动回测 + 动态调参
 11. 单双预测优化（奇偶交替 + 马尔可夫 + 尾数分析）
+12. 全自动权重优化（主权重 + 单双内部权重 + 多模型集成权重）
 
 """
 
 import re
 import json
 import urllib.request
-
+import random
 from collections import defaultdict
 
 
@@ -57,7 +58,29 @@ CONFIG = {
 REPORT_FILE="result_v816.md"
 
 
+# =====================================================
+# 新增：单双内部权重配置（将被自动优化覆盖）
+# =====================================================
 
+ODD_WEIGHTS = {
+    "frequency": 0.25,
+    "trend": 0.20,
+    "markov": 0.25,
+    "tail": 0.15,
+    "consecutive": 0.15
+}
+
+
+# =====================================================
+# 新增：多模型集成权重配置（将被自动优化覆盖）
+# =====================================================
+
+ENSEMBLE_WEIGHTS = {
+    "attribute": 0.35,
+    "markov": 0.25,
+    "frequency": 0.20,
+    "trend": 0.20
+}
 
 
 # =====================================================
@@ -89,6 +112,8 @@ GREEN={
 }
 
 
+
+
 # =====================================================
 # 属性
 # =====================================================
@@ -107,14 +132,23 @@ def get_color(n):
     return "绿"
 
 
+
+
+
 def get_size(n):
 
     return "大" if n>=25 else "小"
 
 
+
+
+
 def get_odd(n):
 
     return "单" if n%2 else "双"
+
+
+
 
 
 def get_halfhalf(n):
@@ -134,135 +168,8 @@ def get_halfhalf(n):
     )
 
 
-# =====================================================
-# 单双预测增强模型
-# =====================================================
 
-class OddPredictor:
-    """单双预测增强模型 - 多维度融合"""
-    
-    def __init__(self, rows):
-        self.rows = rows[:30]
-    
-    def frequency_score(self):
-        """频率统计"""
-        score = defaultdict(float)
-        for r in self.rows:
-            score[r["odd"]] += 1
-        return score
-    
-    def trend_score(self):
-        """趋势跟踪 - 近期加权"""
-        score = defaultdict(float)
-        for i, r in enumerate(self.rows[:15]):
-            weight = (15 - i) * 0.3
-            score[r["odd"]] += weight
-        return score
-    
-    def markov_score(self):
-        """马尔可夫链 - 奇偶交替"""
-        score = defaultdict(float)
-        if len(self.rows) < 2:
-            return {"单": 50, "双": 50}
-        
-        # 当前最新状态
-        current = self.rows[0]["odd"]
-        
-        # 统计转移概率
-        transitions = {"单": {"单": 0, "双": 0}, "双": {"单": 0, "双": 0}}
-        for i in range(len(self.rows) - 1):
-            curr = self.rows[i]["odd"]
-            next_odd = self.rows[i + 1]["odd"]
-            transitions[curr][next_odd] += 1
-        
-        total = sum(transitions[current].values()) or 1
-        for k in ["单", "双"]:
-            score[k] = transitions[current].get(k, 0) / total * 100
-        
-        return score
-    
-    def tail_score(self):
-        """尾数分析 - 奇偶尾数分布"""
-        score = defaultdict(float)
-        # 最近10期的尾数奇偶分布
-        tail_odd = 0
-        tail_even = 0
-        for r in self.rows[:10]:
-            tail = r["special"] % 10
-            if tail % 2 == 1:
-                tail_odd += 1
-            else:
-                tail_even += 1
-        
-        total = tail_odd + tail_even or 1
-        score["单"] = tail_odd / total * 100
-        score["双"] = tail_even / total * 100
-        return score
-    
-    def consecutive_score(self):
-        """连号检测 - 奇偶连续"""
-        score = defaultdict(float)
-        recent = [r["odd"] for r in self.rows[:8]]
-        
-        if len(recent) < 3:
-            return {"单": 50, "双": 50}
-        
-        # 检测最近连续
-        consecutive_odd = 0
-        consecutive_even = 0
-        for o in recent:
-            if o == "单":
-                consecutive_odd += 1
-                consecutive_even = 0
-            else:
-                consecutive_even += 1
-                consecutive_odd = 0
-        
-        # 如果连续3期以上单，则双的概率增加
-        if consecutive_odd >= 3:
-            score["双"] = 70
-            score["单"] = 30
-        elif consecutive_even >= 3:
-            score["单"] = 70
-            score["双"] = 30
-        else:
-            score["单"] = 50
-            score["双"] = 50
-        
-        return score
-    
-    def predict(self):
-        """融合所有模型"""
-        scores = defaultdict(float)
-        
-        # 各模型权重
-        weights = {
-            "frequency": 0.25,
-            "trend": 0.20,
-            "markov": 0.25,
-            "tail": 0.15,
-            "consecutive": 0.15
-        }
-        
-        # 获取各模型预测
-        models = {
-            "frequency": self.frequency_score(),
-            "trend": self.trend_score(),
-            "markov": self.markov_score(),
-            "tail": self.tail_score(),
-            "consecutive": self.consecutive_score()
-        }
-        
-        for name, pred in models.items():
-            weight = weights.get(name, 0.20)
-            for k, v in pred.items():
-                scores[k] += v * weight
-        
-        # 归一化
-        total = sum(scores.values()) or 1
-        result = {k: round(v / total * 100, 2) for k, v in scores.items()}
-        
-        return result
+
 
 
 # =====================================================
@@ -515,6 +422,111 @@ def fetch_new_macau(limit=30):
 
 
 # =====================================================
+# 新增：单双预测增强模型（插入在AttributeModel之前）
+# =====================================================
+
+class OddPredictor:
+    """单双预测增强模型 - 多维度融合"""
+    
+    def __init__(self, rows, weights=None):
+        self.rows = rows[:30]
+        self.weights = weights or ODD_WEIGHTS
+    
+    def frequency_score(self):
+        score = defaultdict(float)
+        for r in self.rows:
+            score[r["odd"]] += 1
+        total = sum(score.values()) or 1
+        return {k: v / total * 100 for k, v in score.items()}
+    
+    def trend_score(self):
+        score = defaultdict(float)
+        for i, r in enumerate(self.rows[:15]):
+            weight = (15 - i) * 0.3
+            score[r["odd"]] += weight
+        total = sum(score.values()) or 1
+        return {k: v / total * 100 for k, v in score.items()}
+    
+    def markov_score(self):
+        score = defaultdict(float)
+        if len(self.rows) < 2:
+            return {"单": 50, "双": 50}
+        
+        current = self.rows[0]["odd"]
+        transitions = {"单": {"单": 0, "双": 0}, "双": {"单": 0, "双": 0}}
+        for i in range(len(self.rows) - 1):
+            curr = self.rows[i]["odd"]
+            next_odd = self.rows[i + 1]["odd"]
+            transitions[curr][next_odd] += 1
+        
+        total = sum(transitions[current].values()) or 1
+        for k in ["单", "双"]:
+            score[k] = transitions[current].get(k, 0) / total * 100
+        return score
+    
+    def tail_score(self):
+        score = defaultdict(float)
+        tail_odd = 0
+        tail_even = 0
+        for r in self.rows[:10]:
+            tail = r["special"] % 10
+            if tail % 2 == 1:
+                tail_odd += 1
+            else:
+                tail_even += 1
+        total = tail_odd + tail_even or 1
+        score["单"] = tail_odd / total * 100
+        score["双"] = tail_even / total * 100
+        return score
+    
+    def consecutive_score(self):
+        score = defaultdict(float)
+        recent = [r["odd"] for r in self.rows[:8]]
+        if len(recent) < 3:
+            return {"单": 50, "双": 50}
+        
+        consecutive_odd = 0
+        consecutive_even = 0
+        for o in recent:
+            if o == "单":
+                consecutive_odd += 1
+                consecutive_even = 0
+            else:
+                consecutive_even += 1
+                consecutive_odd = 0
+        
+        if consecutive_odd >= 3:
+            score["双"] = 70
+            score["单"] = 30
+        elif consecutive_even >= 3:
+            score["单"] = 70
+            score["双"] = 30
+        else:
+            score["单"] = 50
+            score["双"] = 50
+        return score
+    
+    def predict(self):
+        scores = defaultdict(float)
+        
+        models = {
+            "frequency": self.frequency_score(),
+            "trend": self.trend_score(),
+            "markov": self.markov_score(),
+            "tail": self.tail_score(),
+            "consecutive": self.consecutive_score()
+        }
+        
+        for name, pred in models.items():
+            weight = self.weights.get(name, 0.20)
+            for k, v in pred.items():
+                scores[k] += v * weight
+        
+        total = sum(scores.values()) or 1
+        return {k: round(v / total * 100, 2) for k, v in scores.items()}
+
+
+# =====================================================
 # 基础统计模型
 # =====================================================
 
@@ -562,6 +574,9 @@ class AttributeModel:
 
 
         return score
+        # =====================================================
+# V8.16 冷热平衡模型
+# =====================================================
 
 
     def miss_score(self,attr,values):
@@ -776,13 +791,13 @@ class AttributeModel:
 
 
     # =================================================
-    # 单双 - 使用增强模型
+    # 单双 - 使用增强模型（新增修改）
     # =================================================
 
 
     def odd(self):
         # 使用增强的OddPredictor
-        odd_predictor = OddPredictor(self.rows)
+        odd_predictor = OddPredictor(self.rows, ODD_WEIGHTS)
         return odd_predictor.predict()
 
 
@@ -911,7 +926,7 @@ class AttributeModel:
 class FusionV816:
 
 
-    def __init__(self,rows):
+    def __init__(self,rows, weights=None):
 
         self.rows=rows
 
@@ -920,7 +935,7 @@ class FusionV816:
             rows
 
         )
-
+        self.weights = weights or CONFIG["weights"]
 
 
 
@@ -985,7 +1000,7 @@ class FusionV816:
                 score=(
 
 
-                    cp*CONFIG["weights"]["color"]
+                    cp*self.weights["color"]
 
                     +
 
@@ -999,7 +1014,7 @@ class FusionV816:
 
                     *
 
-                    CONFIG["weights"]["size"]
+                    self.weights["size"]
 
 
                     +
@@ -1014,7 +1029,7 @@ class FusionV816:
 
                     *
 
-                    CONFIG["weights"]["odd"]
+                    self.weights["odd"]
 
 
                     +
@@ -1023,7 +1038,7 @@ class FusionV816:
 
                     *
 
-                    CONFIG["weights"]["halfhalf"]
+                    self.weights["halfhalf"]
 
                 )
 
@@ -1628,12 +1643,7 @@ class EnsemblePredictor:
         ]
         
         # 默认权重：Attribute最重，Markov次之
-        self.weights = weights or {
-            "attribute": 0.35,
-            "markov": 0.25,
-            "frequency": 0.20,
-            "trend": 0.20
-        }
+        self.weights = weights or ENSEMBLE_WEIGHTS
     
     def predict(self, attr="halfhalf"):
         votes = defaultdict(float)
@@ -1910,6 +1920,248 @@ class RollingBacktestOptimizer:
 
 
 # =====================================================
+# 新增：全自动权重优化器
+# =====================================================
+
+class AutoWeightOptimizer:
+    """全自动权重优化器 - 支持所有维度"""
+    
+    def __init__(self, rows):
+        self.rows = rows[:30]
+    
+    def evaluate_weights(self, weights, test_days=10):
+        """评估一组权重在真实回测中的表现"""
+        if len(self.rows) < test_days + 1:
+            return -100
+        
+        total_bet = 0
+        total_profit = 0
+        hit_count = 0
+        
+        for i in range(test_days, 0, -1):
+            history = self.rows[i:]
+            actual = self.rows[i - 1]
+            
+            model = FusionV816(history, weights)
+            pred = model.predict()
+            
+            if pred["candidates"]:
+                bet_amount = 50 * 3
+                total_bet += bet_amount
+                
+                hit = False
+                for c in pred["candidates"][:3]:
+                    if c["halfhalf"] == actual["halfhalf"]:
+                        hit = True
+                        break
+                
+                if hit:
+                    hit_count += 1
+                    total_profit += (50 * 9.45 - bet_amount)
+                else:
+                    total_profit -= bet_amount
+        
+        roi = (total_profit / total_bet * 100) if total_bet > 0 else -100
+        return roi
+    
+    def random_search_all(self, test_days=10, iterations=500):
+        """随机搜索所有权重"""
+        print("\n🔍 正在搜索最优权重组合...")
+        print(f"  测试期数: {test_days}期")
+        print(f"  迭代次数: {iterations}次")
+        
+        best_weights = None
+        best_roi = -100
+        results = []
+        
+        for i in range(iterations):
+            raw = [random.random() for _ in range(4)]
+            total = sum(raw)
+            weights = {
+                "color": raw[0] / total,
+                "size": raw[1] / total,
+                "odd": raw[2] / total,
+                "halfhalf": raw[3] / total
+            }
+            
+            roi = self.evaluate_weights(weights, test_days)
+            results.append({"weights": weights, "roi": roi})
+            
+            if roi > best_roi:
+                best_roi = roi
+                best_weights = weights
+            
+            if (i + 1) % 100 == 0:
+                print(f"  已迭代 {i+1}/{iterations} 次，当前最优ROI: {best_roi:.1f}%")
+        
+        results.sort(key=lambda x: x["roi"], reverse=True)
+        
+        print(f"\n✅ 搜索完成！最优ROI: {best_roi:.1f}%")
+        
+        return {
+            "best_weights": best_weights,
+            "best_roi": best_roi,
+            "top_results": results[:10]
+        }
+
+
+# =====================================================
+# 新增：单双内部权重优化器
+# =====================================================
+
+class OddWeightOptimizer:
+    """单双内部权重自动优化"""
+    
+    def __init__(self, rows):
+        self.rows = rows[:30]
+    
+    def evaluate_odd_weights(self, weights, test_days=10):
+        """评估单双内部权重"""
+        if len(self.rows) < test_days + 1:
+            return 50
+        
+        correct = 0
+        total = 0
+        
+        for i in range(test_days, 0, -1):
+            history = self.rows[i:]
+            actual = self.rows[i - 1]
+            
+            odd_predictor = OddPredictor(history, weights)
+            pred = odd_predictor.predict()
+            predicted = max(pred, key=pred.get)
+            
+            if predicted == actual["odd"]:
+                correct += 1
+            total += 1
+        
+        return correct / total * 100 if total > 0 else 50
+    
+    def random_search(self, test_days=10, iterations=500):
+        """随机搜索单双内部权重"""
+        print("\n🔍 正在搜索单双内部最优权重...")
+        
+        best_weights = None
+        best_accuracy = 0
+        results = []
+        
+        for i in range(iterations):
+            raw = [random.random() for _ in range(5)]
+            total = sum(raw)
+            weights = {
+                "frequency": raw[0] / total,
+                "trend": raw[1] / total,
+                "markov": raw[2] / total,
+                "tail": raw[3] / total,
+                "consecutive": raw[4] / total
+            }
+            
+            accuracy = self.evaluate_odd_weights(weights, test_days)
+            results.append({"weights": weights, "accuracy": accuracy})
+            
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                best_weights = weights
+            
+            if (i + 1) % 100 == 0:
+                print(f"  已迭代 {i+1}/{iterations} 次，当前最优准确率: {best_accuracy:.1f}%")
+        
+        results.sort(key=lambda x: x["accuracy"], reverse=True)
+        
+        print(f"\n✅ 搜索完成！最优准确率: {best_accuracy:.1f}%")
+        
+        return {
+            "best_weights": best_weights,
+            "best_accuracy": best_accuracy,
+            "top_results": results[:10]
+        }
+
+
+# =====================================================
+# 新增：多模型集成权重优化器
+# =====================================================
+
+class EnsembleWeightOptimizer:
+    """多模型集成权重自动优化"""
+    
+    def __init__(self, rows):
+        self.rows = rows[:30]
+    
+    def evaluate_ensemble_weights(self, weights, test_days=10):
+        """评估多模型集成权重"""
+        if len(self.rows) < test_days + 1:
+            return -100
+        
+        total_bet = 0
+        total_profit = 0
+        
+        for i in range(test_days, 0, -1):
+            history = self.rows[i:]
+            actual = self.rows[i - 1]
+            
+            ensemble = EnsemblePredictor(history, weights)
+            pred = ensemble.get_topN(3)
+            
+            if not pred:
+                continue
+            
+            bet_amount = 50 * 3
+            total_bet += bet_amount
+            
+            hit = False
+            for hh, score in pred:
+                if hh == actual["halfhalf"]:
+                    hit = True
+                    break
+            
+            if hit:
+                total_profit += (50 * 9.45 - bet_amount)
+            else:
+                total_profit -= bet_amount
+        
+        roi = (total_profit / total_bet * 100) if total_bet > 0 else -100
+        return roi
+    
+    def random_search(self, test_days=10, iterations=500):
+        """随机搜索多模型集成权重"""
+        print("\n🔍 正在搜索多模型集成最优权重...")
+        
+        best_weights = None
+        best_roi = -100
+        results = []
+        
+        for i in range(iterations):
+            raw = [random.random() for _ in range(4)]
+            total = sum(raw)
+            weights = {
+                "attribute": raw[0] / total,
+                "markov": raw[1] / total,
+                "frequency": raw[2] / total,
+                "trend": raw[3] / total
+            }
+            
+            roi = self.evaluate_ensemble_weights(weights, test_days)
+            results.append({"weights": weights, "roi": roi})
+            
+            if roi > best_roi:
+                best_roi = roi
+                best_weights = weights
+            
+            if (i + 1) % 100 == 0:
+                print(f"  已迭代 {i+1}/{iterations} 次，当前最优ROI: {best_roi:.1f}%")
+        
+        results.sort(key=lambda x: x["roi"], reverse=True)
+        
+        print(f"\n✅ 搜索完成！最优ROI: {best_roi:.1f}%")
+        
+        return {
+            "best_weights": best_weights,
+            "best_roi": best_roi,
+            "top_results": results[:10]
+        }
+
+
+# =====================================================
 # 报告
 # =====================================================
 
@@ -1995,7 +2247,7 @@ def save_report(result):
 
 
 def main():
-
+    global CONFIG, ODD_WEIGHTS, ENSEMBLE_WEIGHTS
 
 
     print(
@@ -2024,6 +2276,80 @@ def main():
         )
 
         return
+
+
+    # =====================================================
+    # 新增：第一步 - 自动优化主权重（颜色/大小/单双/半半波）
+    # =====================================================
+    print("\n" + "=" * 60)
+    print("🎯 第一步：自动优化主权重")
+    print("=" * 60)
+    
+    main_optimizer = AutoWeightOptimizer(rows)
+    main_result = main_optimizer.random_search_all(test_days=10, iterations=300)
+    
+    print(f"\n📊 主权重优化结果:")
+    print(f"  最优ROI: {main_result['best_roi']:.1f}%")
+    print(f"  最优权重:")
+    for k, v in main_result['best_weights'].items():
+        print(f"    {k}: {v:.3f}")
+    
+    # 更新全局权重
+    CONFIG["weights"] = main_result['best_weights']
+    
+    # =====================================================
+    # 新增：第二步 - 自动优化单双内部权重
+    # =====================================================
+    print("\n" + "=" * 60)
+    print("🎯 第二步：自动优化单双内部权重")
+    print("=" * 60)
+    
+    odd_optimizer = OddWeightOptimizer(rows)
+    odd_result = odd_optimizer.random_search(test_days=10, iterations=300)
+    
+    print(f"\n📊 单双内部权重优化结果:")
+    print(f"  最优准确率: {odd_result['best_accuracy']:.1f}%")
+    print(f"  最优权重:")
+    for k, v in odd_result['best_weights'].items():
+        print(f"    {k}: {v:.3f}")
+    
+    # 更新全局单双权重
+    ODD_WEIGHTS = odd_result['best_weights']
+    
+    # =====================================================
+    # 新增：第三步 - 自动优化多模型集成权重
+    # =====================================================
+    print("\n" + "=" * 60)
+    print("🎯 第三步：自动优化多模型集成权重")
+    print("=" * 60)
+    
+    ensemble_optimizer = EnsembleWeightOptimizer(rows)
+    ensemble_result = ensemble_optimizer.random_search(test_days=10, iterations=300)
+    
+    print(f"\n📊 多模型集成权重优化结果:")
+    print(f"  最优ROI: {ensemble_result['best_roi']:.1f}%")
+    print(f"  最优权重:")
+    for k, v in ensemble_result['best_weights'].items():
+        print(f"    {k}: {v:.3f}")
+    
+    # 更新全局集成权重
+    ENSEMBLE_WEIGHTS = ensemble_result['best_weights']
+    
+    # =====================================================
+    # 新增：打印最终配置
+    # =====================================================
+    print("\n" + "=" * 60)
+    print("✅ 全自动优化完成！最终配置:")
+    print("=" * 60)
+    print(f"\n主权重:")
+    for k, v in CONFIG["weights"].items():
+        print(f"  {k}: {v:.3f}")
+    print(f"\n单双内部权重:")
+    for k, v in ODD_WEIGHTS.items():
+        print(f"  {k}: {v:.3f}")
+    print(f"\n多模型集成权重:")
+    for k, v in ENSEMBLE_WEIGHTS.items():
+        print(f"  {k}: {v:.3f}")
 
 
     print()
