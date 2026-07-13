@@ -10,9 +10,12 @@
 2. 防连续追色
 3. 大小模型增强
 4. 半半波融合
-5. TOP3 + TOP4 + TOP5盲测
+5. TOP3盲测
 6. 多窗口优化
 7. 真实盈利回测（含本金）
+8. 多模型集成（Attribute + Markov + Frequency + Trend）
+9. 网格搜索最优参数
+10. 滚动回测 + 动态调参
 
 """
 
@@ -1030,11 +1033,7 @@ class BackTest816:
 
             "halfhalf":[0,0],
 
-            "top3":[0,0],
-
-            "top4":[0,0],
-
-            "top5":[0,0]
+            "top3":[0,0]
 
         }
 
@@ -1089,10 +1088,6 @@ class BackTest816:
             result["halfhalf"][1]+=1
 
             result["top3"][1]+=1
-
-            result["top4"][1]+=1
-
-            result["top5"][1]+=1
 
 
 
@@ -1160,28 +1155,6 @@ class BackTest816:
             ]:
 
                 result["top3"][0]+=1
-
-
-            if actual["halfhalf"] in [
-
-                x["halfhalf"]
-
-                for x in pred["candidates"][:4]
-
-            ]:
-
-                result["top4"][0]+=1
-
-
-            if actual["halfhalf"] in [
-
-                x["halfhalf"]
-
-                for x in pred["candidates"][:5]
-
-            ]:
-
-                result["top5"][0]+=1
 
 
 
@@ -1466,332 +1439,367 @@ class ExactBetBackTest:
 
 
 # =====================================================
-# 报告
+# V8.16 多模型集成 + 滚动回测 + 动态调参
 # =====================================================
 
+# =====================================================
+# 1. 马尔可夫链模型
+# =====================================================
 
-def save_report(result):
-
-
-    with open(
-
-        REPORT_FILE,
-
-        "w",
-
-        encoding="utf-8"
-
-    ) as f:
-
-
-
-        f.write(
-
-            "# 新澳门彩 V8.16 BALANCE\n\n"
-
-        )
-
-
-
-        f.write(
-
-            "## 颜色预测\n\n"
-
-        )
-
-
-        for k,v in sorted(
-
-            result["color"].items(),
-
-            key=lambda x:x[1],
-
-            reverse=True
-
-        ):
-
-
-            f.write(
-
-                f"{k}: {v}%\n"
-
-            )
-
-
-
-        f.write(
-
-            "\n## 最终TOP5\n\n"
-
-        )
-
-
-
-        for i,c in enumerate(
-
-            result["candidates"],
-
-            1
-
-        ):
-
-
-            f.write(
-
-                f"{i}. {c['halfhalf']} "
-
-                f"{c['score']}\n"
-
-            )
-
-
-
-
+class MarkovModel:
+    def __init__(self, rows):
+        self.rows = rows[:100]
+        self.transition_matrix = defaultdict(lambda: defaultdict(int))
+        self._build_matrix()
+    
+    def _build_matrix(self):
+        for i in range(len(self.rows) - 1):
+            current = self.rows[i]["halfhalf"]
+            next_hh = self.rows[i + 1]["halfhalf"]
+            self.transition_matrix[current][next_hh] += 1
+    
+    def predict(self, attr="halfhalf"):
+        if not self.rows:
+            return {}
+        
+        # 获取当前最新状态
+        current = self.rows[0]["halfhalf"]
+        
+        # 获取所有可能的值
+        all_values = ["红大单", "红大双", "红小单", "红小双",
+                      "蓝大单", "蓝大双", "蓝小单", "蓝小双",
+                      "绿大单", "绿大双", "绿小单", "绿小双"]
+        
+        # 从转移矩阵获取概率
+        transitions = self.transition_matrix.get(current, {})
+        total = sum(transitions.values()) or 1
+        
+        result = {}
+        for v in all_values:
+            count = transitions.get(v, 0)
+            result[v] = round(count / total * 100, 2)
+        
+        # 如果没有转移数据，使用平稳分布
+        if total == 1:
+            freq = defaultdict(int)
+            for r in self.rows:
+                freq[r["halfhalf"]] += 1
+            total_freq = sum(freq.values()) or 1
+            for v in all_values:
+                result[v] = round(freq.get(v, 0) / total_freq * 100, 2)
+        
+        return result
 
 
 # =====================================================
-# 主程序
+# 2. 纯频率统计模型
 # =====================================================
 
-
-def main():
-
-
-
-    print(
-
-        "正在获取新澳门彩..."
-
-    )
-
-
-
-    rows=fetch_new_macau(
-
-        30
-
-    )
-
-
-
-    if len(rows)<10:
-
-
-        print(
-
-            "数据不足"
-
-        )
-
-        return
-
-
-
-
-
-    print()
-
-    print(
-
-        "最近30期开奖结果"
-
-    )
-
-    print("-"*30)
-
-
-
-    for r in rows:
-
-
-        print(
-
-            r["issue"],
-
-            "特码",
-
-            r["special"],
-
-            r["color"],
-
-            r["halfhalf"]
-
-        )
-
-
-
-
-    print()
-
-    print("="*35)
-
-    print(
-
-        "新澳门彩 V8.16 BALANCE预测"
-
-    )
-
-    print("="*35)
-
-
-
-    model=FusionV816(
-
-        rows
-
-    )
-
-
-
-    result=model.predict()
-
-
-
-    print()
-
-    print("颜色预测:")
-
-
-
-    for k,v in sorted(
-
-        result["color"].items(),
-
-        key=lambda x:x[1],
-
-        reverse=True
-
-    ):
-
-
-        print(
-
-            k,
-
-            v,
-
-            "%"
-
-        )
-
-
-
-
-
-    print()
-
-    print("大小预测:")
-
-
-    for k,v in result["size"].items():
-
-        print(
-
-            k,
-
-            v,
-
-            "%"
-
-        )
-
-
-
-
-
-    print()
-
-    print("单双预测:")
-
-
-    for k,v in result["odd"].items():
-
-        print(
-
-            k,
-
-            v,
-
-            "%"
-
-        )
-
-
-
-
-    print()
-
-    print("最终TOP5:")
-
-
-
-    for i,c in enumerate(
-
-        result["candidates"],
-
-        1
-
-    ):
-
-
-        print(
-
-            i,
-
-            c["halfhalf"],
-
-            c["score"]
-
-        )
-
-
-
-
-
-    BackTest816(
-
-        rows
-
-    ).print_result()
-
-
-
-
-    save_report(
-
-        result
-
-    )
-
-
-
-    print()
-
-    print(
-
-        "报告生成:",
-
-        REPORT_FILE
-
-    )
-
-
-    # ===== 新增：精确投注回测 =====
-    print()
-    print("=" * 60)
-    print("💰 真实盈利回测 (含本金)")
-    print("=" * 60)
+class FrequencyModel:
+    def __init__(self, rows):
+        self.rows = rows[:100]
     
-    exact_test = ExactBetBackTest(rows, bet_amount=50)
+    def predict(self, attr="halfhalf"):
+        freq = defaultdict(int)
+        for r in self.rows:
+            freq[r["halfhalf"]] += 1
+        
+        total = sum(freq.values()) or 1
+        all_values = ["红大单", "红大双", "红小单", "红小双",
+                      "蓝大单", "蓝大双", "蓝小单", "蓝小双",
+                      "绿大单", "绿大双", "绿小单", "绿小双"]
+        
+        result = {}
+        for v in all_values:
+            result[v] = round(freq.get(v, 0) / total * 100, 2)
+        
+        return result
+
+
+# =====================================================
+# 3. 趋势跟踪模型
+# =====================================================
+
+class TrendModel:
+    def __init__(self, rows):
+        self.rows = rows[:50]
     
-    # 对比三种模式
-    exact_test.compare_modes(test_days=10)
+    def predict(self, attr="halfhalf"):
+        all_values = ["红大单", "红大双", "红小单", "红小双",
+                      "蓝大单", "蓝大双", "蓝小单", "蓝小双",
+                      "绿大单", "绿大双", "绿小单", "绿小双"]
+        
+        score = defaultdict(float)
+        
+        # 近期趋势权重
+        for i, r in enumerate(self.rows[:10]):
+            weight = (10 - i) * 0.5
+            score[r["halfhalf"]] += weight
+        
+        # 最近遗漏补偿
+        for v in all_values:
+            miss = 0
+            for r in self.rows:
+                if r["halfhalf"] == v:
+                    break
+                miss += 1
+            score[v] += min(miss * 0.3, 5)
+        
+        total = sum(score.values()) or 1
+        result = {v: round(score[v] / total * 100, 2) for v in all_values}
+        
+        return result
+
+
+# =====================================================
+# 4. 多模型集成预测器
+# =====================================================
+
+class EnsemblePredictor:
+    def __init__(self, rows, weights=None):
+        self.rows = rows
+        self.models = [
+            ("attribute", AttributeModel(rows)),
+            ("markov", MarkovModel(rows)),
+            ("frequency", FrequencyModel(rows)),
+            ("trend", TrendModel(rows))
+        ]
+        
+        # 默认权重：Attribute最重，Markov次之
+        self.weights = weights or {
+            "attribute": 0.35,
+            "markov": 0.25,
+            "frequency": 0.20,
+            "trend": 0.20
+        }
     
-    # 详细显示TOP3模式
-    print()
-    exact_test.print_report(mode="TOP3", test_days=10)
+    def predict(self, attr="halfhalf"):
+        votes = defaultdict(float)
+        
+        for name, model in self.models:
+            pred = model.predict(attr)
+            weight = self.weights.get(name, 0.25)
+            for k, v in pred.items():
+                votes[k] += v * weight
+        
+        # 归一化到100
+        total = sum(votes.values()) or 1
+        result = {k: round(v / total * 100, 2) for k, v in votes.items()}
+        
+        return result
+    
+    def get_topN(self, n=5):
+        """获取TOP N预测结果"""
+        pred = self.predict()
+        sorted_pred = sorted(pred.items(), key=lambda x: x[1], reverse=True)
+        return sorted_pred[:n]
 
 
-if __name__=="__main__":
+# =====================================================
+# 5. 参数网格搜索
+# =====================================================
 
-    main()
+class GridSearchOptimizer:
+    def __init__(self, rows):
+        self.rows = rows
+    
+    def grid_search(self, test_days=10):
+        """网格搜索最优参数"""
+        # 参数网格
+        param_grid = {
+            "attribute_weight": [0.25, 0.30, 0.35, 0.40],
+            "markov_weight": [0.15, 0.20, 0.25, 0.30],
+            "frequency_weight": [0.10, 0.15, 0.20, 0.25],
+            "trend_weight": [0.10, 0.15, 0.20, 0.25]
+        }
+        
+        best_params = None
+        best_roi = -float('inf')
+        results = []
+        
+        # 测试不同组合
+        for aw in param_grid["attribute_weight"]:
+            for mw in param_grid["markov_weight"]:
+                for fw in param_grid["frequency_weight"]:
+                    for tw in param_grid["trend_weight"]:
+                        # 权重之和必须为1
+                        total = aw + mw + fw + tw
+                        if abs(total - 1.0) > 0.01:
+                            continue
+                        
+                        weights = {
+                            "attribute": aw,
+                            "markov": mw,
+                            "frequency": fw,
+                            "trend": tw
+                        }
+                        
+                        # 使用当前参数回测
+                        roi = self._backtest_with_params(weights, test_days)
+                        
+                        results.append({
+                            "weights": weights,
+                            "roi": roi
+                        })
+                        
+                        if roi > best_roi:
+                            best_roi = roi
+                            best_params = weights
+        
+        # 按ROI排序
+        results.sort(key=lambda x: x["roi"], reverse=True)
+        
+        return {
+            "best_params": best_params,
+            "best_roi": best_roi,
+            "top_10_results": results[:10]
+        }
+    
+    def _backtest_with_params(self, weights, test_days=10):
+        """使用指定参数回测"""
+        start_idx = min(test_days, len(self.rows) - 1)
+        
+        total_bet = 0
+        total_profit = 0
+        hit_count = 0
+        
+        for i in range(start_idx, 0, -1):
+            history = self.rows[i:]
+            actual = self.rows[i - 1]
+            
+            # 使用集成模型
+            ensemble = EnsemblePredictor(history, weights)
+            pred = ensemble.get_topN(3)
+            
+            if not pred:
+                continue
+            
+            # 下注TOP3
+            bet_amount = 50 * 3
+            total_bet += bet_amount
+            
+            # 判断中奖
+            hit = False
+            for hh, score in pred:
+                if hh == actual["halfhalf"]:
+                    hit = True
+                    break
+            
+            if hit:
+                hit_count += 1
+                total_profit += (50 * 9.45 - bet_amount)
+            else:
+                total_profit -= bet_amount
+        
+        roi = (total_profit / total_bet * 100) if total_bet > 0 else -100
+        return roi
+
+
+# =====================================================
+# 6. 滚动回测 + 动态调参
+# =====================================================
+
+class RollingBacktestOptimizer:
+    def __init__(self, rows, window_size=20, step=5):
+        self.rows = rows
+        self.window_size = window_size  # 训练窗口大小
+        self.step = step                # 滚动步长
+    
+    def run(self):
+        """执行滚动回测"""
+        results = []
+        total_roi = 0
+        total_profit = 0
+        total_bet = 0
+        hit_count = 0
+        
+        print(f"\n{'='*60}")
+        print(f"🔄 滚动回测 + 动态调参")
+        print(f"  训练窗口: {self.window_size}期  滚动步长: {self.step}期")
+        print(f"{'='*60}")
+        
+        # 从最早开始滚动
+        for start in range(0, len(self.rows) - self.window_size - 5, self.step):
+            train_end = start + self.window_size
+            test_start = train_end
+            test_end = min(test_start + self.step, len(self.rows))
+            
+            if test_start >= len(self.rows):
+                break
+            
+            # 训练数据
+            train_rows = self.rows[start:train_end]
+            # 测试数据
+            test_rows = self.rows[test_start:test_end]
+            
+            if len(train_rows) < 10 or len(test_rows) < 1:
+                continue
+            
+            # 在训练集上做网格搜索
+            grid = GridSearchOptimizer(train_rows)
+            search_result = grid.grid_search(test_days=min(10, len(test_rows)))
+            best_params = search_result["best_params"]
+            
+            # 使用最优参数在测试集上预测
+            ensemble = EnsemblePredictor(train_rows, best_params)
+            
+            period_bet = 0
+            period_profit = 0
+            period_hit = 0
+            
+            for r in test_rows:
+                pred = ensemble.get_topN(3)
+                if not pred:
+                    continue
+                
+                bet_amount = 50 * 3
+                period_bet += bet_amount
+                
+                hit = False
+                for hh, score in pred:
+                    if hh == r["halfhalf"]:
+                        hit = True
+                        break
+                
+                if hit:
+                    period_hit += 1
+                    period_profit += (50 * 9.45 - bet_amount)
+                else:
+                    period_profit -= bet_amount
+            
+            roi = (period_profit / period_bet * 100) if period_bet > 0 else 0
+            hit_rate = (period_hit / len(test_rows) * 100) if test_rows else 0
+            
+            results.append({
+                "train_period": f"{start+1}-{train_end}",
+                "test_period": f"{test_start+1}-{test_end}",
+                "best_params": best_params,
+                "roi": roi,
+                "hit_rate": hit_rate,
+                "profit": period_profit,
+                "bet": period_bet,
+                "hit_count": period_hit,
+                "total_periods": len(test_rows)
+            })
+            
+            total_roi += roi
+            total_profit += period_profit
+            total_bet += period_bet
+            hit_count += period_hit
+        
+        # 汇总统计
+        avg_roi = total_roi / len(results) if results else 0
+        
+        print(f"\n📊 滚动回测汇总:")
+        print(f"  测试窗口数: {len(results)}")
+        print(f"  平均ROI: {avg_roi:+.2f}%")
+        print(f"  总投注: {total_bet:.2f}元")
+        print(f"  总盈利: {total_profit:+.2f}元")
+        
+        if results:
+            print(f"\n📋 各窗口详细:")
+            print(f"{'训练期':<15} {'测试期':<15} {'ROI':<12} {'命中率':<12} {'盈利':<12}")
+            print(f"{'-'*60}")
+            for r in results:
+                print(f"{r['train_period']:<15} {r['test_period']:<15} "
+                      f"{r['roi']:<+12
