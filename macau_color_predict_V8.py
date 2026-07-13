@@ -1371,18 +1371,16 @@ fusion_engine=FusionEngine()
 def probability(score):
 
 
-    total=sum(
+    total = sum(
 
-        max(v,0)
+        max(value,0)
 
-        for v in score.values()
+        for value in score.values()
 
     )
 
 
-
-    if total<=0:
-
+    if total <= 0:
 
         return {
 
@@ -1391,6 +1389,34 @@ def probability(score):
             for c in COLORS
 
         }
+
+
+
+    return {
+
+
+        c:
+
+        round(
+
+            max(score.get(c,0),0)
+
+            /
+
+            total
+
+            *
+
+            100,
+
+            2
+
+        )
+
+
+        for c in COLORS
+
+    }
 
 
 
