@@ -287,19 +287,20 @@ def fetch_macau(limit=800):
 
 
         for item in data.get(
-            "lottery_data",
-            []
-        ):
+    "lottery_data",
+    []
+):
+
+    print(
+        "发现彩种:",
+        item.get("name","")
+    )
 
 
-            # =============================
-            # 只读取新澳门六合彩
-            # =============================
-
-            name=item.get(
-                "name",
-                ""
-            ).strip()
+    name=item.get(
+        "name",
+        ""
+    ).strip()
 
 
 
