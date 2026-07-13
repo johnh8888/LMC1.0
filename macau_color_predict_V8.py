@@ -16,6 +16,7 @@
 8. 多模型集成（Attribute + Markov + Frequency + Trend）
 9. 网格搜索最优参数
 10. 滚动回测 + 动态调参
+11. 单双预测优化（奇偶交替 + 马尔可夫 + 尾数分析）
 
 """
 
@@ -88,8 +89,6 @@ GREEN={
 }
 
 
-
-
 # =====================================================
 # 属性
 # =====================================================
@@ -108,23 +107,14 @@ def get_color(n):
     return "绿"
 
 
-
-
-
 def get_size(n):
 
     return "大" if n>=25 else "小"
 
 
-
-
-
 def get_odd(n):
 
     return "单" if n%2 else "双"
-
-
-
 
 
 def get_halfhalf(n):
@@ -144,8 +134,135 @@ def get_halfhalf(n):
     )
 
 
+# =====================================================
+# 单双预测增强模型
+# =====================================================
 
-
+class OddPredictor:
+    """单双预测增强模型 - 多维度融合"""
+    
+    def __init__(self, rows):
+        self.rows = rows[:30]
+    
+    def frequency_score(self):
+        """频率统计"""
+        score = defaultdict(float)
+        for r in self.rows:
+            score[r["odd"]] += 1
+        return score
+    
+    def trend_score(self):
+        """趋势跟踪 - 近期加权"""
+        score = defaultdict(float)
+        for i, r in enumerate(self.rows[:15]):
+            weight = (15 - i) * 0.3
+            score[r["odd"]] += weight
+        return score
+    
+    def markov_score(self):
+        """马尔可夫链 - 奇偶交替"""
+        score = defaultdict(float)
+        if len(self.rows) < 2:
+            return {"单": 50, "双": 50}
+        
+        # 当前最新状态
+        current = self.rows[0]["odd"]
+        
+        # 统计转移概率
+        transitions = {"单": {"单": 0, "双": 0}, "双": {"单": 0, "双": 0}}
+        for i in range(len(self.rows) - 1):
+            curr = self.rows[i]["odd"]
+            next_odd = self.rows[i + 1]["odd"]
+            transitions[curr][next_odd] += 1
+        
+        total = sum(transitions[current].values()) or 1
+        for k in ["单", "双"]:
+            score[k] = transitions[current].get(k, 0) / total * 100
+        
+        return score
+    
+    def tail_score(self):
+        """尾数分析 - 奇偶尾数分布"""
+        score = defaultdict(float)
+        # 最近10期的尾数奇偶分布
+        tail_odd = 0
+        tail_even = 0
+        for r in self.rows[:10]:
+            tail = r["special"] % 10
+            if tail % 2 == 1:
+                tail_odd += 1
+            else:
+                tail_even += 1
+        
+        total = tail_odd + tail_even or 1
+        score["单"] = tail_odd / total * 100
+        score["双"] = tail_even / total * 100
+        return score
+    
+    def consecutive_score(self):
+        """连号检测 - 奇偶连续"""
+        score = defaultdict(float)
+        recent = [r["odd"] for r in self.rows[:8]]
+        
+        if len(recent) < 3:
+            return {"单": 50, "双": 50}
+        
+        # 检测最近连续
+        consecutive_odd = 0
+        consecutive_even = 0
+        for o in recent:
+            if o == "单":
+                consecutive_odd += 1
+                consecutive_even = 0
+            else:
+                consecutive_even += 1
+                consecutive_odd = 0
+        
+        # 如果连续3期以上单，则双的概率增加
+        if consecutive_odd >= 3:
+            score["双"] = 70
+            score["单"] = 30
+        elif consecutive_even >= 3:
+            score["单"] = 70
+            score["双"] = 30
+        else:
+            score["单"] = 50
+            score["双"] = 50
+        
+        return score
+    
+    def predict(self):
+        """融合所有模型"""
+        scores = defaultdict(float)
+        
+        # 各模型权重
+        weights = {
+            "frequency": 0.25,
+            "trend": 0.20,
+            "markov": 0.25,
+            "tail": 0.15,
+            "consecutive": 0.15
+        }
+        
+        # 获取各模型预测
+        models = {
+            "frequency": self.frequency_score(),
+            "trend": self.trend_score(),
+            "markov": self.markov_score(),
+            "tail": self.tail_score(),
+            "consecutive": self.consecutive_score()
+        }
+        
+        for name, pred in models.items():
+            weight = weights.get(name, 0.20)
+            for k, v in pred.items():
+                scores[k] += v * weight
+        
+        # 归一化
+        total = sum(scores.values()) or 1
+        result = {k: round(v / total * 100, 2) for k, v in scores.items()}
+        
+        return result
 
 
 # =====================================================
@@ -174,10 +291,6 @@ def parse_numbers(text):
         if 1<=int(x)<=49
 
     ]
-
-
-
-
 
 
 # =====================================================
@@ -401,9 +514,6 @@ def fetch_new_macau(limit=30):
     return rows[:limit]
 
 
-
-
-
 # =====================================================
 # 基础统计模型
 # =====================================================
@@ -452,9 +562,6 @@ class AttributeModel:
 
 
         return score
-        # =====================================================
-# V8.16 冷热平衡模型
-# =====================================================
 
 
     def miss_score(self,attr,values):
@@ -496,10 +603,6 @@ class AttributeModel:
 
 
         return result
-
-
-
-
 
 
     # =================================================
@@ -545,10 +648,6 @@ class AttributeModel:
 
 
         return score
-
-
-
-
 
 
     # =================================================
@@ -628,10 +727,6 @@ class AttributeModel:
         }
 
 
-
-
-
-
     # =================================================
     # 颜色
     # =================================================
@@ -657,10 +752,6 @@ class AttributeModel:
         )
 
 
-
-
-
-
     # =================================================
     # 大小
     # =================================================
@@ -684,36 +775,15 @@ class AttributeModel:
         )
 
 
-
-
-
-
     # =================================================
-    # 单双
+    # 单双 - 使用增强模型
     # =================================================
 
 
     def odd(self):
-
-
-        return self.predict(
-
-            "odd",
-
-            [
-
-                "单",
-
-                "双"
-
-            ]
-
-        )
-
-
-
-
-
+        # 使用增强的OddPredictor
+        odd_predictor = OddPredictor(self.rows)
+        return odd_predictor.predict()
 
 
     # =================================================
@@ -831,10 +901,6 @@ class AttributeModel:
             )
 
         }
-
-
-
-
 
 
 # =====================================================
@@ -1159,10 +1225,6 @@ class BackTest816:
 
 
         return result
-
-
-
-
 
 
     def print_result(self):
@@ -1927,10 +1989,6 @@ def save_report(result):
             )
 
 
-
-
-
-
 # =====================================================
 # 主程序
 # =====================================================
@@ -1966,9 +2024,6 @@ def main():
         )
 
         return
-
-
-
 
 
     print()
@@ -2083,7 +2138,7 @@ def main():
 
     print()
 
-    print("单双预测:")
+    print("单双预测 (优化版):")
 
 
     for k,v in result["odd"].items():
