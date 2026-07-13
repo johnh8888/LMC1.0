@@ -250,14 +250,12 @@ def fetch_macau(limit=800):
 
     rows=[]
 
-
     headers={
 
         "User-Agent":
         "Mozilla/5.0"
 
     }
-
 
 
     try:
@@ -288,28 +286,43 @@ def fetch_macau(limit=800):
         )
 
 
-
         for item in data.get(
-
             "lottery_data",
-
             []
-
         ):
 
 
-            if "澳门" not in item.get(
+            # =============================
+            # 只读取新澳门六合彩
+            # =============================
+
+            name=item.get(
                 "name",
                 ""
-            ):
+            ).strip()
+
+
+
+            if name not in [
+
+                "新澳门六合彩",
+
+                "新澳门六合彩特码",
+
+                "澳门六合彩"
+
+            ]:
 
                 continue
 
 
 
             for line in item.get(
+
                 "history",
+
                 []
+
             ):
 
 
@@ -317,43 +330,66 @@ def fetch_macau(limit=800):
 
 
 
+                # 必须有特码
+
                 if len(nums)<7:
 
                     continue
 
 
 
-                special=nums[6]
+                special=nums[-1]
 
 
 
-                m=re.search(
-                    r"(\d{6,7})",
-                    line
-                )
-
-
-                if not m:
+                if not 1<=special<=49:
 
                     continue
 
 
 
-                raw=m.group(1)
+                # =============================
+                # 提取期号
+                # =============================
+
+                m=re.search(
+
+                    r"(20\d{5,7})",
+
+                    line
+
+                )
 
 
 
-                if len(raw)==6:
+                if m:
+
+
+                    raw=m.group(1)
+
+
+
+                    year=raw[:4]
+
+
+                    num=raw[4:]
+
 
 
                     issue=(
 
-                        raw[:2]
+                        year
+
                         +
+
                         "/"
+
                         +
+
                         str(
-                            int(raw[2:])
+
+                            int(num)
+
                         ).zfill(3)
 
                     )
@@ -362,15 +398,38 @@ def fetch_macau(limit=800):
                 else:
 
 
+                    # 备用格式
+
+                    m=re.search(
+
+                        r"(\d{2})(\d{3})",
+
+                        line
+
+                    )
+
+
+                    if not m:
+
+                        continue
+
+
+
                     issue=(
 
-                        raw[2:4]
+                        "20"
+
                         +
+
+                        m.group(1)
+
+                        +
+
                         "/"
+
                         +
-                        str(
-                            int(raw[4:])
-                        ).zfill(3)
+
+                        m.group(2)
 
                     )
 
@@ -378,23 +437,38 @@ def fetch_macau(limit=800):
 
                 rows.append({
 
-                    "issue":issue,
+                    "issue":
 
-                    "special":special,
+                    issue,
+
+
+                    "special":
+
+                    special,
+
 
                     "color":
+
                     get_color(special),
 
+
                     "size":
+
                     get_size(special),
 
+
                     "odd":
+
                     get_odd_even(special),
 
+
                     "half":
+
                     get_half(special),
 
+
                     "halfhalf":
+
                     get_halfhalf(special)
 
                 })
@@ -403,12 +477,44 @@ def fetch_macau(limit=800):
 
     except Exception as e:
 
+
         print(
+
             "数据获取失败:",
+
             e
+
         )
 
 
+
+    # =============================
+    # 去除重复期号
+    # =============================
+
+
+    unique={}
+
+
+    for r in rows:
+
+
+        if r["issue"] not in unique:
+
+
+            unique[r["issue"]]=r
+
+
+
+    rows=list(
+
+        unique.values()
+
+    )
+
+
+
+    # 最新在前
 
     rows.sort(
 
@@ -419,8 +525,11 @@ def fetch_macau(limit=800):
     )
 
 
+
     print(
-        f"获取澳门数据:{len(rows)}期"
+
+        f"获取新澳门六合彩: {len(rows)}期"
+
     )
 
 
