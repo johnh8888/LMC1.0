@@ -297,8 +297,8 @@ def fetch_macau(limit=800):
 
 
             if name in [
-                "新澳门六合彩",
-                "新澳门六合彩特码"
+                "新澳门彩",
+                "新澳门彩特码"
             ]:
 
                 target=item
