@@ -1,49 +1,122 @@
-name: 澳门六合彩自动调参预测
+name: 新澳门六合彩自动预测V8.3
+
 
 on:
+
   schedule:
+
     - cron: '35 13 * * *'
+
+
   workflow_dispatch:
 
 
+
 jobs:
+
+
   predict:
+
 
     runs-on: ubuntu-latest
 
+
+
     steps:
 
-      - uses: actions/checkout@v4
+
+      - name: 拉取代码
+
+        uses: actions/checkout@v4
 
 
-      - uses: actions/setup-python@v5
+
+
+
+      - name: 安装Python
+
+        uses: actions/setup-python@v5
+
         with:
+
           python-version: '3.10'
 
 
+
+
+
+      - name: 检查文件
+
+        run: |
+
+          ls -la
+
+          echo "检查预测脚本"
+
+          test -f macau_color_predict_V8.py
+
+
+
+
+
       - name: 恢复参数缓存
-        id: params-cache
+
         uses: actions/cache@v4
+
         with:
-          path: |
-            macau_v8_best.json
-          key: macau-v8-params
+
+          path:
+
+            macau_best_params.json
+
+          key:
+
+            macau-v83-params
 
 
-      - name: 运行V8预测模型
-        run: python macau_color_predict_V8.py
 
 
-      - name: 保存参数缓存
+
+      - name: 运行预测
+
+        run:
+
+          python macau_color_predict_V8.py
+
+
+
+
+
+      - name: 保存参数
+
         uses: actions/cache@v4
+
         with:
-          path: |
-            macau_v8_best.json
-          key: macau-v8-params
+
+          path:
+
+            macau_best_params.json
+
+          key:
+
+            macau-v83-params
 
 
-      - name: 上传报告
+
+
+
+      - name: 上传预测报告
+
         uses: actions/upload-artifact@v4
+
         with:
-          name: macau-v8-report
-          path: result.md
+
+
+          name:
+
+            macau-v83-report
+
+
+          path:
+
+            result.md
