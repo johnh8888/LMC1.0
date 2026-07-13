@@ -1,650 +1,1230 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 澳门六合彩特二色预测 - 自动调参版（参数文件缺失时自动搜索）
+
+"""
+澳门颜色趋势分析 V8
+自动参数优化 + 滚动回测 + 稳定性分析版
+
+说明：
+本程序用于历史数据统计分析、模型测试和趋势研究。
+"""
 
 import argparse
 import copy
 import gzip
 import json
 import math
+import os
+import random
 import re
 import time
-import random
 import urllib.request
-import os
+
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 from itertools import product
 
-# ================== 配置（澳门优化初始值）==================
+
+# =========================================================
+# 基础配置
+# =========================================================
+
 CONFIG = {
-    "odds": {"红": 2.70, "蓝": 2.80, "绿": 2.80},
-    "pred_mode": "single",
-    "dual_alloc_mode": "score_proportional",
-    "window_18_weight": 8.0,
-    "window_55_weight": 2.5,
-    "window_150_weight": 0.5,
-    "omission_factor": 0.9,
-    "omission_max": 11.5,
-    "cycle_dev_low": 1.5,
-    "cycle_dev_high": 3.0,
-    "cycle_score_low": 3.5,
-    "cycle_score_high": 7.0,
-    "trans_weight": 9.0,
-    "normal_main_weight": 4.0,
-    "szsd_trans_weight": 2.0,
-    "normal_szsd_main_weight": 3.0,
-    "beast_trans_weight": 0,
-    "normal_beast_main_weight": 0,
-    "min_calibrated_confidence": 50,
-    "min_score_diff": 2,
-    "max_skip_streak": 6,
-    "bankroll": 10000,
-    "kelly_fraction": 0.35,
-    "max_bet_ratio_total": 0.10,
-    "min_bet_per_color": 100,
-    "bet_step": 50,
-    "confidence_tiers": {"low": (0.03, 0.05), "mid": (0.05, 0.08), "high": (0.08, 0.12)},
-    "api_url": "https://marksix6.net/index.php?api=1",
+
+    "api_url":
+    "https://marksix6.net/index.php?api=1",
+
     "max_retries": 6,
     "timeout": 30,
+
     "train_max_len": 420,
-    "show_details": 25,
-    "min_train": 30,
-    "search_warmup": 150,
-    "search_test": 200,
-    "search_space": {
-        "min_calibrated_confidence": [45, 50, 55],
-        "min_score_diff": [2, 3, 5],
-        "pred_mode": ["single", "dual"],
-        "window_18_weight": [6.0, 8.0, 10.0],
-        "window_55_weight": [2.0, 2.5, 3.0],
-        "trans_weight": [7.0, 9.0, 11.0],
-    },
+    "min_train": 40,
+
+
+    # 原始权重
+    "window_recent": 8.0,
+    "window_middle": 3.0,
+    "window_long": 1.0,
+
+    "omission_weight": 1.2,
+    "transition_weight": 8.0,
+
+
+    # 输出
+    "show_details":20,
+
+
+    # 自动搜索
+    "search_space":{
+
+        "window_recent":[6,8,10],
+
+        "window_middle":[2,3,4],
+
+        "transition_weight":[6,8,10],
+
+        "omission_weight":[0.8,1.2,1.5],
+
+    }
+
 }
 
-PARAMS_FILE = "macau_best_params.json"
-LAST_SEARCH_FILE = "macau_last_search.txt"
 
-# ================== 颜色 & 生肖定义 ==================
-RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
-BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
-GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
-COLORS = ["红", "蓝", "绿"]
+PARAM_FILE="macau_v8_best.json"
 
-ZODIAC_ORDER = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
-BEAST_SET = {"鼠","虎","兔","龙","蛇","猴"}
-NUM_TO_BEAST_TYPE = {}
-for num in range(1, 50):
-    idx = (num - 1) % 12
-    zodiac = ZODIAC_ORDER[idx]
-    NUM_TO_BEAST_TYPE[num] = "野兽" if zodiac in BEAST_SET else "家禽"
 
-def get_beast_type(n): return NUM_TO_BEAST_TYPE.get(n, "家禽")
-def get_size(n): return "小" if 1 <= n <= 24 else "大"
-def get_odd_even(n): return "单" if n % 2 == 1 else "双"
-def get_szsd_type(n): return f"{get_size(n)}{get_odd_even(n)}"
+# =========================================================
+# 颜色定义
+# =========================================================
+
+
+RED={
+1,2,7,8,12,13,18,19,
+23,24,29,30,34,35,
+40,45,46
+}
+
+
+BLUE={
+3,4,9,10,14,15,
+20,25,26,31,
+36,37,41,42,47,48
+}
+
+
+GREEN={
+5,6,11,16,17,
+21,22,27,28,
+32,33,38,39,
+43,44,49
+}
+
+
+COLORS=[
+"红",
+"蓝",
+"绿"
+]
+
+
+
 def get_color(n):
-    if n in RED: return "红"
-    if n in BLUE: return "蓝"
-    if n in GREEN: return "绿"
+
+    if n in RED:
+        return "红"
+
+    if n in BLUE:
+        return "蓝"
+
+    if n in GREEN:
+        return "绿"
+
     return "红"
 
-def next_issue(issue_no):
-    try:
-        if "/" in issue_no:
-            y, s = issue_no.split("/")
-            return f"{y}/{str(int(s)+1).zfill(3)}"
-        return f"{issue_no[:4]}/{str(int(issue_no[4:])+1).zfill(3)}"
-    except:
-        return issue_no
 
-def parse_nums(value):
-    return [int(x) for x in re.findall(r'\d+', value) if 1 <= int(x) <= 49]
+
+# =========================================================
+# 数字解析
+# =========================================================
+
+
+def parse_nums(text):
+
+    return [
+        int(x)
+        for x in re.findall(r"\d+",text)
+        if 1<=int(x)<=49
+    ]
+
+
+
+def next_issue(issue):
+
+    try:
+
+        if "/" in issue:
+
+            y,n=issue.split("/")
+
+            return (
+                f"{y}/"
+                f"{str(int(n)+1).zfill(3)}"
+            )
+
+        return issue
+
+    except:
+
+        return issue
+
+
+
+# =========================================================
+# 获取历史数据
+# =========================================================
+
 
 def fetch_macau(limit=800):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    for attempt in range(CONFIG["max_retries"]):
+
+    headers={
+        "User-Agent":
+        "Mozilla/5.0"
+    }
+
+
+    for i in range(CONFIG["max_retries"]):
+
         try:
-            req = urllib.request.Request(CONFIG["api_url"], headers=headers)
-            with urllib.request.urlopen(req, timeout=CONFIG["timeout"]) as resp:
-                raw = resp.read()
-                if "gzip" in resp.headers.get("Content-Encoding", "").lower():
-                    raw = gzip.decompress(raw)
-                data = json.loads(raw.decode("utf-8"))
-                rows = []
-                for item in data.get("lottery_data", []):
-                    name = item.get("name", "")
-                    if "澳门" not in name or "新澳门" in name:
+
+            req=urllib.request.Request(
+                CONFIG["api_url"],
+                headers=headers
+            )
+
+
+            with urllib.request.urlopen(
+                req,
+                timeout=CONFIG["timeout"]
+            ) as r:
+
+
+                raw=r.read()
+
+
+                if "gzip" in str(
+                    r.headers
+                ).lower():
+
+                    raw=gzip.decompress(raw)
+
+
+
+                data=json.loads(
+                    raw.decode("utf-8")
+                )
+
+
+            rows=[]
+
+
+            for item in data.get(
+                "lottery_data",
+                []
+            ):
+
+
+                name=item.get(
+                    "name",
+                    ""
+                )
+
+
+                if "澳门" not in name:
+                    continue
+
+
+                if "新澳门" in name:
+                    continue
+
+
+
+                for line in item.get(
+                    "history",
+                    []
+                ):
+
+
+                    m=re.search(
+                        r"(\d{6,7}).*?([\d,\s，]+)",
+                        line
+                    )
+
+
+                    if not m:
                         continue
-                    for line in item.get("history", []):
-                        m = re.search(r"(\d{6,7})\s*期[：:]\s*([\d，,\s]+)", line)
-                        if not m:
-                            continue
-                        nums = parse_nums(m.group(2))
-                        if len(nums) < 7:
-                            continue
-                        raw_issue = m.group(1)
-                        if len(raw_issue) == 6:
-                            issue_no = f"{raw_issue[:2]}/{int(raw_issue[2:]):03d}"
-                        else:
-                            issue_no = f"{raw_issue[2:4]}/{int(raw_issue[4:]):03d}"
-                        rows.append({
-                            "issue_no": issue_no,
-                            "normal_numbers": nums[:6],
-                            "special_number": nums[6],
-                            "color": get_color(nums[6]),
-                        })
-                if rows:
-                    rows = sorted(rows, key=lambda x: x["issue_no"], reverse=True)
-                    print(f"✅ 获取澳门六合彩 {len(rows)} 期数据，最新: {rows[0]['issue_no']} 特码 {rows[0]['special_number']} → {rows[0]['color']}\n")
-                    return rows[:limit]
+
+
+
+                    nums=parse_nums(
+                        m.group(2)
+                    )
+
+
+                    if len(nums)<7:
+                        continue
+
+
+
+                    issue=m.group(1)
+
+
+                    rows.append({
+
+                        "issue":
+                        issue,
+
+                        "normal":
+                        nums[:6],
+
+                        "special":
+                        nums[6],
+
+                        "color":
+                        get_color(nums[6])
+
+                    })
+
+
+
+            if rows:
+
+                rows.sort(
+                    key=lambda x:x["issue"],
+                    reverse=True
+                )
+
+
+                print(
+                    "获取数据:",
+                    len(rows)
+                )
+
+
+                return rows[:limit]
+
+
+
         except Exception as e:
-            print(f"获取失败 ({attempt+1}/{CONFIG['max_retries']}): {e}")
-            time.sleep(2**attempt + random.random())
-    print("❌ 无法获取澳门数据")
+
+            print(
+                "获取失败:",
+                e
+            )
+
+            time.sleep(2)
+
+
+
     return []
 
-class ConfidenceCalibrator:
-    def __init__(self):
-        self.bins = defaultdict(lambda: [0, 0])
-    def record(self, score_diff, hit):
-        key = round(score_diff / 5) * 5
-        self.bins[key][0] += 1 if hit else 0
-        self.bins[key][1] += 1
-    def get_confidence(self, score_diff):
-        key = round(score_diff / 5) * 5
-        hits, total = self.bins.get(key, (0, 0))
-        if total >= 5:
-            return hits / total * 100
-        all_hits = sum(v[0] for v in self.bins.values())
-        all_total = sum(v[1] for v in self.bins.values())
-        return (all_hits / all_total * 100) if all_total > 0 else 55.0
 
-calibrator = ConfidenceCalibrator()
 
-def professional_predict(train_colors, train_normals, train_specials, miss_streak=0, skip_streak=0, calib=None):
-    if calib is None:
-        calib = calibrator
-    if len(train_colors) < CONFIG["min_train"]:
-        return ["红", "绿"], {c: 50.0 for c in COLORS}, 50, "中", "数据不足", "二色", False, ""
+# =========================================================
+# V8 特征稳定分析
+# =========================================================
 
-    score = defaultdict(float)
 
-    for i, c in enumerate(train_colors[:18]):
-        score[c] += CONFIG["window_18_weight"] * (1 - i/35)
-    for i, c in enumerate(train_colors[:55]):
-        score[c] += CONFIG["window_55_weight"] * (1 - i/110)
-    for i, c in enumerate(train_colors[:150]):
-        score[c] += CONFIG["window_150_weight"] * (1 - i/260)
+class StabilityModel:
 
-    omission = {c: next((i for i, x in enumerate(train_colors) if x == c), len(train_colors)) for c in COLORS}
-    for c in COLORS:
-        score[c] += min(omission[c] * CONFIG["omission_factor"], CONFIG["omission_max"])
 
-    for c in COLORS:
-        positions = [i for i, x in enumerate(train_colors) if x == c]
-        if len(positions) >= 5:
-            intervals = [positions[i] - positions[i-1] for i in range(1, len(positions))]
-            avg = sum(intervals) / len(intervals)
-            curr = positions[0] if positions else len(train_colors)
-            dev = curr - avg
-            if dev > CONFIG["cycle_dev_high"]:
-                score[c] += CONFIG["cycle_score_high"]
-            elif dev > CONFIG["cycle_dev_low"]:
-                score[c] += CONFIG["cycle_score_low"]
+    def monte_carlo(
+        self,
+        scores,
+        times=3000
+    ):
 
-    if len(train_colors) > 1:
-        trans = defaultdict(Counter)
-        for i in range(len(train_colors)-1):
-            trans[train_colors[i+1]][train_colors[i]] += 1
-        last_prev = train_colors[1]
-        if last_prev in trans:
-            total = sum(trans[last_prev].values())
-            for c, v in trans[last_prev].items():
-                score[c] += (v / total) * CONFIG["trans_weight"]
 
-    if train_normals and len(train_normals) > 1:
-        last_norm = train_normals[0]
-        main_color = Counter(get_color(n) for n in last_norm).most_common(1)[0][0]
-        normal_trans = defaultdict(Counter)
-        for i in range(1, len(train_colors)):
-            prev_norm = train_normals[i]
-            prev_main = Counter(get_color(n) for n in prev_norm).most_common(1)[0][0]
-            normal_trans[prev_main][train_colors[i-1]] += 1
-        if main_color in normal_trans:
-            total = sum(normal_trans[main_color].values())
-            if total > 0:
-                for c, v in normal_trans[main_color].items():
-                    score[c] += (v / total) * CONFIG["normal_main_weight"]
+        total={
+            c:0
+            for c in COLORS
+        }
 
-    if CONFIG["szsd_trans_weight"] > 0 and train_specials and len(train_specials) > 1:
-        last_szsd = get_szsd_type(train_specials[0])
-        szsd_trans = defaultdict(Counter)
-        for i in range(1, len(train_colors)):
-            prev_szsd = get_szsd_type(train_specials[i])
-            szsd_trans[prev_szsd][train_colors[i-1]] += 1
-        if last_szsd in szsd_trans:
-            total = sum(szsd_trans[last_szsd].values())
-            if total > 0:
-                for c, v in szsd_trans[last_szsd].items():
-                    score[c] += (v / total) * CONFIG["szsd_trans_weight"]
 
-    if CONFIG["normal_szsd_main_weight"] > 0 and train_normals and len(train_normals) > 1:
-        last_norm_nums = train_normals[0]
-        szsd_counts = Counter(get_szsd_type(n) for n in last_norm_nums)
-        main_szsd = szsd_counts.most_common(1)[0][0]
-        normal_szsd_trans = defaultdict(Counter)
-        for i in range(1, len(train_colors)):
-            prev_norm = train_normals[i]
-            prev_main_szsd = Counter(get_szsd_type(n) for n in prev_norm).most_common(1)[0][0]
-            normal_szsd_trans[prev_main_szsd][train_colors[i-1]] += 1
-        if main_szsd in normal_szsd_trans:
-            total = sum(normal_szsd_trans[main_szsd].values())
-            if total > 0:
-                for c, v in normal_szsd_trans[main_szsd].items():
-                    score[c] += (v / total) * CONFIG["normal_szsd_main_weight"]
-
-    if CONFIG["beast_trans_weight"] > 0 and train_specials and len(train_specials) > 1:
-        last_beast = get_beast_type(train_specials[0])
-        beast_trans = defaultdict(Counter)
-        for i in range(1, len(train_colors)):
-            prev_beast = get_beast_type(train_specials[i])
-            beast_trans[prev_beast][train_colors[i-1]] += 1
-        if last_beast in beast_trans:
-            total = sum(beast_trans[last_beast].values())
-            if total > 0:
-                for c, v in beast_trans[last_beast].items():
-                    score[c] += (v / total) * CONFIG["beast_trans_weight"]
-
-    if CONFIG["normal_beast_main_weight"] > 0 and train_normals and len(train_normals) > 1:
-        last_norm_nums = train_normals[0]
-        beast_counts = Counter(get_beast_type(n) for n in last_norm_nums)
-        main_beast = beast_counts.most_common(1)[0][0]
-        normal_beast_trans = defaultdict(Counter)
-        for i in range(1, len(train_colors)):
-            prev_norm = train_normals[i]
-            prev_main_beast = Counter(get_beast_type(n) for n in prev_norm).most_common(1)[0][0]
-            normal_beast_trans[prev_main_beast][train_colors[i-1]] += 1
-        if main_beast in normal_beast_trans:
-            total = sum(normal_beast_trans[main_beast].values())
-            if total > 0:
-                for c, v in normal_beast_trans[main_beast].items():
-                    score[c] += (v / total) * CONFIG["normal_beast_main_weight"]
-
-    ranked = sorted(score.items(), key=lambda x: x[1], reverse=True)
-    ranked_colors = [c for c, _ in ranked]
-
-    if miss_streak >= 5 or (miss_streak == 4 and max(omission.values()) >= 9):
-        pred_colors = [max(COLORS, key=lambda c: omission[c])]
-        mode = "单色冷补"
-    else:
-        if CONFIG["pred_mode"] == "single":
-            pred_colors = [ranked_colors[0]]
-            mode = "单色"
-        else:
-            pred_colors = ranked_colors[:2]
-            mode = "二色"
-
-    diff = ranked[0][1] - (ranked[1][1] if len(ranked) > 1 else 0)
-    conf_cal = calib.get_confidence(diff)
-    if miss_streak >= 2:
-        conf_cal = min(97, conf_cal + 10)
-    conf = max(52, min(97, conf_cal))
-
-    filter_reason = ""
-    if conf < CONFIG["min_calibrated_confidence"]:
-        filter_reason = f"置信度不足({conf}% < {CONFIG['min_calibrated_confidence']}%)"
-    elif diff < CONFIG["min_score_diff"]:
-        filter_reason = f"得分差不足({diff:.1f} < {CONFIG['min_score_diff']})"
-
-    can_bet = (not filter_reason) or (skip_streak >= CONFIG["max_skip_streak"])
-    if skip_streak >= CONFIG["max_skip_streak"] and filter_reason:
-        filter_reason += "，但连续未投已达上限，强制投注"
-
-    level = "高" if conf >= 80 else "中高" if conf >= 70 else "中" if conf >= 60 else "低"
-    recent30_dom = Counter(train_colors[:30]).most_common(1)[0][1] if len(train_colors) >= 30 else 0
-    state = "极强单边" if recent30_dom >= 13 else "强单边" if recent30_dom >= 9 else "单边" if recent30_dom >= 6 else "均衡"
-    return pred_colors, dict(score), round(conf), level, state, mode, can_bet, filter_reason
-
-def suggest_bet(scores, pred_colors, bankroll=None, conf=50):
-    if bankroll is None:
-        bankroll = CONFIG["bankroll"]
-    if not pred_colors:
-        return {}, 0
-    if conf >= 80:
-        low_ratio, high_ratio = CONFIG["confidence_tiers"]["high"]
-    elif conf >= 70:
-        low_ratio, high_ratio = CONFIG["confidence_tiers"]["mid"]
-    else:
-        low_ratio, high_ratio = CONFIG["confidence_tiers"]["low"]
-    bet = {}
-    if len(pred_colors) == 1:
-        c = pred_colors[0]
-        kelly = max(0, min((1.0 * (CONFIG["odds"][c]-1)) / (CONFIG["odds"][c]-1), 0.24))
-        raw = int(bankroll * kelly / CONFIG["bet_step"]) * CONFIG["bet_step"]
-        bet[c] = max(CONFIG["min_bet_per_color"], min(raw, int(bankroll * 0.25)))
-    else:
-        total_score = sum(scores.get(c, 30) for c in pred_colors)
-        weights = {c: scores.get(c, 30) / total_score for c in pred_colors}
-        for c in pred_colors:
-            kelly = max(0, min((weights[c] * (CONFIG["odds"][c]-1) - (1-weights[c])) / (CONFIG["odds"][c]-1), 0.24))
-            raw = int(bankroll * kelly / CONFIG["bet_step"]) * CONFIG["bet_step"]
-            bet[c] = max(CONFIG["min_bet_per_color"], min(raw, int(bankroll * 0.25)))
-    total_bet = sum(bet.values())
-    max_total = int(bankroll * CONFIG["max_bet_ratio_total"])
-    if total_bet > max_total:
-        scale = max_total / total_bet
-        bet = {c: int(v * scale / CONFIG["bet_step"]) * CONFIG["bet_step"] for c, v in bet.items()}
-        total_bet = sum(bet.values())
-    if total_bet < bankroll * low_ratio and total_bet > 0:
-        target = int(bankroll * low_ratio / CONFIG["bet_step"]) * CONFIG["bet_step"]
-        scale = target / total_bet
-        bet = {c: int(v * scale / CONFIG["bet_step"]) * CONFIG["bet_step"] for c, v in bet.items()}
-    elif total_bet > bankroll * high_ratio:
-        scale = (bankroll * high_ratio) / total_bet
-        bet = {c: int(v * scale / CONFIG["bet_step"]) * CONFIG["bet_step"] for c, v in bet.items()}
-    return bet, sum(bet.values())
-
-def backtest(rows, lookback=200, calib=None):
-    if calib is None:
-        calib = calibrator
-    colors = [r["color"] for r in rows]
-    normals = [r["normal_numbers"] for r in rows]
-    specials = [r["special_number"] for r in rows]
-    n = len(colors)
-    if n < CONFIG["min_train"]:
-        return 0.0, 0, 0.0, []
-    total = min(lookback, n - CONFIG["min_train"])
-    hits = miss_streak = max_miss = skip_streak = 0
-    bankroll = max_bankroll = CONFIG["bankroll"]
-    initial = bankroll
-    details = []
-    for k in range(total):
-        actual = colors[k]
-        hist_colors = colors[k+1:]
-        hist_normals = normals[k+1:]
-        hist_specials = specials[k+1:]
-        pred, scores, conf, _, _, _, can_bet, reason = professional_predict(
-            hist_colors[:CONFIG["train_max_len"]],
-            hist_normals[:CONFIG["train_max_len"]],
-            hist_specials[:CONFIG["train_max_len"]],
-            miss_streak, skip_streak, calib
+        s=sum(
+            max(v,0)
+            for v in scores.values()
         )
-        ok = actual in pred
-        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        diff = sorted_scores[0][1] - (sorted_scores[1][1] if len(sorted_scores) > 1 else 0)
-        calib.record(diff, ok)
-        if can_bet:
-            bet_dict, _ = suggest_bet(scores, pred, bankroll, conf)
-            cost = sum(bet_dict.values())
-            ret = sum(amt * CONFIG["odds"][c] for c, amt in bet_dict.items() if c == actual) if ok else 0
-            bankroll += ret - cost
-            max_bankroll = max(max_bankroll, bankroll)
-            skip_streak = 0
+
+
+        if s<=0:
+
+            return {
+                c:0
+                for c in COLORS
+            }
+
+
+
+        prob={
+
+            c:
+            max(scores.get(c,0),0)
+            /
+            s
+
+            for c in COLORS
+
+        }
+
+
+
+        for _ in range(times):
+
+            r=random.random()
+
+            acc=0
+
+
+            for c,p in prob.items():
+
+                acc+=p
+
+
+                if r<=acc:
+
+                    total[c]+=1
+
+                    break
+
+
+
+        return {
+
+            c:
+            round(
+                total[c]/times*100,
+                2
+            )
+
+            for c in COLORS
+
+        }
+
+
+
+
+stability=StabilityModel()
+# =========================================================
+# V8 连续走势修正
+# =========================================================
+
+
+def streak_adjust(score, colors):
+
+    if len(colors)<5:
+        return score
+
+
+    last=colors[0]
+
+    count=0
+
+    for c in colors:
+
+        if c==last:
+            count+=1
         else:
-            bet_dict = {}
-            skip_streak += 1
-        if ok:
-            hits += 1
-            miss_streak = 0
-        else:
-            miss_streak += 1
-            max_miss = max(max_miss, miss_streak)
-        if k < CONFIG["show_details"]:
-            details.append({
-                "issue": rows[k]["issue_no"],
-                "special_num": rows[k]["special_number"],
-                "pred": pred,
-                "actual": actual,
-                "hit": ok,
-                "conf": conf,
-                "bet": bet_dict,
-                "reason": reason,
-                "miss_streak": miss_streak,
-                "bankroll": round(bankroll, 2),
-            })
-    final_return = (bankroll - initial) / initial * 100 if initial > 0 else 0
-    return hits/total if total>0 else 0, max_miss, final_return, details[::-1]
+            break
 
-def backtest_with_warmup(rows, warmup, test_len, calib):
-    colors = [r["color"] for r in rows]
-    normals = [r["normal_numbers"] for r in rows]
-    specials = [r["special_number"] for r in rows]
-    total = warmup + test_len
-    if len(colors) < total + CONFIG["min_train"]:
-        return 0.0, 0, -999.0
-    miss_streak = 0
-    max_miss = 0
-    skip_streak = 0
-    bankroll = CONFIG["bankroll"]
-    initial = bankroll
-    max_bankroll = bankroll
-    hits_test = 0
-    count_test = 0
-    for k in range(total):
-        actual = colors[k]
-        hist_colors = colors[k+1:]
-        hist_normals = normals[k+1:]
-        hist_specials = specials[k+1:]
-        train_colors = hist_colors[:CONFIG["train_max_len"]]
-        train_normals = hist_normals[:CONFIG["train_max_len"]]
-        train_specials = hist_specials[:CONFIG["train_max_len"]]
-        pred_colors, scores, conf, _, _, _, can_bet, reason = professional_predict(
-            train_colors, train_normals, train_specials, miss_streak, skip_streak, calib
-        )
-        ok = actual in pred_colors
-        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        diff = sorted_scores[0][1] - (sorted_scores[1][1] if len(sorted_scores) > 1 else 0)
-        calib.record(diff, ok)
-        if k >= warmup:
-            count_test += 1
-            if ok:
-                hits_test += 1
-            if can_bet:
-                bet_dict, _ = suggest_bet(scores, pred_colors, bankroll, conf)
-                cost = sum(bet_dict.values())
-                ret = 0
-                if ok:
-                    for c, amt in bet_dict.items():
-                        if c == actual:
-                            ret += amt * CONFIG["odds"][c]
-                bankroll += ret - cost
-                max_bankroll = max(max_bankroll, bankroll)
-                skip_streak = 0
-            else:
-                skip_streak += 1
-        else:
-            if can_bet:
-                skip_streak = 0
-            else:
-                skip_streak += 1
-        if ok:
-            miss_streak = 0
-        else:
-            miss_streak += 1
-            if k >= warmup:
-                max_miss = max(max_miss, miss_streak)
-    hit_rate = hits_test / count_test if count_test > 0 else 0.0
-    final_return = (bankroll - initial) / initial * 100 if initial > 0 else 0
-    return hit_rate, max_miss, final_return
 
-def run_grid_search(rows, force=False):
-    if not force and os.path.exists(LAST_SEARCH_FILE):
-        with open(LAST_SEARCH_FILE, "r") as f:
-            last = f.read().strip()
-            if last:
-                try:
-                    last_date = datetime.strptime(last, "%Y-%m-%d")
-                    if datetime.now() - last_date < timedelta(days=7):
-                        print("距上次搜索不足7天，跳过。如需强制请用 --force-search")
-                        return None
-                except:
-                    pass
-    N = len(rows)
-    min_train = CONFIG["min_train"]
-    available = N - min_train
-    if available < 100:
-        print(f"数据量不足（仅 {N} 期），无法搜索。")
-        return None
-    warmup = min(150, available // 2)
-    test = min(200, available - warmup)
-    if test < 30:
-        test = available - warmup
-        if test < 20:
-            print(f"测试期数太少（{test}），跳过搜索。")
-            return None
-    print(f"澳门优化搜索：预热期 {warmup}，测试期 {test} (最近{test}期)")
-    print("="*60)
-    print("🔍 开始网格搜索（目标：提升最近100期命中率+收益）")
-    print("="*60)
-    search_space = CONFIG["search_space"]
-    keys = list(search_space.keys())
-    combinations = list(product(*search_space.values()))
-    total_combos = len(combinations)
-    print(f"待测试组合: {total_combos} 组\n")
-    best_score = -float("inf")
-    best_params = None
-    original_config = copy.deepcopy(CONFIG)
-    for idx, combo in enumerate(combinations, 1):
-        params = dict(zip(keys, combo))
-        for k, v in params.items():
-            CONFIG[k] = v
-        local_calib = ConfidenceCalibrator()
-        hr, miss, ret = backtest_with_warmup(rows, warmup, test, local_calib)
-        # 综合得分 = 收益 * 0.6 + 命中率 * 40
-        score = ret * 0.6 + hr * 40
-        if score > best_score:
-            best_score = score
-            best_params = params
-        if idx % 30 == 0 or idx == total_combos:
-            print(f"  进度: {idx}/{total_combos}  当前最佳得分: {best_score:.1f}")
-    CONFIG.update(original_config)
-    if best_params:
-        with open(PARAMS_FILE, "w") as f:
-            json.dump(best_params, f, indent=2)
-        with open(LAST_SEARCH_FILE, "w") as f:
-            f.write(datetime.now().strftime("%Y-%m-%d"))
-        print(f"\n✅ 澳门最佳参数已保存至 {PARAMS_FILE}")
-        print(f"   综合得分: {best_score:.1f}")
-        for k, v in best_params.items():
-            print(f"   {k}: {v}")
-        return best_params
-    else:
-        print("❌ 未找到有效参数")
-        return None
+    # 连续过长，降低追涨权重
 
-def load_best_params():
-    if os.path.exists(PARAMS_FILE):
-        with open(PARAMS_FILE, "r") as f:
-            params = json.load(f)
-        print("加载澳门最佳参数：")
-        for k, v in params.items():
-            if k in CONFIG:
-                CONFIG[k] = v
-                print(f"  {k}: {v}")
-        return True
-    else:
-        print("未找到澳门参数文件，使用默认优化配置")
-        return False
+    if count>=4:
 
-# ================== 主程序（自动判断是否需要搜索）==================
-def main():
-    parser = argparse.ArgumentParser(description="澳门六合彩特二色预测（自动调参版）")
-    parser.add_argument("--optimize", action="store_true", help="强制运行网格搜索")
-    parser.add_argument("--force-search", action="store_true", help="强制搜索（忽略时间）")
-    parser.add_argument("--no-auto-search", action="store_true", help="禁止自动搜索，直接预测")
-    args = parser.parse_args()
+        score[last]-=(
+            count-3
+        )*3
 
-    print("获取澳门六合彩数据...")
-    rows = fetch_macau(800)
-    if not rows:
-        return
 
-    # 决定是否需要搜索
-    need_search = args.optimize or args.force_search
-    if not need_search and not args.no_auto_search:
-        if not os.path.exists(PARAMS_FILE):
-            need_search = True
-            print("📡 参数文件不存在，自动启动网格搜索...")
-        elif os.path.exists(LAST_SEARCH_FILE):
-            with open(LAST_SEARCH_FILE, "r") as f:
-                last = f.read().strip()
-                if last:
-                    try:
-                        last_date = datetime.strptime(last, "%Y-%m-%d")
-                        if (datetime.now() - last_date).days >= 7:
-                            need_search = True
-                            print("⏰ 参数已过期（超过7天），自动重新搜索...")
-                    except:
-                        pass
+    return score
 
-    if need_search:
-        run_grid_search(rows, force=args.force_search)
 
-    # 加载参数（如果搜索刚生成了新文件，也会被加载）
-    load_best_params()
 
-    # 预测
-    colors = [r["color"] for r in rows]
-    normals = [r["normal_numbers"] for r in rows]
-    specials = [r["special_number"] for r in rows]
-    latest = rows[0]["issue_no"]
+# =========================================================
+# V8 概率转换
+# =========================================================
 
-    pred_colors, scores, conf, level, state, mode, can_bet, reason = professional_predict(
-        colors, normals, specials
+
+def score_to_probability(score):
+
+
+    total=sum(
+        max(v,0)
+        for v in score.values()
     )
 
-    print(f"\n【澳门六合彩 特二色预测（自动调参版）】")
-    print(f"预测期号: {next_issue(latest)}")
-    print(f"推荐颜色: {'、'.join(pred_colors)}   置信度: {conf}% ({level})  状态: {state}")
-    print(f"投注允许: {'是' if can_bet else '否'}" + (f" → {reason}" if not can_bet else ""))
-    print()
 
-    if can_bet:
-        bet_dict, total_bet = suggest_bet(scores, pred_colors, CONFIG["bankroll"], conf)
-        print("💰 资金建议:")
-        for c, amt in bet_dict.items():
-            print(f"   {c}: {amt}元 (赔率 {CONFIG['odds'][c]})")
-        print(f"   总投注: {total_bet}元\n")
-    else:
-        print("💰 本期无投注建议\n")
+    if total<=0:
 
-    print("🎯 颜色得分:")
+        return {
+            c:33.33
+            for c in COLORS
+        }
+
+
+    return {
+
+        c:
+        round(
+            max(score[c],0)
+            /
+            total*100,
+            2
+        )
+
+        for c in COLORS
+
+    }
+
+
+
+# =========================================================
+# V8核心预测模型
+# =========================================================
+
+
+def professional_predict(
+        train_colors,
+        train_normals,
+        train_specials
+):
+
+
+    if len(train_colors)<CONFIG["min_train"]:
+
+        return (
+            ["红","蓝"],
+            {},
+            {},
+            50,
+            "数据不足"
+        )
+
+
+
+    score={
+        c:0
+        for c in COLORS
+    }
+
+
+
+    # -----------------------------------------------------
+    # 1. 最近走势
+    # -----------------------------------------------------
+
+    for i,c in enumerate(
+        train_colors[:30]
+    ):
+
+        score[c]+=(
+            CONFIG["window_recent"]
+            *
+            (1-i/40)
+        )
+
+
+
+    # -----------------------------------------------------
+    # 2. 中期趋势
+    # -----------------------------------------------------
+
+    for i,c in enumerate(
+        train_colors[:80]
+    ):
+
+        score[c]+=(
+            CONFIG["window_middle"]
+            *
+            (1-i/100)
+        )
+
+
+
+    # -----------------------------------------------------
+    # 3. 长周期平衡
+    # -----------------------------------------------------
+
     for c in COLORS:
-        print(f"   {c}: {scores.get(c,0):.1f}")
-    print()
 
-    hr10, miss10, ret10, _ = backtest(rows, 10)
-    hr100, miss100, ret100, _ = backtest(rows, 100)
-    hr200, miss200, ret200, _ = backtest(rows, 200)
+        cnt=train_colors[:200].count(c)
 
-    print(f"最近10期 命中率: {hr10:.1%} 最大连空: {miss10} 收益: {ret10:+.1f}%")
-    print(f"最近100期 命中率: {hr100:.1%} 最大连空: {miss100} 收益: {ret100:+.1f}%")
-    print(f"最近200期 命中率: {hr200:.1%} 最大连空: {miss200} 收益: {ret200:+.1f}%")
+        avg=200/3
 
-    with open("result.md", "w", encoding="utf-8") as f:
-        f.write("# 澳门六合彩特二色预测报告（自动调参版）\n\n")
-        f.write(f"**预测期号**: {next_issue(latest)}\n\n")
-        f.write(f"**推荐颜色**: {'、'.join(pred_colors)}\n\n")
-        f.write(f"**置信度**: {conf}% ({level})\n\n")
-        f.write(f"**模式**: {mode}\n\n**状态**: {state}\n\n")
-        if can_bet:
-            f.write("## 资金建议\n\n| 颜色 | 投注金额 | 赔率 |\n|------|----------|------|\n")
-            for c, amt in bet_dict.items():
-                f.write(f"| {c} | {amt} 元 | {CONFIG['odds'][c]} |\n")
-            f.write(f"\n**总投注**: {total_bet} 元\n\n")
-        else:
-            f.write(f"**投注建议**: 否 → {reason}\n\n")
-        f.write("## 颜色得分\n\n| 颜色 | 得分 |\n|------|------|\n")
-        for c in COLORS:
-            f.write(f"| {c} | {scores.get(c,0):.1f} |\n")
-        f.write("\n## 回测绩效\n\n")
-        f.write(f"- 最近10期命中率: {hr10:.1%}，最大连空: {miss10}，收益: {ret10:+.1f}%\n")
-        f.write(f"- 最近100期命中率: {hr100:.1%}，最大连空: {miss100}，收益: {ret100:+.1f}%\n")
-        f.write(f"- 最近200期命中率: {hr200:.1%}，最大连空: {miss200}，收益: {ret200:+.1f}%\n")
 
-    print("\n📄 报告已保存至 result.md")
+        if cnt<avg:
 
-if __name__ == "__main__":
+            score[c]+=
+            (
+                avg-cnt
+            )
+
+
+
+    # -----------------------------------------------------
+    # 4. 遗漏周期
+    # -----------------------------------------------------
+
+    for c in COLORS:
+
+
+        miss=0
+
+
+        for x in train_colors:
+
+            if x==c:
+                break
+
+            miss+=1
+
+
+        score[c]+=(
+            min(
+                miss*CONFIG["omission_weight"],
+                15
+            )
+        )
+
+
+
+    # -----------------------------------------------------
+    # 5. 转换模型
+    # -----------------------------------------------------
+
+
+    transition=defaultdict(
+        Counter
+    )
+
+
+    for i in range(
+        len(train_colors)-1
+    ):
+
+        now=train_colors[i]
+
+        nxt=train_colors[i+1]
+
+
+        transition[now][nxt]+=1
+
+
+
+    last=train_colors[0]
+
+
+    if last in transition:
+
+
+        total=sum(
+            transition[last].values()
+        )
+
+
+        for c,v in transition[last].items():
+
+            score[c]+=(
+                v/total
+                *
+                CONFIG["transition_weight"]
+            )
+
+
+
+    # -----------------------------------------------------
+    # 6. 连续走势修正
+    # -----------------------------------------------------
+
+    score=streak_adjust(
+        score,
+        train_colors
+    )
+
+
+
+    # -----------------------------------------------------
+    # 7. 蒙特卡洛稳定检测
+    # -----------------------------------------------------
+
+
+    probability=score_to_probability(
+        score
+    )
+
+
+    stability_result=stability.monte_carlo(
+        score
+    )
+
+
+
+    ranked=sorted(
+        score.items(),
+        key=lambda x:x[1],
+        reverse=True
+    )
+
+
+    best=ranked[0][0]
+
+
+    second=ranked[1][0]
+
+
+
+    # 双色模式
+
+    if abs(
+        ranked[0][1]
+        -
+        ranked[1][1]
+    )<3:
+
+
+        predict=[
+            best,
+            second
+        ]
+
+    else:
+
+        predict=[
+            best
+        ]
+
+
+
+    confidence=max(
+        stability_result.values()
+    )
+
+
+    return (
+
+        predict,
+
+        dict(score),
+
+        probability,
+
+        round(
+            confidence,
+            2
+        ),
+
+        stability_result
+
+    )
+
+
+
+# =========================================================
+# 滚动回测
+# =========================================================
+
+
+def rolling_backtest(
+        rows,
+        rounds=80
+):
+
+
+    colors=[
+        x["color"]
+        for x in rows
+    ]
+
+
+    total=0
+    hit=0
+
+
+    result=[]
+
+
+
+    max_round=min(
+        rounds,
+        len(colors)-50
+    )
+
+
+    for i in range(
+        max_round
+    ):
+
+
+        history=colors[i+1:]
+
+
+        pred,score,prob,conf,stab=professional_predict(
+
+            history[:420],
+
+            [],
+
+            []
+
+        )
+
+
+        actual=colors[i]
+
+
+        ok=actual in pred
+
+
+        total+=1
+
+
+        if ok:
+
+            hit+=1
+
+
+
+        result.append({
+
+            "actual":
+            actual,
+
+            "predict":
+            pred,
+
+            "confidence":
+            conf,
+
+            "hit":
+            ok
+
+        })
+
+
+
+    rate=(
+        hit/total
+        if total
+        else 0
+    )
+
+
+    return rate,result
+    # =========================================================
+# V8 自动参数搜索
+# =========================================================
+
+
+def evaluate_config(
+        rows
+):
+
+    rate,_=rolling_backtest(
+        rows,
+        rounds=80
+    )
+
+    return rate
+
+
+
+def run_grid_search(
+        rows
+):
+
+
+    print(
+        "\n开始V8自动参数搜索..."
+    )
+
+
+    keys=list(
+        CONFIG["search_space"].keys()
+    )
+
+
+    values=list(
+        CONFIG["search_space"].values()
+    )
+
+
+    combos=list(
+        product(*values)
+    )
+
+
+    best_score=-1
+
+    best_params=None
+
+
+
+    old=copy.deepcopy(CONFIG)
+
+
+
+    for index,combo in enumerate(
+        combos,
+        1
+    ):
+
+
+        params=dict(
+            zip(
+                keys,
+                combo
+            )
+        )
+
+
+        for k,v in params.items():
+
+            CONFIG[k]=v
+
+
+
+        score=evaluate_config(
+            rows
+        )
+
+
+
+        if score>best_score:
+
+            best_score=score
+
+            best_params=params.copy()
+
+
+
+        print(
+            f"{index}/{len(combos)}",
+            "命中率:",
+            f"{score:.2%}"
+        )
+
+
+
+    CONFIG.update(old)
+
+
+
+    if best_params:
+
+
+        with open(
+            PARAM_FILE,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
+            json.dump(
+                best_params,
+                f,
+                ensure_ascii=False,
+                indent=2
+            )
+
+
+
+        print(
+            "\n最佳参数:"
+        )
+
+        print(
+            best_params
+        )
+
+        print(
+            "历史测试:",
+            f"{best_score:.2%}"
+        )
+
+
+        return best_params
+
+
+
+    return None
+
+
+
+
+# =========================================================
+# 加载参数
+# =========================================================
+
+
+def load_params():
+
+
+    if not os.path.exists(
+        PARAM_FILE
+    ):
+
+        return False
+
+
+
+    try:
+
+
+        with open(
+            PARAM_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            data=json.load(f)
+
+
+
+        for k,v in data.items():
+
+            if k in CONFIG:
+
+                CONFIG[k]=v
+
+
+
+        print(
+            "已加载最佳参数"
+        )
+
+
+        return True
+
+
+    except:
+
+
+        return False
+
+
+
+
+# =========================================================
+# 输出报告
+# =========================================================
+
+
+def save_report(
+        issue,
+        pred,
+        prob,
+        conf,
+        stab,
+        rate
+):
+
+
+    with open(
+        "result.md",
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+
+
+        f.write(
+            "# 澳门颜色分析 V8\n\n"
+        )
+
+
+        f.write(
+            f"预测期号: {issue}\n\n"
+        )
+
+
+        f.write(
+            "## 推荐颜色\n\n"
+        )
+
+
+        f.write(
+            "、".join(pred)
+            +
+            "\n\n"
+        )
+
+
+        f.write(
+            "## 概率评分\n\n"
+        )
+
+
+        for c,p in prob.items():
+
+            f.write(
+                f"{c}: {p}%\n"
+            )
+
+
+        f.write(
+            "\n## 稳定检测\n\n"
+        )
+
+
+        for c,p in stab.items():
+
+            f.write(
+                f"{c}: {p}%\n"
+            )
+
+
+
+        f.write(
+            "\n## 回测\n\n"
+        )
+
+
+        f.write(
+            f"滚动命中率: {rate:.2%}\n"
+        )
+
+
+
+# =========================================================
+# 主程序
+# =========================================================
+
+
+def main():
+
+
+    parser=argparse.ArgumentParser()
+
+
+    parser.add_argument(
+        "--search",
+        action="store_true"
+    )
+
+
+    args=parser.parse_args()
+
+
+
+    print(
+        "正在获取澳门历史数据..."
+    )
+
+
+
+    rows=fetch_macau(
+        800
+    )
+
+
+
+    if not rows:
+
+        print(
+            "无数据"
+        )
+
+        return
+
+
+
+    if args.search or not os.path.exists(
+        PARAM_FILE
+    ):
+
+        run_grid_search(
+            rows
+        )
+
+
+
+    load_params()
+
+
+
+    colors=[
+        x["color"]
+        for x in rows
+    ]
+
+
+
+    normals=[
+        x["normal"]
+        for x in rows
+    ]
+
+
+    specials=[
+        x["special"]
+        for x in rows
+    ]
+
+
+
+    pred,score,prob,conf,stab=professional_predict(
+
+        colors,
+
+        normals,
+
+        specials
+
+    )
+
+
+
+    rate,_=rolling_backtest(
+        rows,
+        100
+    )
+
+
+
+    latest=rows[0]["issue"]
+
+
+
+    print("\n===================")
+
+    print(
+        "预测期:",
+        next_issue(latest)
+    )
+
+    print(
+        "推荐:",
+        "、".join(pred)
+    )
+
+    print(
+        "概率:",
+        prob
+    )
+
+    print(
+        "稳定度:",
+        stab
+    )
+
+    print(
+        "历史测试:",
+        f"{rate:.2%}"
+    )
+
+    print(
+        "===================\n"
+    )
+
+
+
+    save_report(
+
+        next_issue(latest),
+
+        pred,
+
+        prob,
+
+        conf,
+
+        stab,
+
+        rate
+
+    )
+
+
+
+if __name__=="__main__":
+
     main()
