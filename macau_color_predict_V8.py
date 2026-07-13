@@ -2,97 +2,106 @@
 # -*- coding: utf-8 -*-
 
 """
-澳门六合彩 V8 PRO
+澳门六合彩颜色 + 半波 + 半半波预测 V8.1
 
-功能：
-1. 特码颜色预测
+新增:
+1. 颜色预测
 2. 半波预测
 3. 半半波预测
-4. 正码辅助分析
-5. 自动调参
-6. 滚动回测
+4. 三层融合模型
+5. 独立回测统计
+6. 自动调参
 7. GitHub Actions兼容
-
 """
 
-import argparse
-import copy
+import os
+import re
 import json
 import math
-import os
-import random
-import re
 import time
+import random
+import copy
+import gzip
 import urllib.request
+import argparse
 
 from collections import Counter, defaultdict
 from itertools import product
 from datetime import datetime
 
 
-
 # =====================================================
-# 全局配置
+# 配置
 # =====================================================
-
 
 CONFIG = {
 
 
+    # 三层融合权重
+
+    "color_weight": 0.35,
+
+    "half_weight": 0.35,
+
+    "halfhalf_weight": 0.30,
+
+
+
+    # 最近走势
+
+    "recent_weight": 8.0,
+
+    "medium_weight": 3.0,
+
+    "long_weight": 1.0,
+
+
+
+    # 遗漏
+
+    "omission_weight": 1.2,
+
+
+
+    # 转换
+
+    "transition_weight": 6.0,
+
+
+
+    # 半波
+
+    "half_recent_weight": 6.0,
+
+    "half_transition_weight": 5.0,
+
+
+
+    # 半半波
+
+    "halfhalf_recent_weight": 7.0,
+
+    "halfhalf_transition_weight": 6.0,
+
+
+
+    # 数据
+
     "api_url":
+
     "https://marksix6.net/index.php?api=1",
+
+
+    "max_retry":6,
 
 
     "timeout":30,
 
 
-    "retry":5,
+    "min_train":30,
 
 
-    # 数据
-
-    "train_length":420,
-
-    "min_train":50,
-
-
-    # 综合权重
-
-    "color_weight":0.45,
-
-    "half_weight":0.30,
-
-    "half_half_weight":0.25,
-
-
-
-    # 颜色模型
-
-    "recent_weight":8.0,
-
-    "medium_weight":3.0,
-
-    "long_weight":1.0,
-
-    "omission_weight":1.2,
-
-    "transition_weight":8.0,
-
-
-
-    # 半波模型
-
-    "half_recent_weight":6.0,
-
-    "half_transition_weight":5.0,
-
-
-
-    # 半半波模型
-
-    "halfhalf_recent_weight":6.0,
-
-    "halfhalf_transition_weight":5.0,
+    "bankroll":10000,
 
 
 
@@ -102,6 +111,8 @@ CONFIG = {
 
 
         "color_weight":[
+
+            0.25,
 
             0.35,
 
@@ -118,20 +129,25 @@ CONFIG = {
 
             0.30,
 
-            0.35
+            0.35,
+
+            0.45
 
         ],
 
 
-        "half_half_weight":[
+        "halfhalf_weight":[
 
             0.15,
 
             0.25,
 
-            0.30
+            0.30,
+
+            0.40
 
         ]
+
 
     }
 
@@ -139,10 +155,9 @@ CONFIG = {
 
 
 
-PARAM_FILE = "macau_v8_pro_params.json"
+PARAM_FILE="macau_best_params.json"
 
-REPORT_FILE = "result.md"
-
+REPORT_FILE="result.md"
 
 
 
@@ -153,46 +168,41 @@ REPORT_FILE = "result.md"
 
 RED={
 
-1,2,7,8,
+1,2,7,8,12,13,
 
-12,13,18,19,
+18,19,23,24,
 
-23,24,29,30,
+29,30,34,35,
 
-34,35,40,45,46
+40,45,46
 
 }
-
 
 
 BLUE={
 
 3,4,9,10,
 
-14,15,20,
+14,15,20,25,
 
-25,26,31,
+26,31,36,37,
 
-36,37,41,
-
-42,47,48
+41,42,47,48
 
 }
-
 
 
 GREEN={
 
-5,6,11,
+5,6,11,16,
 
-16,17,21,22,
+17,21,22,27,
 
-27,28,32,33,
+28,32,33,38,
 
-38,39,43,44,49
+39,43,44,49
 
 }
-
 
 
 COLORS=[
@@ -207,27 +217,105 @@ COLORS=[
 
 
 
+# =====================================================
+# 半波定义
+# =====================================================
+
+
+HALF_WAVES=[]
+
+
+for c in COLORS:
+
+
+    for size in [
+
+        "大",
+
+        "小"
+
+    ]:
+
+
+        HALF_WAVES.append(
+
+            c+size
+
+        )
+
+
+    for oe in [
+
+        "单",
+
+        "双"
+
+    ]:
+
+
+        HALF_WAVES.append(
+
+            c+oe
+
+        )
+
 
 
 # =====================================================
-# 基础属性
+# 半半波定义
+# =====================================================
+
+
+HALF_HALF_WAVES=[]
+
+
+for c in COLORS:
+
+
+    for size in [
+
+        "大",
+
+        "小"
+
+    ]:
+
+
+        for oe in [
+
+            "单",
+
+            "双"
+
+        ]:
+
+
+            HALF_HALF_WAVES.append(
+
+                c+size+oe
+
+            )
+
+
+
+# =====================================================
+# 基础函数
 # =====================================================
 
 
 def get_color(num):
-
 
     if num in RED:
 
         return "红"
 
 
-    elif num in BLUE:
+    if num in BLUE:
 
         return "蓝"
 
 
-    elif num in GREEN:
+    if num in GREEN:
 
         return "绿"
 
@@ -237,78 +325,56 @@ def get_color(num):
 
 
 
-
 def get_size(num):
 
+    return (
 
-    if num>=25:
+        "小"
 
-        return "大"
+        if num<=24
 
+        else
 
-    return "小"
+        "大"
 
-
-
-
-
-def get_odd_even(num):
-
-
-    if num%2==0:
-
-        return "双"
-
-
-    return "单"
+    )
 
 
 
 
+def get_oe(num):
 
-# =====================================================
-# 半波
-# 颜色 + 大小/单双
-# =====================================================
+    return (
 
+        "单"
 
-def get_half_wave(num):
+        if num%2
 
+        else
 
-    color=get_color(num)
+        "双"
 
-
-    size=get_size(num)
-
-
-    odd=get_odd_even(num)
-
-
-
-    return [
-
-        color+"大",
-
-        color+"小",
-
-        color+"单",
-
-        color+"双"
-
-    ]
+    )
 
 
 
 
+def get_half(num):
 
-# =====================================================
-# 半半波
-# 颜色 + 大小 + 单双
-# =====================================================
+    return (
+
+        get_color(num)
+
+        +
+
+        get_size(num)
+
+    )
 
 
-def get_half_half_wave(num):
 
+
+def get_halfhalf(num):
 
     return (
 
@@ -320,77 +386,35 @@ def get_half_half_wave(num):
 
         +
 
-        get_odd_even(num)
+        get_oe(num)
 
     )
-
-
-
-
-
-# =====================================================
-# 特码完整属性
-# =====================================================
-
-
-def get_attributes(num):
-
-
-    return {
-
-
-        "color":
-
-        get_color(num),
-
-
-
-        "half_half":
-
-        get_half_half_wave(num),
-
-
-
-        "size":
-
-        get_size(num),
-
-
-
-        "odd_even":
-
-        get_odd_even(num)
-
-    }
     # =====================================================
-# 数据解析
+# 数据获取
 # =====================================================
 
 
-def parse_numbers(text):
-
-    nums=[]
-
-    for x in re.findall(
-        r"\d+",
-        text
-    ):
-
-        n=int(x)
-
-        if 1<=n<=49:
-
-            nums.append(n)
+def parse_nums(value):
 
 
-    return nums
+    return [
+
+        int(x)
+
+        for x in re.findall(
+
+            r"\d+",
+
+            value
+
+        )
+
+        if 1 <= int(x) <= 49
+
+    ]
 
 
 
-
-# =====================================================
-# 获取澳门历史数据
-# =====================================================
 
 
 def fetch_macau(limit=800):
@@ -399,6 +423,7 @@ def fetch_macau(limit=800):
     headers={
 
         "User-Agent":
+
         "Mozilla/5.0"
 
     }
@@ -406,7 +431,9 @@ def fetch_macau(limit=800):
 
 
     for retry in range(
-        CONFIG["retry"]
+
+        CONFIG["max_retry"]
+
     ):
 
 
@@ -429,63 +456,57 @@ def fetch_macau(limit=800):
 
                 timeout=CONFIG["timeout"]
 
-            ) as response:
+            ) as resp:
 
 
-                data=response.read()
+                raw=resp.read()
 
 
 
-            json_data=json.loads(
+                if (
 
-                data.decode(
-                    "utf-8"
+                    "gzip"
+
+                    in
+
+                    resp.headers.get(
+
+                        "Content-Encoding",
+
+                        ""
+
+                    )
+
+                ):
+
+
+                    raw=gzip.decompress(
+
+                        raw
+
+                    )
+
+
+
+                data=json.loads(
+
+                    raw.decode(
+
+                        "utf-8"
+
+                    )
+
                 )
 
-            )
+
+
+                rows=[]
 
 
 
-            rows=[]
+                for item in data.get(
 
-
-
-            for item in json_data.get(
-
-                "lottery_data",
-
-                []
-
-            ):
-
-
-
-                name=item.get(
-
-                    "name",
-
-                    ""
-
-                )
-
-
-
-                if "澳门" not in name:
-
-                    continue
-
-
-
-                if "新澳门" in name:
-
-                    continue
-
-
-
-
-                for line in item.get(
-
-                    "history",
+                    "lottery_data",
 
                     []
 
@@ -493,82 +514,102 @@ def fetch_macau(limit=800):
 
 
 
-                    nums=parse_numbers(
+                    name=item.get(
 
-                        line
+                        "name",
+
+                        ""
 
                     )
 
 
 
-                    if len(nums)<7:
+                    if "澳门" not in name:
 
                         continue
 
 
 
-                    rows.append({
+                    for line in item.get(
 
+                        "history",
 
-                        "issue":
+                        []
 
-                        line[:10],
-
-
-
-                        "normal":
-
-                        nums[:6],
+                    ):
 
 
 
-                        "special":
+                        nums=parse_nums(
 
-                        nums[6],
+                            line
 
-
-
-                        "color":
-
-                        get_color(nums[6]),
+                        )
 
 
 
-                        "half_half":
+                        if len(nums)<7:
 
-                        get_half_half_wave(nums[6])
-
-
-                    })
+                            continue
 
 
 
-
-            if rows:
-
-
-                rows.sort(
-
-                    key=lambda x:x["issue"],
-
-                    reverse=True
-
-                )
+                        rows.append({
 
 
-                print(
+                            "issue":
 
-                    "获取澳门数据:",
+                            str(
 
-                    len(rows),
+                                line[:8]
 
-                    "期"
-
-                )
+                            ),
 
 
 
-                return rows[:limit]
+                            "numbers":
+
+                            nums[:6],
+
+
+
+                            "special":
+
+                            nums[6],
+
+
+
+                            "color":
+
+                            get_color(
+
+                                nums[6]
+
+                            )
+
+                        })
+
+
+
+                if rows:
+
+
+                    rows=rows[:limit]
+
+
+
+                    print(
+
+                        "获取澳门数据:",
+
+                        len(rows),
+
+                        "期"
+
+                    )
+
+
+                    return rows
 
 
 
@@ -577,14 +618,18 @@ def fetch_macau(limit=800):
 
             print(
 
-                "数据获取失败",
+                "获取失败",
 
                 e
 
             )
 
 
-            time.sleep(2)
+            time.sleep(
+
+                retry+1
+
+            )
 
 
 
@@ -595,83 +640,7 @@ def fetch_macau(limit=800):
 
 
 # =====================================================
-# 半波定义
-# =====================================================
-
-
-HALF_WAVES=[
-
-"红大",
-
-"红小",
-
-"红单",
-
-"红双",
-
-"蓝大",
-
-"蓝小",
-
-"蓝单",
-
-"蓝双",
-
-"绿大",
-
-"绿小",
-
-"绿单",
-
-"绿双"
-
-]
-
-
-
-
-# =====================================================
-# 半半波定义
-# =====================================================
-
-
-HALF_HALF_WAVES=[
-
-
-"红大单",
-
-"红大双",
-
-"红小单",
-
-"红小双",
-
-
-"蓝大单",
-
-"蓝大双",
-
-"蓝小单",
-
-"蓝小双",
-
-
-"绿大单",
-
-"绿大双",
-
-"绿小单",
-
-"绿小双"
-
-]
-
-
-
-
-
-# =====================================================
-# 属性统计基础类
+# 属性统计
 # =====================================================
 
 
@@ -683,49 +652,49 @@ class AttributeCounter:
 
         self,
 
-        values,
+        history,
 
-        target_list,
+        attrs,
 
         weight=1
 
     ):
 
 
-        score={
+        result={
 
-            x:0
+            a:0
 
-            for x in target_list
+            for a in attrs
 
         }
 
 
 
-        for i,v in enumerate(
+        for i,x in enumerate(
 
-            values[:50]
+            history[:50]
 
         ):
 
 
+            if x in result:
 
-            if v in score:
 
-
-                score[v]+= (
+                result[x]+= (
 
                     weight
 
                     *
 
-                    (1-i/60)
+                    (1-i/50)
 
                 )
 
 
 
-        return score
+        return result
+
 
 
 
@@ -734,34 +703,28 @@ class AttributeCounter:
 
         self,
 
-        values,
+        history,
 
-        target_list
+        attrs
 
     ):
 
 
-        score={
-
-            x:0
-
-            for x in target_list
-
-        }
+        result={}
 
 
 
-        for t in target_list:
+        for a in attrs:
 
 
             miss=0
 
 
 
-            for v in values:
+            for x in history:
 
 
-                if v==t:
+                if x==a:
 
                     break
 
@@ -770,17 +733,11 @@ class AttributeCounter:
 
 
 
-            score[t]=min(
-
-                miss*1.2,
-
-                15
-
-            )
+            result[a]=miss
 
 
 
-        return score
+        return result
 
 
 
@@ -788,14 +745,22 @@ class AttributeCounter:
 
 attribute_counter=AttributeCounter()
 # =====================================================
-# 颜色趋势模型
+# 颜色预测引擎
 # =====================================================
 
 
 class ColorEngine:
 
 
-    def predict(self, colors):
+
+    def predict(
+
+        self,
+
+        colors
+
+    ):
+
 
 
         score={
@@ -808,7 +773,9 @@ class ColorEngine:
 
 
 
-        # 最近走势
+
+        # 最近50期趋势
+
 
         for i,c in enumerate(
 
@@ -823,13 +790,16 @@ class ColorEngine:
 
                 *
 
-                (1-i/60)
+                (1-i/50)
 
             )
 
 
 
-        # 中期走势
+
+
+        # 最近150期趋势
+
 
         for i,c in enumerate(
 
@@ -844,39 +814,16 @@ class ColorEngine:
 
                 *
 
-                (1-i/180)
+                (1-i/150)
 
             )
 
 
 
-        # 长期平衡
-
-        for c in COLORS:
 
 
-            count=colors[:400].count(c)
+        # 遗漏补偿
 
-
-            diff=(
-
-                len(colors[:400])/3
-
-                -
-
-                count
-
-            )
-
-
-            if diff>0:
-
-                score[c]+=diff*CONFIG["long_weight"]
-
-
-
-
-        # 遗漏
 
         miss=attribute_counter.omission(
 
@@ -887,19 +834,31 @@ class ColorEngine:
         )
 
 
+
         for c,v in miss.items():
 
-            score[c]+=v*CONFIG["omission_weight"]
+            score[c]+= (
+
+                v
+
+                *
+
+                CONFIG["omission_weight"]
+
+            )
 
 
 
 
-        # 转换
+
+        # 转换关系
+
 
         if len(colors)>5:
 
 
-            table=defaultdict(
+
+            trans=defaultdict(
 
                 Counter
 
@@ -913,7 +872,8 @@ class ColorEngine:
 
             ):
 
-                table[
+
+                trans[
 
                     colors[i]
 
@@ -926,22 +886,24 @@ class ColorEngine:
 
 
 
+
             last=colors[0]
 
 
 
-            if last in table:
+            if last in trans:
+
 
 
                 total=sum(
 
-                    table[last].values()
+                    trans[last].values()
 
                 )
 
 
-                for c,v in table[last].items():
 
+                for c,v in trans[last].items():
 
                     score[c]+= (
 
@@ -952,6 +914,7 @@ class ColorEngine:
                         CONFIG["transition_weight"]
 
                     )
+
 
 
 
@@ -968,7 +931,7 @@ color_engine=ColorEngine()
 
 
 # =====================================================
-# 半波模型
+# 半波预测引擎
 # =====================================================
 
 
@@ -980,9 +943,10 @@ class HalfWaveEngine:
 
         self,
 
-        half_history
+        history
 
     ):
+
 
 
         score={
@@ -995,12 +959,11 @@ class HalfWaveEngine:
 
 
 
-        # 最近半波走势
 
 
         recent=attribute_counter.count_recent(
 
-            half_history,
+            history,
 
             HALF_WAVES,
 
@@ -1016,12 +979,11 @@ class HalfWaveEngine:
 
 
 
-        # 半波遗漏
 
 
         miss=attribute_counter.omission(
 
-            half_history,
+            history,
 
             HALF_WAVES
 
@@ -1031,7 +993,16 @@ class HalfWaveEngine:
 
         for h,v in miss.items():
 
-            score[h]+=v
+            score[h]+= (
+
+                v
+
+                *
+
+                0.8
+
+            )
+
 
 
 
@@ -1039,7 +1010,8 @@ class HalfWaveEngine:
         # 半波转换
 
 
-        if len(half_history)>5:
+        if len(history)>5:
+
 
 
             trans=defaultdict(
@@ -1052,28 +1024,31 @@ class HalfWaveEngine:
 
             for i in range(
 
-                len(half_history)-1
+                len(history)-1
 
             ):
 
 
                 trans[
 
-                    half_history[i]
+                    history[i]
 
                 ][
 
-                    half_history[i+1]
+                    history[i+1]
 
                 ]+=1
 
 
 
-            last=half_history[0]
+
+
+            last=history[0]
 
 
 
             if last in trans:
+
 
 
                 total=sum(
@@ -1081,6 +1056,7 @@ class HalfWaveEngine:
                     trans[last].values()
 
                 )
+
 
 
                 for h,v in trans[last].items():
@@ -1098,6 +1074,7 @@ class HalfWaveEngine:
 
 
 
+
         return score
 
 
@@ -1106,7 +1083,7 @@ class HalfWaveEngine:
 
 half_engine=HalfWaveEngine()
 # =====================================================
-# 半半波模型
+# 半半波预测引擎
 # =====================================================
 
 
@@ -1123,6 +1100,7 @@ class HalfHalfWaveEngine:
     ):
 
 
+
         score={
 
             h:0
@@ -1133,7 +1111,10 @@ class HalfHalfWaveEngine:
 
 
 
+
+
         # 最近走势
+
 
         recent=attribute_counter.count_recent(
 
@@ -1154,7 +1135,8 @@ class HalfHalfWaveEngine:
 
 
 
-        # 遗漏补偿
+
+        # 遗漏
 
 
         miss=attribute_counter.omission(
@@ -1169,7 +1151,17 @@ class HalfHalfWaveEngine:
 
         for h,v in miss.items():
 
-            score[h]+=v
+            score[h]+= (
+
+                v
+
+                *
+
+                0.8
+
+            )
+
+
 
 
 
@@ -1181,7 +1173,8 @@ class HalfHalfWaveEngine:
         if len(history)>5:
 
 
-            table=defaultdict(
+
+            trans=defaultdict(
 
                 Counter
 
@@ -1196,7 +1189,7 @@ class HalfHalfWaveEngine:
             ):
 
 
-                table[
+                trans[
 
                     history[i]
 
@@ -1209,22 +1202,24 @@ class HalfHalfWaveEngine:
 
 
 
+
             last=history[0]
 
 
 
-            if last in table:
+            if last in trans:
 
 
                 total=sum(
 
-                    table[last].values()
+                    trans[last].values()
 
                 )
 
 
 
-                for h,v in table[last].items():
+                for h,v in trans[last].items():
+
 
                     score[h]+= (
 
@@ -1251,7 +1246,7 @@ halfhalf_engine=HalfHalfWaveEngine()
 
 
 # =====================================================
-# 综合融合模型
+# 三层融合模型
 # =====================================================
 
 
@@ -1273,24 +1268,22 @@ class FusionEngine:
 
 
 
-        final={
+        result={
 
-            "红":0,
+            c:0
 
-            "蓝":0,
-
-            "绿":0
+            for c in COLORS
 
         }
 
 
 
-        # 颜色直接贡献
+        # 颜色层
 
 
         for c,v in color_score.items():
 
-            final[c]+= (
+            result[c]+= (
 
                 v
 
@@ -1303,18 +1296,21 @@ class FusionEngine:
 
 
 
-        # 半波贡献转换到颜色
+
+        # 半波层
 
 
         for h,v in half_score.items():
 
 
-            color=h[0]
+            c=h[0]
 
 
-            if color in final:
 
-                final[color]+= (
+            if c in result:
+
+
+                result[c]+= (
 
                     v
 
@@ -1328,65 +1324,65 @@ class FusionEngine:
 
 
 
-        # 半半波贡献
+        # 半半波层
 
 
         for h,v in halfhalf_score.items():
 
 
-            color=h[0]
+            c=h[0]
 
 
-            if color in final:
 
-                final[color]+= (
+            if c in result:
+
+
+                result[c]+= (
 
                     v
 
                     *
 
-                    CONFIG["half_half_weight"]
+                    CONFIG["halfhalf_weight"]
 
                 )
 
 
 
-        return final
+        return result
 
 
 
 
 
 fusion_engine=FusionEngine()
-
-
-
-
-
 # =====================================================
 # 概率计算
 # =====================================================
 
 
-def probability(score):
+def calc_probability(score):
 
 
-    total = sum(
+    total=sum(
 
-        max(value,0)
+        max(v,0)
 
-        for value in score.values()
+        for v in score.values()
 
     )
 
 
-    if total <= 0:
+
+    if total<=0:
+
 
         return {
 
-            c:33.33
 
-            for c in COLORS
+            k:33.33
+
+            for k in score.keys()
 
         }
 
@@ -1395,35 +1391,7 @@ def probability(score):
     return {
 
 
-        c:
-
-        round(
-
-            max(score.get(c,0),0)
-
-            /
-
-            total
-
-            *
-
-            100,
-
-            2
-
-        )
-
-
-        for c in COLORS
-
-    }
-
-
-
-    return {
-
-
-        c:
+        k:
 
         round(
 
@@ -1442,25 +1410,45 @@ def probability(score):
         )
 
 
-        for c in COLORS
+        for k,v in score.items()
 
     }
-    # =====================================================
-# V8 PRO 核心预测
+
+
+
+
+
+# =====================================================
+# 排名工具
 # =====================================================
 
 
-def predict_v8(rows):
+def ranking(score,limit=5):
 
 
-    colors=[
+    return sorted(
 
-        x["color"]
+        score.items(),
 
-        for x in rows
+        key=lambda x:x[1],
 
-    ]
+        reverse=True
 
+    )[:limit]
+
+
+
+
+
+# =====================================================
+# 核心预测
+# =====================================================
+
+
+def predict_v81(rows):
+
+
+    colors=[]
 
     half_history=[]
 
@@ -1468,37 +1456,38 @@ def predict_v8(rows):
 
 
 
-    for x in rows:
+    for r in rows:
 
 
-        num=x["special"]
-
-
-        attrs=get_attributes(num)
+        num=r["special"]
 
 
 
-        # 半波展开
+        colors.append(
 
-        half_history.append(
-
-            attrs["color"]
-
-            +
-
-            attrs["size"]
+            r["color"]
 
         )
 
+
+        half_history.append(
+
+            get_half(num)
+
+        )
 
 
         halfhalf_history.append(
 
-            attrs["half_half"]
+            get_halfhalf(num)
 
         )
 
 
+
+
+
+    # 三层计算
 
 
     color_score=color_engine.predict(
@@ -1526,7 +1515,7 @@ def predict_v8(rows):
 
 
 
-    final_score=fusion_engine.merge(
+    fusion_score=fusion_engine.merge(
 
         color_score,
 
@@ -1538,60 +1527,62 @@ def predict_v8(rows):
 
 
 
-    probs=probability(
-
-        final_score
-
-    )
 
 
+    color_probability=calc_probability(
 
-    ranking=sorted(
-
-        final_score.items(),
-
-        key=lambda x:x[1],
-
-        reverse=True
+        fusion_score
 
     )
 
 
 
-    # 默认取最高颜色
+    half_probability=calc_probability(
 
-    recommend=[
+        half_score
 
-        ranking[0][0]
-
-    ]
+    )
 
 
 
-    # 分差小自动双色
+    halfhalf_probability=calc_probability(
 
-    if len(ranking)>1:
+        halfhalf_score
 
-
-        diff=(
-
-            ranking[0][1]
-
-            -
-
-            ranking[1][1]
-
-        )
+    )
 
 
-        if diff<5:
 
 
-            recommend.append(
 
-                ranking[1][0]
+    color_rank=ranking(
 
-            )
+        fusion_score,
+
+        3
+
+    )
+
+
+
+    half_rank=ranking(
+
+        half_score,
+
+        5
+
+    )
+
+
+
+    halfhalf_rank=ranking(
+
+        halfhalf_score,
+
+        8
+
+    )
+
 
 
 
@@ -1599,58 +1590,99 @@ def predict_v8(rows):
     return {
 
 
-        "color":
+        "color_rank":
 
-        recommend,
-
-
-        "color_score":
-
-        final_score,
+        color_rank,
 
 
-        "probability":
 
-        probs,
+        "half_rank":
 
-
-        "half":
-
-        sorted(
-
-            half_score.items(),
-
-            key=lambda x:x[1],
-
-            reverse=True
-
-        )[:3],
+        half_rank,
 
 
-        "half_half":
 
-        sorted(
+        "halfhalf_rank":
 
-            halfhalf_score.items(),
+        halfhalf_rank,
 
-            key=lambda x:x[1],
 
-            reverse=True
 
-        )[:5]
+        "color_probability":
+
+        color_probability,
+
+
+
+        "half_probability":
+
+        half_probability,
+
+
+
+        "halfhalf_probability":
+
+        halfhalf_probability,
+
+
+
+        "fusion_score":
+
+        fusion_score
 
     }
+    # =====================================================
+# 半波命中判断
+# =====================================================
+
+
+def check_half_hit(
+
+    predict_list,
+
+    num
+
+):
+
+
+    target=get_half(num)
+
+
+    return target in predict_list
 
 
 
 
 
 # =====================================================
-# 回测
+# 半半波命中判断
 # =====================================================
 
 
-def backtest(
+def check_halfhalf_hit(
+
+    predict_list,
+
+    num
+
+):
+
+
+    target=get_halfhalf(num)
+
+
+    return target in predict_list
+
+
+
+
+
+# =====================================================
+# 三层回测
+# =====================================================
+
+
+def backtest_v81(
 
     rows,
 
@@ -1659,7 +1691,15 @@ def backtest(
 ):
 
 
-    hit=0
+    color_hit=0
+
+    half_hit=0
+
+    halfhalf_hit=0
+
+    fusion_hit=0
+
+
 
     total=0
 
@@ -1680,15 +1720,15 @@ def backtest(
 
 
 
-    for i in range(max_test):
 
+    for i in range(max_test):
 
 
         history=rows[i+1:]
 
 
 
-        result=predict_v8(
+        result=predict_v81(
 
             history
 
@@ -1696,19 +1736,135 @@ def backtest(
 
 
 
-        actual=rows[i]["color"]
+        actual=rows[i]
 
 
 
-        ok=(
+        actual_color=actual["color"]
 
-            actual
+
+
+        actual_num=actual["special"]
+
+
+
+
+
+        # 颜色TOP1
+
+
+        color_predict=[
+
+            x[0]
+
+            for x in result["color_rank"][:1]
+
+        ]
+
+
+
+        # 半波TOP2
+
+
+        half_predict=[
+
+            x[0]
+
+            for x in result["half_rank"][:2]
+
+        ]
+
+
+
+        # 半半波TOP3
+
+
+        halfhalf_predict=[
+
+            x[0]
+
+            for x in result["halfhalf_rank"][:3]
+
+        ]
+
+
+
+
+
+        c_ok=(
+
+            actual_color
 
             in
 
-            result["color"]
+            color_predict
 
         )
+
+
+
+        h_ok=check_half_hit(
+
+            half_predict,
+
+            actual_num
+
+        )
+
+
+
+        hh_ok=check_halfhalf_hit(
+
+            halfhalf_predict,
+
+            actual_num
+
+        )
+
+
+
+
+
+        if c_ok:
+
+            color_hit+=1
+
+
+
+        if h_ok:
+
+            half_hit+=1
+
+
+
+        if hh_ok:
+
+            halfhalf_hit+=1
+
+
+
+
+
+        # 融合命中
+
+        if (
+
+            c_ok
+
+            and
+
+            h_ok
+
+            and
+
+            hh_ok
+
+        ):
+
+
+            fusion_hit+=1
+
+
 
 
 
@@ -1716,61 +1872,112 @@ def backtest(
 
 
 
-        if ok:
-
-            hit+=1
+        if len(details)<20:
 
 
+            details.append({
 
 
-        details.append({
+                "issue":
 
-
-            "issue":
-
-            rows[i]["issue"],
+                actual["issue"],
 
 
 
-            "predict":
+                "color":
 
-            result["color"],
-
-
-
-            "actual":
-
-            actual,
+                color_predict,
 
 
 
-            "hit":
+                "half":
 
-            ok
-
-        })
+                half_predict,
 
 
 
-    rate=(
+                "halfhalf":
 
-        hit/total
-
-        if total
-
-        else 0
-
-    )
-
-
-    return rate,details
+                halfhalf_predict,
 
 
 
+                "actual":
+
+                actual_color,
 
 
-# =====================================================
-# 参数自动搜索
+
+                "special":
+
+                actual_num,
+
+
+
+                "color_hit":
+
+                c_ok,
+
+
+
+                "half_hit":
+
+                h_ok,
+
+
+
+                "halfhalf_hit":
+
+                hh_ok
+
+            })
+
+
+
+
+
+    if total==0:
+
+
+        return {}
+
+
+
+
+    return {
+
+
+        "color_rate":
+
+        color_hit/total,
+
+
+
+        "half_rate":
+
+        half_hit/total,
+
+
+
+        "halfhalf_rate":
+
+        halfhalf_hit/total,
+
+
+
+        "fusion_rate":
+
+        fusion_hit/total,
+
+
+
+        "details":
+
+        details
+
+    }
+    # =====================================================
+# 自动调参
 # =====================================================
 
 
@@ -1779,7 +1986,7 @@ def auto_search(rows):
 
     print(
 
-        "开始V8 PRO自动调参..."
+        "开始V8.1自动调参..."
 
     )
 
@@ -1792,7 +1999,6 @@ def auto_search(rows):
     )
 
 
-
     values=list(
 
         CONFIG["search_space"].values()
@@ -1801,13 +2007,13 @@ def auto_search(rows):
 
 
 
-    best_rate=0
+    best_score=-999
 
-    best=None
+    best_params=None
 
 
 
-    old=copy.deepcopy(
+    original=copy.deepcopy(
 
         CONFIG
 
@@ -1815,7 +2021,26 @@ def auto_search(rows):
 
 
 
+
+    total=len(
+
+        list(
+
+            product(*values)
+
+        )
+
+    )
+
+
+    index=0
+
+
+
     for combo in product(*values):
+
+
+        index+=1
 
 
 
@@ -1839,7 +2064,9 @@ def auto_search(rows):
 
 
 
-        rate,_=backtest(
+
+
+        result=backtest_v81(
 
             rows,
 
@@ -1849,21 +2076,100 @@ def auto_search(rows):
 
 
 
-        if rate>best_rate:
+        if not result:
 
-
-            best_rate=rate
-
-            best=params.copy()
+            continue
 
 
 
 
-    CONFIG.update(old)
+
+        score=(
+
+
+            result["fusion_rate"]
+
+            *
+
+            50
+
+
+            +
+
+            result["color_rate"]
+
+            *
+
+            30
+
+
+            +
+
+            result["half_rate"]
+
+            *
+
+            15
+
+
+            +
+
+            result["halfhalf_rate"]
+
+            *
+
+            5
+
+        )
 
 
 
-    if best:
+
+
+        if score>best_score:
+
+
+            best_score=score
+
+
+            best_params=params.copy()
+
+
+
+        if index%20==0:
+
+
+            print(
+
+                "搜索进度",
+
+                index,
+
+                "/",
+
+                total,
+
+                "最佳:",
+
+                round(best_score,2)
+
+            )
+
+
+
+
+
+    CONFIG.update(
+
+        original
+
+    )
+
+
+
+
+
+    if best_params:
 
 
         with open(
@@ -1879,7 +2185,7 @@ def auto_search(rows):
 
             json.dump(
 
-                best,
+                best_params,
 
                 f,
 
@@ -1891,18 +2197,22 @@ def auto_search(rows):
 
 
 
-    print(
+        print(
 
-        "最佳命中率:",
+            "最佳参数保存完成"
 
-        f"{best_rate:.2%}"
-
-    )
+        )
 
 
-    return best
-    # =====================================================
-# 参数加载
+
+    return best_params
+
+
+
+
+
+# =====================================================
+# 加载参数
 # =====================================================
 
 
@@ -1914,6 +2224,7 @@ def load_params():
         PARAM_FILE
 
     ):
+
 
         return
 
@@ -1933,13 +2244,19 @@ def load_params():
         ) as f:
 
 
-            params=json.load(f)
+            params=json.load(
+
+                f
+
+            )
 
 
 
         for k,v in params.items():
 
+
             if k in CONFIG:
+
 
                 CONFIG[k]=v
 
@@ -1947,32 +2264,28 @@ def load_params():
 
         print(
 
-            "已加载最佳参数"
+            "加载最佳参数"
 
         )
 
 
-    except:
+
+    except Exception:
 
 
         pass
-
-
-
-
-
-# =====================================================
-# 生成报告
+        # =====================================================
+# 报告生成
 # =====================================================
 
 
 def create_report(
 
-    issue,
+    rows,
 
     result,
 
-    rate
+    backtest
 
 ):
 
@@ -1991,7 +2304,7 @@ def create_report(
 
         f.write(
 
-            "# 澳门六合彩 V8 PRO预测报告\n\n"
+            "# 澳门六合彩 V8.1 三层预测报告\n\n"
 
         )
 
@@ -1999,15 +2312,7 @@ def create_report(
 
         f.write(
 
-            "预测期号："
-
-            +
-
-            str(issue)
-
-            +
-
-            "\n\n"
+            "## 当前预测\n\n"
 
         )
 
@@ -2015,39 +2320,16 @@ def create_report(
 
         f.write(
 
-            "## 颜色预测\n\n"
+            "颜色预测:\n\n"
 
         )
 
 
-        f.write(
-
-            "、".join(
-
-                result["color"]
-
-            )
-
-            +
-
-            "\n\n"
-
-        )
-
-
-
-        f.write(
-
-            "## 颜色评分\n\n"
-
-        )
-
-
-        for c,v in result["color_score"].items():
+        for x in result["color_rank"]:
 
             f.write(
 
-                f"{c}: {v:.2f}\n"
+                f"{x[0]} : {x[1]:.2f}\n"
 
             )
 
@@ -2055,16 +2337,16 @@ def create_report(
 
         f.write(
 
-            "\n## 颜色概率\n\n"
+            "\n半波预测:\n\n"
 
         )
 
 
-        for c,v in result["probability"].items():
+        for x in result["half_rank"]:
 
             f.write(
 
-                f"{c}: {v}%\n"
+                f"{x[0]} : {x[1]:.2f}\n"
 
             )
 
@@ -2072,18 +2354,16 @@ def create_report(
 
         f.write(
 
-            "\n## 半波预测\n\n"
+            "\n半半波预测:\n\n"
 
         )
 
 
-
-        for h,v in result["half"]:
-
+        for x in result["halfhalf_rank"]:
 
             f.write(
 
-                f"{h}: {v:.2f}\n"
+                f"{x[0]} : {x[1]:.2f}\n"
 
             )
 
@@ -2091,33 +2371,105 @@ def create_report(
 
         f.write(
 
-            "\n## 半半波预测\n\n"
+            "\n## 概率\n\n"
 
         )
 
 
 
-        for h,v in result["half_half"]:
+        f.write(
+
+            "颜色概率:\n"
+
+        )
 
 
-            f.write(
 
-                f"{h}: {v:.2f}\n"
+        f.write(
+
+            str(
+
+                result["color_probability"]
 
             )
 
+        )
+
 
 
         f.write(
 
-            "\n## 历史回测\n\n"
+            "\n\n半波概率:\n"
+
+        )
+
+
+
+        f.write(
+
+            str(
+
+                result["half_probability"]
+
+            )
+
+        )
+
+
+
+        f.write(
+
+            "\n\n半半波概率:\n"
+
+        )
+
+
+
+        f.write(
+
+            str(
+
+                result["halfhalf_probability"]
+
+            )
+
+        )
+
+
+
+
+        f.write(
+
+            "\n\n## 回测\n\n"
+
+        )
+
+
+
+        f.write(
+
+            f"颜色命中率: {backtest['color_rate']:.2%}\n"
 
         )
 
 
         f.write(
 
-            f"近100期命中率: {rate:.2%}\n"
+            f"半波命中率: {backtest['half_rate']:.2%}\n"
+
+        )
+
+
+        f.write(
+
+            f"半半波命中率: {backtest['halfhalf_rate']:.2%}\n"
+
+        )
+
+
+        f.write(
+
+            f"融合命中率: {backtest['fusion_rate']:.2%}\n"
 
         )
 
@@ -2133,24 +2485,18 @@ def create_report(
 def main():
 
 
-    parser=argparse.ArgumentParser(
+    parser=argparse.ArgumentParser()
 
-        description=
-
-        "澳门六合彩 V8 PRO"
-
-    )
 
 
     parser.add_argument(
 
         "--search",
 
-        action="store_true",
-
-        help="重新搜索参数"
+        action="store_true"
 
     )
+
 
 
     args=parser.parse_args()
@@ -2178,7 +2524,7 @@ def main():
 
         print(
 
-            "数据获取失败"
+            "没有数据"
 
         )
 
@@ -2187,7 +2533,6 @@ def main():
 
 
 
-    # 自动调参
 
 
     if (
@@ -2213,11 +2558,15 @@ def main():
 
 
 
+
+
     load_params()
 
 
 
-    result=predict_v8(
+
+
+    result=predict_v81(
 
         rows
 
@@ -2225,13 +2574,14 @@ def main():
 
 
 
-    rate,_=backtest(
+    bt=backtest_v81(
 
         rows,
 
         100
 
     )
+
 
 
 
@@ -2245,60 +2595,78 @@ def main():
 
     print(
 
-        "澳门六合彩 V8 PRO"
+        "澳门六合彩 V8.1"
 
     )
 
 
     print(
 
-        "预测颜色:",
+        "颜色预测:",
 
-        "、".join(
-
-            result["color"]
-
-        )
+        result["color_rank"][:3]
 
     )
 
+
+    print(
+
+        "半波预测:",
+
+        result["half_rank"][:5]
+
+    )
+
+
+    print(
+
+        "半半波预测:",
+
+        result["halfhalf_rank"][:5]
+
+    )
+
+
+
+    print(
+
+        "\n回测:"
+
+    )
+
+
+    print(
+
+        "颜色:",
+
+        f"{bt['color_rate']:.2%}"
+
+    )
 
 
     print(
 
         "半波:",
 
-        result["half"][0][0]
+        f"{bt['half_rate']:.2%}"
 
     )
-
 
 
     print(
 
         "半半波:",
 
-        result["half_half"][0][0]
+        f"{bt['halfhalf_rate']:.2%}"
 
     )
 
 
-
     print(
 
-        "概率:",
+        "融合:",
 
-        result["probability"]
-
-    )
-
-
-
-    print(
-
-        "回测:",
-
-        f"{rate:.2%}"
+        f"{bt['fusion_rate']:.2%}"
 
     )
 
@@ -2312,13 +2680,15 @@ def main():
 
 
 
+
+
     create_report(
 
-        rows[0]["issue"],
+        rows,
 
         result,
 
-        rate
+        bt
 
     )
 
@@ -2326,7 +2696,7 @@ def main():
 
     print(
 
-        "报告生成完成:",
+        "报告生成:",
 
         REPORT_FILE
 
