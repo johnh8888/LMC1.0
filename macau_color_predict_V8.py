@@ -1802,4 +1802,402 @@ class RollingBacktestOptimizer:
             print(f"{'-'*60}")
             for r in results:
                 print(f"{r['train_period']:<15} {r['test_period']:<15} "
-                      f"{r['roi']:<+12
+                      f"{r['roi']:<+12.2f}% {r['hit_rate']:<12.2f}% {r['profit']:<+12.2f}")
+            
+            # 找到最优参数组合
+            print(f"\n🏆 最优参数组合 (按ROI):")
+            best_result = max(results, key=lambda x: x["roi"])
+            print(f"  训练期: {best_result['train_period']}")
+            print(f"  ROI: {best_result['roi']:+.2f}%")
+            print(f"  参数: {best_result['best_params']}")
+        
+        return results
+    
+    def find_best_params(self):
+        """找到全局最优参数"""
+        results = self.run()
+        
+        if not results:
+            return None
+        
+        # 按ROI排序
+        sorted_results = sorted(results, key=lambda x: x["roi"], reverse=True)
+        best = sorted_results[0]
+        
+        print(f"\n{'='*60}")
+        print(f"🎯 最终推荐参数:")
+        print(f"{'='*60}")
+        print(f"  参数: {best['best_params']}")
+        print(f"  预期ROI: {best['roi']:+.2f}%")
+        print(f"  测试期数: {best['total_periods']}期")
+        
+        return best["best_params"]
+
+
+# =====================================================
+# 报告
+# =====================================================
+
+
+def save_report(result):
+
+
+    with open(
+
+        REPORT_FILE,
+
+        "w",
+
+        encoding="utf-8"
+
+    ) as f:
+
+
+
+        f.write(
+
+            "# 新澳门彩 V8.16 BALANCE\n\n"
+
+        )
+
+
+
+        f.write(
+
+            "## 颜色预测\n\n"
+
+        )
+
+
+        for k,v in sorted(
+
+            result["color"].items(),
+
+            key=lambda x:x[1],
+
+            reverse=True
+
+        ):
+
+
+            f.write(
+
+                f"{k}: {v}%\n"
+
+            )
+
+
+
+        f.write(
+
+            "\n## 最终TOP5\n\n"
+
+        )
+
+
+
+        for i,c in enumerate(
+
+            result["candidates"],
+
+            1
+
+        ):
+
+
+            f.write(
+
+                f"{i}. {c['halfhalf']} "
+
+                f"{c['score']}\n"
+
+            )
+
+
+
+
+
+
+# =====================================================
+# 主程序
+# =====================================================
+
+
+def main():
+
+
+
+    print(
+
+        "正在获取新澳门彩..."
+
+    )
+
+
+
+    rows=fetch_new_macau(
+
+        30
+
+    )
+
+
+
+    if len(rows)<10:
+
+
+        print(
+
+            "数据不足"
+
+        )
+
+        return
+
+
+
+
+
+    print()
+
+    print(
+
+        "最近30期开奖结果"
+
+    )
+
+    print("-"*30)
+
+
+
+    for r in rows:
+
+
+        print(
+
+            r["issue"],
+
+            "特码",
+
+            r["special"],
+
+            r["color"],
+
+            r["halfhalf"]
+
+        )
+
+
+
+
+    print()
+
+    print("="*35)
+
+    print(
+
+        "新澳门彩 V8.16 BALANCE预测"
+
+    )
+
+    print("="*35)
+
+
+
+    model=FusionV816(
+
+        rows
+
+    )
+
+
+
+    result=model.predict()
+
+
+
+    print()
+
+    print("颜色预测:")
+
+
+
+    for k,v in sorted(
+
+        result["color"].items(),
+
+        key=lambda x:x[1],
+
+        reverse=True
+
+    ):
+
+
+        print(
+
+            k,
+
+            v,
+
+            "%"
+
+        )
+
+
+
+
+
+    print()
+
+    print("大小预测:")
+
+
+    for k,v in result["size"].items():
+
+        print(
+
+            k,
+
+            v,
+
+            "%"
+
+        )
+
+
+
+
+
+    print()
+
+    print("单双预测:")
+
+
+    for k,v in result["odd"].items():
+
+        print(
+
+            k,
+
+            v,
+
+            "%"
+
+        )
+
+
+
+
+    print()
+
+    print("最终TOP5:")
+
+
+
+    for i,c in enumerate(
+
+        result["candidates"],
+
+        1
+
+    ):
+
+
+        print(
+
+            i,
+
+            c["halfhalf"],
+
+            c["score"]
+
+        )
+
+
+
+
+
+    BackTest816(
+
+        rows
+
+    ).print_result()
+
+
+
+
+    save_report(
+
+        result
+
+    )
+
+
+
+    print()
+
+    print(
+
+        "报告生成:",
+
+        REPORT_FILE
+
+    )
+
+
+    # ===== 新增：精确投注回测 =====
+    print()
+    print("=" * 60)
+    print("💰 真实盈利回测 (含本金)")
+    print("=" * 60)
+    
+    exact_test = ExactBetBackTest(rows, bet_amount=50)
+    
+    # 对比三种模式
+    exact_test.compare_modes(test_days=10)
+    
+    # 详细显示TOP3模式
+    print()
+    exact_test.print_report(mode="TOP3", test_days=10)
+
+
+    # ===== 新增：多模型集成 + 滚动回测 + 动态调参 =====
+    print()
+    print("=" * 60)
+    print("🤖 多模型集成 + 滚动回测 + 动态调参")
+    print("=" * 60)
+    
+    # 1. 多模型集成预测
+    print("\n📊 多模型集成预测 (TOP5):")
+    ensemble = EnsemblePredictor(rows)
+    top5 = ensemble.get_topN(5)
+    for i, (hh, score) in enumerate(top5, 1):
+        print(f"  {i}. {hh}: {score}%")
+    
+    # 2. 网格搜索最优参数
+    print("\n🔍 网格搜索最优参数 (最近10期):")
+    grid = GridSearchOptimizer(rows)
+    search_result = grid.grid_search(test_days=10)
+    print(f"  最优ROI: {search_result['best_roi']:+.2f}%")
+    print(f"  最优参数: {search_result['best_params']}")
+    print(f"  TOP3参数组合:")
+    for i, r in enumerate(search_result["top_10_results"][:3], 1):
+        print(f"    {i}. ROI {r['roi']:+.2f}% - {r['weights']}")
+    
+    # 3. 滚动回测 + 动态调参
+    print("\n🔄 滚动回测 + 动态调参:")
+    rolling = RollingBacktestOptimizer(rows, window_size=20, step=5)
+    best_params = rolling.find_best_params()
+    
+    # 4. 使用最优参数进行最终预测
+    if best_params:
+        print("\n🎯 使用最优参数的最终预测:")
+        final_ensemble = EnsemblePredictor(rows, best_params)
+        final_top5 = final_ensemble.get_topN(5)
+        for i, (hh, score) in enumerate(final_top5, 1):
+            print(f"  {i}. {hh}: {score}%")
+
+
+if __name__=="__main__":
+
+    main()
