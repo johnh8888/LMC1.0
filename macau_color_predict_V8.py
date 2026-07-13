@@ -10,7 +10,7 @@
 2. 防连续追色
 3. 大小模型增强
 4. 半半波融合
-5. TOP1 + TOP3盲测
+5. TOP3 + TOP4 + TOP5盲测
 6. 多窗口优化
 7. 真实盈利回测（含本金）
 
@@ -1262,10 +1262,10 @@ class ExactBetBackTest:
             "绿小单": 11.82, "绿小双": 15.76,
         }
     
-    def simulate_mode(self, mode="TOP1", test_days=10):
+    def simulate_mode(self, mode="TOP3", test_days=10):
         """
         模拟下注模式
-        mode: 'TOP1', 'TOP2', 'TOP3'
+        mode: 'TOP3', 'TOP4', 'TOP5'
         """
         results = []
         total_bet = 0
@@ -1288,12 +1288,12 @@ class ExactBetBackTest:
             candidates = pred["candidates"]
             bet_list = []
             
-            if mode == "TOP1" and candidates:
-                bet_list = [candidates[0]["halfhalf"]]
-            elif mode == "TOP2":
-                bet_list = [c["halfhalf"] for c in candidates[:2]]
-            elif mode == "TOP3":
+            if mode == "TOP3":
                 bet_list = [c["halfhalf"] for c in candidates[:3]]
+            elif mode == "TOP4":
+                bet_list = [c["halfhalf"] for c in candidates[:4]]
+            elif mode == "TOP5":
+                bet_list = [c["halfhalf"] for c in candidates[:5]]
             else:
                 bet_list = []
             
@@ -1357,7 +1357,7 @@ class ExactBetBackTest:
             "balance_history": balance_history
         }
     
-    def print_report(self, mode="TOP1", test_days=10):
+    def print_report(self, mode="TOP3", test_days=10):
         """打印详细报告"""
         data = self.simulate_mode(mode, test_days)
         
@@ -1425,8 +1425,8 @@ class ExactBetBackTest:
         return data
     
     def compare_modes(self, test_days=10):
-        """对比TOP1、TOP2、TOP3三种模式"""
-        modes = ["TOP1", "TOP2", "TOP3"]
+        """对比TOP3、TOP4、TOP5三种模式"""
+        modes = ["TOP3", "TOP4", "TOP5"]
         results = {}
         
         print(f"\n{'='*60}")
@@ -1782,9 +1782,9 @@ def main():
     # 对比三种模式
     exact_test.compare_modes(test_days=10)
     
-    # 详细显示TOP1模式
+    # 详细显示TOP3模式
     print()
-    exact_test.print_report(mode="TOP1", test_days=10)
+    exact_test.print_report(mode="TOP3", test_days=10)
 
 
 if __name__=="__main__":
