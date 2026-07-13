@@ -251,227 +251,167 @@ def fetch_macau(limit=800):
     rows=[]
 
     headers={
-
         "User-Agent":
         "Mozilla/5.0"
-
     }
-
 
     try:
 
         req=urllib.request.Request(
-
             CONFIG["api_url"],
-
             headers=headers
-
         )
 
 
-        data=urllib.request.urlopen(
-
+        raw=urllib.request.urlopen(
             req,
-
             timeout=20
-
         ).read()
 
 
-
         data=json.loads(
-
-            data.decode("utf-8")
-
+            raw.decode("utf-8")
         )
 
 
-for item in data.get(
-    "lottery_data",
-    []
-):
-
-    print(
-        "发现彩种:",
-        item.get("name","")
-    )
+        target=None
 
 
-    name=item.get(
-        "name",
-        ""
-    ).strip()
+        print("扫描彩种:")
 
 
-            if name not in [
+        for item in data.get(
+            "lottery_data",
+            []
+        ):
 
+            name=item.get(
+                "name",
+                ""
+            ).strip()
+
+
+            print(
+                name
+            )
+
+
+            if name in [
                 "新澳门六合彩",
-
-                "新澳门六合彩特码",
-
-                "澳门六合彩"
-
+                "新澳门六合彩特码"
             ]:
+
+                target=item
+                break
+
+
+
+        if target is None:
+
+            print(
+                "未找到新澳门六合彩"
+            )
+
+            return []
+
+
+
+        print(
+            "锁定彩种:",
+            target.get("name")
+        )
+
+
+
+        for line in target.get(
+            "history",
+            []
+        ):
+
+
+            nums=parse_numbers(line)
+
+
+
+            if len(nums)<7:
 
                 continue
 
 
 
-            for line in item.get(
-
-                "history",
-
-                []
-
-            ):
+            special=nums[-1]
 
 
-                nums=parse_numbers(line)
+            if not 1<=special<=49:
+
+                continue
 
 
 
-                # 必须有特码
+            # 提取期号
 
-                if len(nums)<7:
-
-                    continue
-
-
-
-                special=nums[-1]
+            m=re.search(
+                r"(20\d{5,7})",
+                line
+            )
 
 
+            if not m:
 
-                if not 1<=special<=49:
-
-                    continue
+                continue
 
 
 
-                # =============================
-                # 提取期号
-                # =============================
+            raw=m.group(1)
 
-                m=re.search(
 
-                    r"(20\d{5,7})",
 
-                    line
+            issue=(
 
+                raw[:4]
+
+                +
+
+                "/"
+
+                +
+
+                str(
+                    int(raw[4:])
+                ).zfill(3)
+
+            )
+
+
+
+            rows.append({
+
+                "issue":issue,
+
+                "special":special,
+
+                "color":get_color(
+                    special
+                ),
+
+                "size":get_size(
+                    special
+                ),
+
+                "odd":get_odd_even(
+                    special
+                ),
+
+                "half":get_half(
+                    special
+                ),
+
+                "halfhalf":
+                get_halfhalf(
+                    special
                 )
 
-
-
-                if m:
-
-
-                    raw=m.group(1)
-
-
-
-                    year=raw[:4]
-
-
-                    num=raw[4:]
-
-
-
-                    issue=(
-
-                        year
-
-                        +
-
-                        "/"
-
-                        +
-
-                        str(
-
-                            int(num)
-
-                        ).zfill(3)
-
-                    )
-
-
-                else:
-
-
-                    # 备用格式
-
-                    m=re.search(
-
-                        r"(\d{2})(\d{3})",
-
-                        line
-
-                    )
-
-
-                    if not m:
-
-                        continue
-
-
-
-                    issue=(
-
-                        "20"
-
-                        +
-
-                        m.group(1)
-
-                        +
-
-                        "/"
-
-                        +
-
-                        m.group(2)
-
-                    )
-
-
-
-                rows.append({
-
-                    "issue":
-
-                    issue,
-
-
-                    "special":
-
-                    special,
-
-
-                    "color":
-
-                    get_color(special),
-
-
-                    "size":
-
-                    get_size(special),
-
-
-                    "odd":
-
-                    get_odd_even(special),
-
-
-                    "half":
-
-                    get_half(special),
-
-
-                    "halfhalf":
-
-                    get_halfhalf(special)
-
-                })
+            })
 
 
 
@@ -479,57 +419,39 @@ for item in data.get(
 
 
         print(
-
             "数据获取失败:",
-
             e
-
         )
 
+        return []
 
 
-    # =============================
-    # 去除重复期号
-    # =============================
 
+    # 去重
 
-    unique={}
+    temp={}
 
 
     for r in rows:
 
-
-        if r["issue"] not in unique:
-
-
-            unique[r["issue"]]=r
+        temp[r["issue"]]=r
 
 
 
     rows=list(
-
-        unique.values()
-
+        temp.values()
     )
 
 
-
-    # 最新在前
 
     rows.sort(
-
         key=lambda x:x["issue"],
-
         reverse=True
-
     )
-
 
 
     print(
-
-        f"获取新澳门六合彩: {len(rows)}期"
-
+        f"获取新澳门六合彩:{len(rows)}期"
     )
 
 
