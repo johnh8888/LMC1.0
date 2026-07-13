@@ -12,6 +12,7 @@
 4. 半半波融合
 5. TOP1 + TOP3盲测
 6. 多窗口优化
+7. 真实盈利回测（含本金）
 
 """
 
@@ -999,7 +1000,9 @@ class FusionV816:
             candidates[:5]
 
         }
-        # =====================================================
+
+
+# =====================================================
 # V8.16 盲测回测系统
 # =====================================================
 
@@ -1239,8 +1242,222 @@ class BackTest816:
         return r
 
 
+# =====================================================
+# V8.16 精确投注回测模块（含本金）
+# =====================================================
 
-
+class ExactBetBackTest:
+    def __init__(self, rows, odds_config=None, bet_amount=50):
+        self.rows = rows
+        self.bet_amount = bet_amount
+        self.odds = odds_config or {
+            "红": 5.82, "蓝": 5.82, "绿": 5.82,
+            "大": 6.6, "小": 4.7,
+            "单": 5.82, "双": 5.16,
+            "红大单": 9.45, "红大双": 11.82,
+            "红小单": 9.45, "红小双": 9.45,
+            "蓝大单": 9.45, "蓝大双": 11.82,
+            "蓝小单": 15.76, "蓝小双": 11.82,
+            "绿大单": 11.82, "绿大双": 11.82,
+            "绿小单": 11.82, "绿小双": 15.76,
+        }
+    
+    def simulate_mode(self, mode="TOP1", test_days=10):
+        """
+        模拟下注模式
+        mode: 'TOP1', 'TOP2', 'TOP3'
+        """
+        results = []
+        total_bet = 0
+        total_return = 0
+        total_profit = 0
+        hit_count = 0
+        balance = 0
+        balance_history = []
+        
+        start_idx = min(test_days, len(self.rows) - 1)
+        
+        for i in range(start_idx, 0, -1):
+            history = self.rows[i:]
+            actual = self.rows[i - 1]
+            
+            model = FusionV816(history)
+            pred = model.predict()
+            
+            # 根据模式选择下注
+            candidates = pred["candidates"]
+            bet_list = []
+            
+            if mode == "TOP1" and candidates:
+                bet_list = [candidates[0]["halfhalf"]]
+            elif mode == "TOP2":
+                bet_list = [c["halfhalf"] for c in candidates[:2]]
+            elif mode == "TOP3":
+                bet_list = [c["halfhalf"] for c in candidates[:3]]
+            else:
+                bet_list = []
+            
+            # 计算投注
+            bet_count = len(bet_list)
+            if bet_count == 0:
+                continue
+            
+            bet = self.bet_amount * bet_count
+            total_bet += bet
+            
+            # 判断中奖
+            hit = False
+            win_amount = 0
+            hit_hh = None
+            
+            for hh in bet_list:
+                if hh == actual["halfhalf"]:
+                    hit = True
+                    hit_hh = hh
+                    odds = self.odds.get(hh, 0)
+                    win_amount = self.bet_amount * odds  # 含本金
+                    break
+            
+            if hit:
+                hit_count += 1
+                total_return += win_amount
+            else:
+                win_amount = 0
+            
+            profit = win_amount - bet
+            total_profit += profit
+            balance += profit
+            balance_history.append(balance)
+            
+            results.append({
+                "issue": actual["issue"],
+                "actual": actual["halfhalf"],
+                "bet_list": bet_list,
+                "bet_count": bet_count,
+                "bet_amount": bet,
+                "win_amount": win_amount,
+                "profit": profit,
+                "balance": balance,
+                "hit": hit,
+                "hit_hh": hit_hh
+            })
+        
+        roi = (total_profit / total_bet * 100) if total_bet > 0 else 0
+        
+        return {
+            "mode": mode,
+            "results": results,
+            "total_bet": total_bet,
+            "total_return": total_return,
+            "total_profit": total_profit,
+            "hit_count": hit_count,
+            "total_periods": len(results),
+            "hit_rate": hit_count / len(results) * 100 if results else 0,
+            "roi": roi,
+            "balance_history": balance_history
+        }
+    
+    def print_report(self, mode="TOP1", test_days=10):
+        """打印详细报告"""
+        data = self.simulate_mode(mode, test_days)
+        
+        print(f"\n{'='*60}")
+        print(f"📊 {mode} 下注模式详细回测 (含本金)")
+        print(f"  每注金额: {self.bet_amount} 元")
+        print(f"  赔率计算: 中奖金额 = 投注 × 赔率")
+        print(f"{'='*60}")
+        
+        # 每期明细
+        print(f"\n📋 最近{test_days}期明细:")
+        print(f"{'期号':<12} {'实际开奖':<12} {'下注':<25} {'投注':<8} {'中奖':<10} {'盈亏':<10} {'余额':<10}")
+        print(f"{'-'*85}")
+        
+        for r in data["results"][:test_days]:
+            bet_str = ",".join(r["bet_list"][:3])
+            if len(r["bet_list"]) > 3:
+                bet_str += f"+{len(r['bet_list'])-3}"
+            print(f"{r['issue']:<12} {r['actual']:<12} {bet_str:<25} "
+                  f"{r['bet_amount']:<8.0f} {r['win_amount']:<10.2f} "
+                  f"{r['profit']:<+10.2f} {r['balance']:<10.2f}")
+        
+        print(f"{'-'*85}")
+        
+        # 汇总统计
+        print(f"\n📊 汇总统计:")
+        print(f"  回测期数: {data['total_periods']} 期")
+        print(f"  命中次数: {data['hit_count']} 次")
+        print(f"  命中率: {data['hit_rate']:.2f}%")
+        print(f"  总投注: {data['total_bet']:.2f} 元")
+        print(f"  总回报: {data['total_return']:.2f} 元")
+        print(f"  净盈利: {data['total_profit']:+.2f} 元")
+        print(f"  ROI: {data['roi']:+.2f}%")
+        
+        # 盈亏柱状图
+        if data["results"]:
+            print(f"\n📈 最近{min(test_days, len(data['results']))}期盈亏走势:")
+            max_profit = max([abs(r["profit"]) for r in data["results"][:test_days]]) or 1
+            for i, r in enumerate(data["results"][:test_days]):
+                bar_len = int((r["profit"] / max_profit) * 20)
+                if r["profit"] > 0:
+                    bar = "█" * min(bar_len, 20) + "░" * (20 - min(bar_len, 20))
+                    print(f"  第{i+1:2d}期: {bar} +{r['profit']:6.2f}元")
+                elif r["profit"] < 0:
+                    bar = "█" * min(abs(bar_len), 20) + "░" * (20 - min(abs(bar_len), 20))
+                    print(f"  第{i+1:2d}期: {bar} {r['profit']:6.2f}元")
+                else:
+                    print(f"  第{i+1:2d}期: {'░░░░░░░░░░░░░░░░░░░░'} {r['profit']:6.2f}元")
+        
+        print(f"{'='*60}")
+        
+        # 建议
+        print(f"\n💡 建议:")
+        if data["roi"] > 20:
+            print(f"  ✅ {mode}模式表现优异 (ROI {data['roi']:+.2f}%)")
+            print(f"     最近{data['total_periods']}期盈利 {data['total_profit']:+.2f} 元")
+        elif data["roi"] > 0:
+            print(f"  ⚠️  {mode}模式略有盈利 (ROI {data['roi']:+.2f}%)")
+            print(f"     建议继续观察或调整策略")
+        else:
+            print(f"  ❌ {mode}模式亏损 (ROI {data['roi']:+.2f}%)")
+            print(f"     最近{data['total_periods']}期亏损 {data['total_profit']:+.2f} 元")
+            print(f"     建议考虑其他模式或停止下注")
+        
+        return data
+    
+    def compare_modes(self, test_days=10):
+        """对比TOP1、TOP2、TOP3三种模式"""
+        modes = ["TOP1", "TOP2", "TOP3"]
+        results = {}
+        
+        print(f"\n{'='*60}")
+        print(f"🔄 三种下注模式对比 (最近{test_days}期)")
+        print(f"{'='*60}")
+        
+        for mode in modes:
+            results[mode] = self.simulate_mode(mode, test_days)
+        
+        print(f"\n{'模式':<10} {'总投注':<12} {'总回报':<12} {'净盈利':<12} {'ROI':<12} {'命中率':<12} {'命中次数':<10}")
+        print(f"{'-'*80}")
+        
+        for mode, data in results.items():
+            print(f"{mode:<10} {data['total_bet']:<12.2f} {data['total_return']:<12.2f} "
+                  f"{data['total_profit']:<+12.2f} {data['roi']:<+12.2f}% "
+                  f"{data['hit_rate']:<12.2f}% {data['hit_count']:<10}")
+        
+        print(f"{'='*60}")
+        
+        # 找出最优
+        best_mode = max(results, key=lambda x: results[x]["roi"])
+        best_roi = results[best_mode]["roi"]
+        
+        print(f"\n🏆 最优模式: {best_mode} (ROI: {best_roi:+.2f}%)")
+        
+        if results[best_mode]["roi"] > 0:
+            print(f"   ✅ 建议使用 {best_mode} 模式")
+        else:
+            print(f"   ⚠️  所有模式均亏损，建议暂停")
+        
+        return results, best_mode
 
 
 # =====================================================
@@ -1554,8 +1771,20 @@ def main():
     )
 
 
-
-
+    # ===== 新增：精确投注回测 =====
+    print()
+    print("=" * 60)
+    print("💰 真实盈利回测 (含本金)")
+    print("=" * 60)
+    
+    exact_test = ExactBetBackTest(rows, bet_amount=50)
+    
+    # 对比三种模式
+    exact_test.compare_modes(test_days=10)
+    
+    # 详细显示TOP1模式
+    print()
+    exact_test.print_report(mode="TOP1", test_days=10)
 
 
 if __name__=="__main__":
