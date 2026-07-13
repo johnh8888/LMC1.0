@@ -1576,9 +1576,22 @@ class EnsemblePredictor:
     def predict(self, attr="halfhalf"):
         votes = defaultdict(float)
         
+        # 获取所有可能的值
+        all_values = ["红大单", "红大双", "红小单", "红小双",
+                      "蓝大单", "蓝大双", "蓝小单", "蓝小双",
+                      "绿大单", "绿大双", "绿小单", "绿小双"]
+        
         for name, model in self.models:
-            pred = model.predict(attr)
             weight = self.weights.get(name, 0.25)
+            
+            # 不同模型有不同的predict接口
+            if name == "attribute":
+                # AttributeModel 需要 attr 和 values
+                pred = model.predict(attr, all_values)
+            else:
+                # 其他模型只需要 attr
+                pred = model.predict(attr)
+            
             for k, v in pred.items():
                 votes[k] += v * weight
         
