@@ -2,19 +2,17 @@
 # -*- coding: utf-8 -*-
 
 """
-香港彩预测系统 V8.17 - 动态半波增强版
+香港彩预测系统 V8.16 - 动态半波版
 
-基于V8.16优化升级:
-1. 动态半波选择器增强（大小权重提升、半波马尔可夫、遗漏追踪）
-2. 智能追号机制（连黑加倍）
-3. 半波专用马尔可夫链模型（新增）
-4. 半波遗漏追踪器（新增）
-5. 半波连续反向信号（新增）
-6. 全自动权重优化（300次迭代，5个优化器）
+基于新澳门V8.17完整迁移至香港彩:
+1. 香港彩专用配置
+2. 30期历史数据
+3. 动态半波选择（不固定买绿大+红大）
+4. 全自动权重优化（300次迭代，5个优化器）
+5. 风险控制模块
+6. 下注记录追踪
 7. 多模型集成
 8. 滚动回测 + 动态调参
-9. 风险控制模块
-10. 下注记录追踪
 
 """
 
@@ -40,27 +38,18 @@ CONFIG = {
 
     "lottery_type": "香港彩",
 
-    "bet_mode": "动态半波增强版",
+    "bet_mode": "动态半波",  # 动态半波
 
-    "bet_count": 2,
+    "bet_count": 2,  # 下注注数
 
-    "bet_per_note": 50,
+    "bet_per_note": 50,  # 每注金额
 
     # 风险控制
     "risk_control": {
-        "stop_loss": -500,
-        "take_profit": 800,
+        "stop_loss": -300,
+        "take_profit": 500,
         "max_consecutive_loss": 3,
         "pause_after_loss": 1,
-        "max_multiplier": 3,
-    },
-
-    # 半波选择器权重（V8.17新增）
-    "halfwave_weights": {
-        "color": 0.20,
-        "size": 0.40,
-        "markov": 0.25,
-        "miss": 0.15,
     },
 
     "weights":{
@@ -78,12 +67,12 @@ CONFIG = {
 }
 
 
-REPORT_FILE="hongkong_result_v817.md"
-BET_RECORD_FILE="hongkong_bet_record_v817.md"
+REPORT_FILE="hongkong_result_v816.md"
+BET_RECORD_FILE="hongkong_bet_record.md"
 
 
 # =====================================================
-# 各维度内部权重配置
+# 各维度内部权重配置（将被自动优化覆盖）
 # =====================================================
 
 COLOR_WEIGHTS = {
@@ -190,11 +179,6 @@ def get_halfhalf(n):
         get_odd(n)
 
     )
-
-
-def get_halfwave(n):
-    """获取半波（颜色+大小，不含单双）- V8.17新增"""
-    return get_color(n) + get_size(n)
 
 
 # =====================================================
@@ -398,10 +382,7 @@ def fetch_lottery(limit=30):
                 get_odd(special),
 
                 "halfhalf":
-                get_halfhalf(special),
-
-                "halfwave":
-                get_halfwave(special)
+                get_halfhalf(special)
 
             })
 
@@ -1098,127 +1079,11 @@ class AttributeModel:
 
 
 # =====================================================
-# V8.17 半波专用马尔可夫链模型（新增）
-# =====================================================
-
-class HalfwaveMarkovModel:
-    """半波专用马尔可夫链 - 只追踪6种半波（颜色+大小）"""
-    
-    def __init__(self, rows):
-        self.rows = rows[:30]
-        self.transition_matrix = defaultdict(lambda: defaultdict(int))
-        self.all_hw = ["红大", "红小", "蓝大", "蓝小", "绿大", "绿小"]
-        self._build_matrix()
-    
-    def _build_matrix(self):
-        for i in range(len(self.rows) - 1):
-            current = self.rows[i]["halfwave"]
-            next_hw = self.rows[i + 1]["halfwave"]
-            self.transition_matrix[current][next_hw] += 1
-    
-    def predict(self):
-        if not self.rows:
-            return {}
-        current = self.rows[0]["halfwave"]
-        transitions = self.transition_matrix.get(current, {})
-        total = sum(transitions.values()) or 1
-        result = {}
-        for hw in self.all_hw:
-            count = transitions.get(hw, 0)
-            result[hw] = round(count / total * 100, 2)
-        if total == 1:
-            freq = defaultdict(int)
-            for r in self.rows:
-                freq[r["halfwave"]] += 1
-            total_freq = sum(freq.values()) or 1
-            for hw in self.all_hw:
-                result[hw] = round(freq.get(hw, 0) / total_freq * 100, 2)
-        return result
-    
-    def get_transition_detail(self):
-        if not self.rows:
-            return {}
-        current = self.rows[0]["halfwave"]
-        transitions = dict(self.transition_matrix.get(current, {}))
-        return {"current": current, "transitions": transitions}
-
-
-# =====================================================
-# V8.17 半波遗漏追踪器（新增）
-# =====================================================
-
-class HalfwaveMissTracker:
-    """追踪6种半波的遗漏情况"""
-    
-    def __init__(self, rows):
-        self.rows = rows
-        self.all_hw = ["红大", "红小", "蓝大", "蓝小", "绿大", "绿小"]
-    
-    def get_miss_counts(self):
-        miss = {}
-        for hw in self.all_hw:
-            count = 0
-            for r in self.rows:
-                if r["halfwave"] == hw:
-                    break
-                count += 1
-            miss[hw] = count
-        return miss
-    
-    def get_hot_score(self):
-        miss = self.get_miss_counts()
-        max_miss = max(miss.values()) or 1
-        if max_miss == 0:
-            return {hw: 0 for hw in self.all_hw}
-        return {hw: round(cnt / max_miss * 100, 2) for hw, cnt in miss.items()}
-    
-    def get_cold_hot_analysis(self):
-        freq = defaultdict(int)
-        for r in self.rows[:10]:
-            freq[r["halfwave"]] += 1
-        result = {}
-        for hw in self.all_hw:
-            result[hw] = {
-                "frequency_10": freq.get(hw, 0),
-                "miss_count": self.get_miss_counts().get(hw, 0),
-                "status": "热" if freq.get(hw, 0) >= 2 else ("温" if freq.get(hw, 0) >= 1 else "冷")
-            }
-        return result
-
-
-# =====================================================
-# V8.17 半波连续追踪器（新增）
-# =====================================================
-
-class HalfwaveConsecutiveTracker:
-    """追踪半波连续出现情况"""
-    
-    def __init__(self, rows):
-        self.rows = rows
-    
-    def get_consecutive(self):
-        if not self.rows:
-            return {"current": None, "count": 0}
-        current = self.rows[0]["halfwave"]
-        count = 1
-        for r in self.rows[1:]:
-            if r["halfwave"] == current:
-                count += 1
-            else:
-                break
-        return {"current": current, "count": count}
-    
-    def should_reverse(self):
-        info = self.get_consecutive()
-        return info["count"] >= 3
-
-
-# =====================================================
-# V8.17 最终融合
+# V8.16 最终融合
 # =====================================================
 
 
-class FusionV817:
+class FusionV816:
 
 
     def __init__(self,rows, weights=None):
@@ -1382,92 +1247,36 @@ class FusionV817:
 
 
 # =====================================================
-# V8.17 增强版动态半波选择器（核心升级）
+# 动态半波选择器（核心：不固定买绿大+红大）
 # =====================================================
 
-class DynamicHalfwaveSelectorV2:
-    """
-    增强版动态半波选择器
-    融合: 颜色+大小+马尔可夫+遗漏+连续反向
-    """
+class DynamicHalfwaveSelector:
+    """根据预测动态选择最强的半波组合（不固定买绿大+红大）"""
     
-    def __init__(self, color_pred, size_pred, rows=None):
+    def __init__(self, color_pred, size_pred):
         self.color_pred = color_pred
         self.size_pred = size_pred
-        self.rows = rows
         self.all_colors = ["红", "蓝", "绿"]
         self.all_sizes = ["大", "小"]
-        self.all_hw = ["红大", "红小", "蓝大", "蓝小", "绿大", "绿小"]
-        self.weights = CONFIG.get("halfwave_weights", {
-            "color": 0.20, "size": 0.40, "markov": 0.25, "miss": 0.15,
-        })
-    
-    def get_markov_score(self):
-        if not self.rows or len(self.rows) < 2:
-            return {}
-        try:
-            markov = HalfwaveMarkovModel(self.rows)
-            return markov.predict()
-        except:
-            return {}
-    
-    def get_miss_score(self):
-        if not self.rows:
-            return {}
-        try:
-            tracker = HalfwaveMissTracker(self.rows)
-            return tracker.get_hot_score()
-        except:
-            return {}
-    
-    def get_consecutive_info(self):
-        if not self.rows:
-            return {}
-        try:
-            tracker = HalfwaveConsecutiveTracker(self.rows)
-            return tracker.get_consecutive()
-        except:
-            return {}
     
     def select_best(self, count=2):
+        """
+        选择得分最高的N个半波（颜色+大小）
+        根据颜色预测和大小预测动态计算
+        """
         scores = {}
-        markov = self.get_markov_score()
-        miss = self.get_miss_score()
-        consecutive_info = self.get_consecutive_info()
-        
         for c in self.all_colors:
             for s in self.all_sizes:
-                hw = c + s
                 color_score = self.color_pred.get(c, 0)
                 size_score = self.size_pred.get(s, 0)
-                markov_score = markov.get(hw, 0)
-                miss_score = miss.get(hw, 0)
-                
-                base_score = (
-                    color_score * self.weights["color"] +
-                    size_score * self.weights["size"] +
-                    markov_score * self.weights["markov"] +
-                    miss_score * self.weights["miss"]
-                )
-                
-                if consecutive_info.get("current") == hw and consecutive_info.get("count", 0) >= 3:
-                    base_score *= 0.7
-                elif consecutive_info.get("current") == hw and consecutive_info.get("count", 0) >= 2:
-                    base_score *= 0.85
-                
-                if self.rows:
-                    miss_count = HalfwaveMissTracker(self.rows).get_miss_counts().get(hw, 0)
-                    if miss_count >= 10:
-                        base_score *= 1.2
-                    elif miss_count >= 8:
-                        base_score *= 1.1
-                
-                scores[hw] = round(base_score, 2)
+                # 颜色权重0.5，大小权重0.5
+                scores[c + s] = color_score * 0.5 + size_score * 0.5
         
         sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         return sorted_scores[:count]
     
     def get_odds(self, halfwave):
+        """获取半波赔率"""
         odds = {
             "红大": 6.75, "红小": 4.72,
             "蓝大": 5.25, "蓝小": 6.75,
@@ -1476,16 +1285,17 @@ class DynamicHalfwaveSelectorV2:
         return odds.get(halfwave, 5.91)
     
     def print_recommendation(self, bets, bet_amount=50):
-        print("\n" + "=" * 60)
-        print("🎯 V8.17 增强版动态半波下注建议")
-        print("   融合: 颜色+大小+马尔可夫+遗漏+连续反向")
-        print("=" * 60)
+        """打印推荐"""
+        print("\n" + "=" * 50)
+        print("🎯 动态半波下注建议（根据预测自动选择）")
+        print("=" * 50)
         
         print(f"\n📋 推荐下注（动态半波，{len(bets)}注）:")
         for i, (bw, score) in enumerate(bets, 1):
             odds = self.get_odds(bw)
-            print(f"  {i}. {bw} (综合得分: {score:.2f}, 赔率: {odds})")
+            print(f"  {i}. {bw} (得分: {score:.2f}, 赔率: {odds})")
         
+        # 覆盖分析
         colors_covered = set()
         sizes_covered = set()
         for bw, _ in bets:
@@ -1495,34 +1305,26 @@ class DynamicHalfwaveSelectorV2:
         total_amount = len(bets) * bet_amount
         print(f"\n🎨 覆盖颜色: {' + '.join(sorted(colors_covered))}（{len(colors_covered)/3*100:.0f}%）")
         print(f"📏 覆盖大小: {' + '.join(sorted(sizes_covered))}（{len(sizes_covered)/2*100:.0f}%）")
-        
-        if self.rows:
-            miss_info = HalfwaveMissTracker(self.rows).get_miss_counts()
-            for bw, _ in bets:
-                print(f"  {bw}: 当前遗漏 {miss_info.get(bw, '?')} 期")
-        
-        consecutive_info = self.get_consecutive_info()
-        if consecutive_info.get("count", 0) >= 2:
-            print(f"\n⚠️ {consecutive_info['current']} 已连续出现 {consecutive_info['count']} 期，注意反向！")
-        
         print(f"\n💰 下注金额: {total_amount}元 ({len(bets)}注×{bet_amount}元)")
         for bw, _ in bets:
             print(f"  {bw}: {bet_amount}元")
         
-        print(f"\n📊 权重分配: 颜色{self.weights['color']*100:.0f}% | 大小{self.weights['size']*100:.0f}% | 马尔可夫{self.weights['markov']*100:.0f}% | 遗漏{self.weights['miss']*100:.0f}%")
+        print(f"\n💡 提示: 动态半波不固定买绿大+红大，根据预测自动选择最优组合")
 
 
 # =====================================================
-# V8.17 盲测回测系统
+# V8.16 盲测回测系统
 # =====================================================
 
 
-class BackTest817:
+class BackTest816:
 
 
     def __init__(self,rows):
 
         self.rows=rows
+
+
 
 
     def run(self):
@@ -1538,14 +1340,14 @@ class BackTest817:
 
             "halfhalf":[0,0],
 
-            "top3":[0,0],
-
-            "halfwave_old":[0,0],
-
-            "halfwave_v2":[0,0]
+            "top3":[0,0]
 
         }
 
+
+
+
+        # 最近10期盲测
 
         total=min(
 
@@ -1555,56 +1357,112 @@ class BackTest817:
         )
 
 
+
+
         for i in range(total):
 
 
+            # 关键:
+            # 不使用当前及未来数据
+
             history=self.rows[i+1:]
+
+
 
             actual=self.rows[i]
 
-            model=FusionV817(history)
+
+
+            model=FusionV816(
+
+                history
+
+            )
+
+
 
             pred=model.predict()
 
-            result["color"][1]+=1
-            result["size"][1]+=1
-            result["odd"][1]+=1
-            result["halfhalf"][1]+=1
-            result["top3"][1]+=1
-            result["halfwave_old"][1]+=1
-            result["halfwave_v2"][1]+=1
 
-            if max(pred["color"],key=pred["color"].get)==actual["color"]:
+
+            result["color"][1]+=1
+
+            result["size"][1]+=1
+
+            result["odd"][1]+=1
+
+            result["halfhalf"][1]+=1
+
+            result["top3"][1]+=1
+
+
+
+
+            if max(
+
+                pred["color"],
+
+                key=pred["color"].get
+
+            )==actual["color"]:
+
                 result["color"][0]+=1
 
-            if max(pred["size"],key=pred["size"].get)==actual["size"]:
+
+
+
+            if max(
+
+                pred["size"],
+
+                key=pred["size"].get
+
+            )==actual["size"]:
+
                 result["size"][0]+=1
 
-            if max(pred["odd"],key=pred["odd"].get)==actual["odd"]:
+
+
+
+            if max(
+
+                pred["odd"],
+
+                key=pred["odd"].get
+
+            )==actual["odd"]:
+
                 result["odd"][0]+=1
 
-            hlist=[x["halfhalf"] for x in pred["candidates"]]
+
+
+
+            hlist=[
+
+                x["halfhalf"]
+
+                for x in pred["candidates"]
+
+            ]
+
+
 
             if actual["halfhalf"] in hlist:
+
                 result["halfhalf"][0]+=1
 
-            if actual["halfhalf"] in [x["halfhalf"] for x in pred["candidates"][:3]]:
+
+            if actual["halfhalf"] in [
+
+                x["halfhalf"]
+
+                for x in pred["candidates"][:3]
+
+            ]:
+
                 result["top3"][0]+=1
 
-            # 原版半波
-            old_selector = DynamicHalfwaveSelectorV2(pred["color"], pred["size"], history)
-            old_selector.weights = {"color": 0.5, "size": 0.5, "markov": 0, "miss": 0}
-            bets_old = old_selector.select_best(count=2)
-            bet_list_old = [bw for bw, _ in bets_old]
-            if actual["halfwave"] in bet_list_old:
-                result["halfwave_old"][0]+=1
 
-            # 增强版半波
-            selector_v2 = DynamicHalfwaveSelectorV2(pred["color"], pred["size"], history)
-            bets_v2 = selector_v2.select_best(count=2)
-            bet_list_v2 = [bw for bw, _ in bets_v2]
-            if actual["halfwave"] in bet_list_v2:
-                result["halfwave_v2"][0]+=1
 
         return result
 
@@ -1614,22 +1472,61 @@ class BackTest817:
 
         r=self.run()
 
+
+
         print()
-        print("="*50)
-        print("V8.17 最近10期盲测（含增强版半波对比）")
-        print("="*50)
+
+        print("="*35)
+
+        print(
+
+            "V8.16 最近10期盲测"
+
+        )
+
+        print("="*35)
+
+
 
         for k,v in r.items():
-            print(k,":",v[0],"/",v[1],"=",round(v[0]/v[1]*100,2),"%")
+
+
+            print(
+
+                k,
+
+                ":",
+
+                v[0],
+
+                "/",
+
+                v[1],
+
+                "=",
+
+                round(
+
+                    v[0]/v[1]*100,
+
+                    2
+
+                ),
+
+                "%"
+
+            )
+
+
 
         return r
 
 
 # =====================================================
-# V8.17 增强版精确投注回测模块
+# V8.16 精确投注回测模块（含本金）
 # =====================================================
 
-class ExactBetBackTestV2:
+class ExactBetBackTest:
     def __init__(self, rows, odds_config=None, bet_amount=50):
         self.rows = rows
         self.bet_amount = bet_amount
@@ -1648,7 +1545,11 @@ class ExactBetBackTestV2:
             "绿大": 5.91, "绿小": 6.75,
         }
     
-    def simulate_mode(self, mode="动态半波V2", test_days=10, use_chase=False):
+    def simulate_mode(self, mode="动态半波", test_days=10):
+        """
+        模拟下注模式
+        mode: '动态半波', 'TOP3', 'TOP4', 'TOP5'
+        """
         results = []
         total_bet = 0
         total_return = 0
@@ -1656,7 +1557,6 @@ class ExactBetBackTestV2:
         hit_count = 0
         balance = 0
         balance_history = []
-        consecutive_loss = 0
         
         start_idx = min(test_days, len(self.rows) - 1)
         
@@ -1664,19 +1564,15 @@ class ExactBetBackTestV2:
             history = self.rows[i:]
             actual = self.rows[i - 1]
             
-            model = FusionV817(history)
+            model = FusionV816(history)
             pred = model.predict()
             
+            # 根据模式选择下注
             candidates = pred["candidates"]
             bet_list = []
             
-            if mode == "动态半波V2":
-                selector = DynamicHalfwaveSelectorV2(pred["color"], pred["size"], history)
-                bets = selector.select_best(count=2)
-                bet_list = [bw for bw, _ in bets]
-            elif mode == "动态半波原版":
-                selector = DynamicHalfwaveSelectorV2(pred["color"], pred["size"], history)
-                selector.weights = {"color": 0.5, "size": 0.5, "markov": 0, "miss": 0}
+            if mode == "动态半波":
+                selector = DynamicHalfwaveSelector(pred["color"], pred["size"])
                 bets = selector.select_best(count=2)
                 bet_list = [bw for bw, _ in bets]
             elif mode == "TOP3":
@@ -1688,46 +1584,42 @@ class ExactBetBackTestV2:
             else:
                 bet_list = []
             
+            # 计算投注
             bet_count = len(bet_list)
             if bet_count == 0:
                 continue
             
-            multiplier = 1
-            if use_chase and consecutive_loss > 0:
-                multiplier = min(2 ** consecutive_loss, CONFIG["risk_control"]["max_multiplier"])
-            
-            bet = self.bet_amount * bet_count * multiplier
+            bet = self.bet_amount * bet_count
             total_bet += bet
             
+            # 判断中奖
             hit = False
             win_amount = 0
-            hit_hw = None
+            hit_hh = None
             
-            if mode in ["动态半波V2", "动态半波原版"]:
-                actual_hw = actual["halfwave"]
-                for hw in bet_list:
-                    if hw == actual_hw:
+            if mode == "动态半波":
+                actual_bw = actual["color"] + actual["size"]
+                for bw in bet_list:
+                    if bw == actual_bw:
                         hit = True
-                        hit_hw = hw
-                        odds = self.odds.get(hw, 5.91)
-                        win_amount = self.bet_amount * odds * multiplier
+                        hit_hh = bw
+                        odds = self.odds.get(bw, 5.91)
+                        win_amount = self.bet_amount * odds
                         break
             else:
                 for hh in bet_list:
                     if hh == actual["halfhalf"]:
                         hit = True
-                        hit_hw = hh
+                        hit_hh = hh
                         odds = self.odds.get(hh, 0)
-                        win_amount = self.bet_amount * odds * multiplier
+                        win_amount = self.bet_amount * odds
                         break
             
             if hit:
                 hit_count += 1
                 total_return += win_amount
-                consecutive_loss = 0
             else:
                 win_amount = 0
-                consecutive_loss += 1
             
             profit = win_amount - bet
             total_profit += profit
@@ -1736,24 +1628,21 @@ class ExactBetBackTestV2:
             
             results.append({
                 "issue": actual["issue"],
-                "actual": actual["halfwave"] if mode in ["动态半波V2", "动态半波原版"] else actual["halfhalf"],
+                "actual": actual["halfhalf"],
                 "bet_list": bet_list,
                 "bet_count": bet_count,
                 "bet_amount": bet,
-                "multiplier": multiplier,
                 "win_amount": win_amount,
                 "profit": profit,
                 "balance": balance,
                 "hit": hit,
-                "hit_hw": hit_hw,
-                "consecutive_loss": consecutive_loss
+                "hit_hh": hit_hh
             })
         
         roi = (total_profit / total_bet * 100) if total_bet > 0 else 0
         
         return {
             "mode": mode,
-            "use_chase": use_chase,
             "results": results,
             "total_bet": total_bet,
             "total_return": total_return,
@@ -1765,29 +1654,32 @@ class ExactBetBackTestV2:
             "balance_history": balance_history
         }
     
-    def print_report(self, mode="动态半波V2", test_days=10, use_chase=False):
-        data = self.simulate_mode(mode, test_days, use_chase)
+    def print_report(self, mode="动态半波", test_days=10):
+        """打印详细报告"""
+        data = self.simulate_mode(mode, test_days)
         
-        print(f"\n{'='*70}")
-        print(f"📊 {mode} 下注模式详细回测")
-        print(f"  每注金额: {self.bet_amount} 元 | 追号: {'开启' if use_chase else '关闭'}")
-        print(f"{'='*70}")
+        print(f"\n{'='*60}")
+        print(f"📊 {mode} 下注模式详细回测 (含本金)")
+        print(f"  每注金额: {self.bet_amount} 元")
+        print(f"  赔率计算: 中奖金额 = 投注 × 赔率")
+        print(f"{'='*60}")
         
+        # 每期明细
         print(f"\n📋 最近{test_days}期明细:")
-        print(f"{'期号':<12} {'实际':<10} {'下注':<25} {'倍投':<6} {'投注':<8} {'中奖':<10} {'盈亏':<10} {'余额':<10}")
-        print(f"{'-'*100}")
+        print(f"{'期号':<12} {'实际开奖':<12} {'下注':<30} {'投注':<8} {'中奖':<10} {'盈亏':<10} {'余额':<10}")
+        print(f"{'-'*95}")
         
         for r in data["results"][:test_days]:
             bet_str = ",".join(r["bet_list"][:3])
             if len(r["bet_list"]) > 3:
                 bet_str += f"+{len(r['bet_list'])-3}"
-            chase_str = f"x{r['multiplier']}" if r['multiplier'] > 1 else "-"
-            print(f"{r['issue']:<12} {r['actual']:<10} {bet_str:<25} {chase_str:<6} "
+            print(f"{r['issue']:<12} {r['actual']:<12} {bet_str:<30} "
                   f"{r['bet_amount']:<8.0f} {r['win_amount']:<10.2f} "
                   f"{r['profit']:<+10.2f} {r['balance']:<10.2f}")
         
-        print(f"{'-'*100}")
+        print(f"{'-'*95}")
         
+        # 汇总统计
         print(f"\n📊 汇总统计:")
         print(f"  回测期数: {data['total_periods']} 期")
         print(f"  命中次数: {data['hit_count']} 次")
@@ -1797,6 +1689,7 @@ class ExactBetBackTestV2:
         print(f"  净盈利: {data['total_profit']:+.2f} 元")
         print(f"  ROI: {data['roi']:+.2f}%")
         
+        # 盈亏柱状图
         if data["results"]:
             print(f"\n📈 最近{min(test_days, len(data['results']))}期盈亏走势:")
             max_profit = max([abs(r["profit"]) for r in data["results"][:test_days]]) or 1
@@ -1811,67 +1704,65 @@ class ExactBetBackTestV2:
                 else:
                     print(f"  第{i+1:2d}期: {'░░░░░░░░░░░░░░░░░░░░'} {r['profit']:6.2f}元")
         
-        print(f"{'='*70}")
+        print(f"{'='*60}")
         
+        # 建议
         print(f"\n💡 建议:")
         if data["roi"] > 20:
             print(f"  ✅ {mode}模式表现优异 (ROI {data['roi']:+.2f}%)")
+            print(f"     最近{data['total_periods']}期盈利 {data['total_profit']:+.2f} 元")
         elif data["roi"] > 0:
             print(f"  ⚠️  {mode}模式略有盈利 (ROI {data['roi']:+.2f}%)")
+            print(f"     建议继续观察或调整策略")
         else:
             print(f"  ❌ {mode}模式亏损 (ROI {data['roi']:+.2f}%)")
+            print(f"     最近{data['total_periods']}期亏损 {data['total_profit']:+.2f} 元")
+            print(f"     建议考虑其他模式或停止下注")
         
         return data
     
     def compare_modes(self, test_days=10):
-        modes = ["动态半波V2", "动态半波V2+追号", "动态半波原版", "TOP3", "TOP5"]
+        """对比动态半波、TOP3、TOP4、TOP5四种模式"""
+        modes = ["动态半波", "TOP3", "TOP4", "TOP5"]
         results = {}
         
-        print(f"\n{'='*70}")
-        print(f"🔄 多种下注模式对比 (最近{test_days}期)")
-        print(f"{'='*70}")
+        print(f"\n{'='*60}")
+        print(f"🔄 四种下注模式对比 (最近{test_days}期)")
+        print(f"{'='*60}")
         
         for mode in modes:
-            if "+追号" in mode:
-                base_mode = mode.replace("+追号", "")
-                results[mode] = self.simulate_mode(base_mode, test_days, use_chase=True)
-            else:
-                results[mode] = self.simulate_mode(mode, test_days, use_chase=False)
+            results[mode] = self.simulate_mode(mode, test_days)
         
-        print(f"\n{'模式':<18} {'总投注':<12} {'总回报':<12} {'净盈利':<12} {'ROI':<12} {'命中率':<12} {'命中次数':<10}")
-        print(f"{'-'*95}")
+        print(f"\n{'模式':<12} {'总投注':<12} {'总回报':<12} {'净盈利':<12} {'ROI':<12} {'命中率':<12} {'命中次数':<10}")
+        print(f"{'-'*85}")
         
         for mode, data in results.items():
-            print(f"{mode:<18} {data['total_bet']:<12.2f} {data['total_return']:<12.2f} "
+            print(f"{mode:<12} {data['total_bet']:<12.2f} {data['total_return']:<12.2f} "
                   f"{data['total_profit']:<+12.2f} {data['roi']:<+12.2f}% "
                   f"{data['hit_rate']:<12.2f}% {data['hit_count']:<10}")
         
-        print(f"{'='*70}")
+        print(f"{'='*60}")
         
+        # 找出最优
         best_mode, best_data = max(results.items(), key=lambda x: x[1]["roi"])
         best_roi = best_data["roi"]
         
         print(f"\n🏆 最优模式: {best_mode} (ROI: {best_roi:+.2f}%)")
         
-        if "动态半波V2" in results and "动态半波原版" in results:
-            v2_roi = results["动态半波V2"]["roi"]
-            old_roi = results["动态半波原版"]["roi"]
-            improvement = v2_roi - old_roi
-            print(f"\n📈 增强版 vs 原版:")
-            print(f"   原版ROI: {old_roi:+.2f}%")
-            print(f"   增强版ROI: {v2_roi:+.2f}%")
-            print(f"   提升: {improvement:+.2f}%")
-        
         if best_roi > 0:
-            print(f"\n   ✅ 建议使用 {best_mode} 模式")
+            print(f"   ✅ 建议使用 {best_mode} 模式")
         else:
-            print(f"\n   ⚠️  所有模式均亏损，建议暂停")
+            print(f"   ⚠️  所有模式均亏损，建议暂停")
         
         return results, best_mode
 
 
 # =====================================================
-# 马尔可夫链模型
+# V8.16 多模型集成 + 滚动回测 + 动态调参
+# =====================================================
+
+# =====================================================
+# 1. 马尔可夫链模型
 # =====================================================
 
 class MarkovModel:
@@ -1890,12 +1781,15 @@ class MarkovModel:
         if not self.rows:
             return {}
         
+        # 获取当前最新状态
         current = self.rows[0]["halfhalf"]
         
+        # 获取所有可能的值
         all_values = ["红大单", "红大双", "红小单", "红小双",
                       "蓝大单", "蓝大双", "蓝小单", "蓝小双",
                       "绿大单", "绿大双", "绿小单", "绿小双"]
         
+        # 从转移矩阵获取概率
         transitions = self.transition_matrix.get(current, {})
         total = sum(transitions.values()) or 1
         
@@ -1904,6 +1798,7 @@ class MarkovModel:
             count = transitions.get(v, 0)
             result[v] = round(count / total * 100, 2)
         
+        # 如果没有转移数据，使用平稳分布
         if total == 1:
             freq = defaultdict(int)
             for r in self.rows:
@@ -1916,7 +1811,7 @@ class MarkovModel:
 
 
 # =====================================================
-# 频率统计模型
+# 2. 纯频率统计模型
 # =====================================================
 
 class FrequencyModel:
@@ -1941,7 +1836,7 @@ class FrequencyModel:
 
 
 # =====================================================
-# 趋势跟踪模型
+# 3. 趋势跟踪模型
 # =====================================================
 
 class TrendModel:
@@ -1955,10 +1850,12 @@ class TrendModel:
         
         score = defaultdict(float)
         
+        # 近期趋势权重
         for i, r in enumerate(self.rows[:15]):
             weight = (15 - i) * 0.5
             score[r["halfhalf"]] += weight
         
+        # 最近遗漏补偿
         for v in all_values:
             miss = 0
             for r in self.rows:
@@ -1974,7 +1871,7 @@ class TrendModel:
 
 
 # =====================================================
-# 多模型集成预测器
+# 4. 多模型集成预测器
 # =====================================================
 
 class EnsemblePredictor:
@@ -1987,11 +1884,13 @@ class EnsemblePredictor:
             ("trend", TrendModel(rows))
         ]
         
+        # 默认权重：Attribute最重，Markov次之
         self.weights = weights or ENSEMBLE_WEIGHTS
     
     def predict(self, attr="halfhalf"):
         votes = defaultdict(float)
         
+        # 获取所有可能的值
         all_values = ["红大单", "红大双", "红小单", "红小双",
                       "蓝大单", "蓝大双", "蓝小单", "蓝小双",
                       "绿大单", "绿大双", "绿小单", "绿小双"]
@@ -1999,27 +1898,32 @@ class EnsemblePredictor:
         for name, model in self.models:
             weight = self.weights.get(name, 0.25)
             
+            # 不同模型有不同的predict接口
             if name == "attribute":
+                # AttributeModel 需要 attr 和 values
                 pred = model.predict(attr, all_values)
             else:
+                # 其他模型只需要 attr
                 pred = model.predict(attr)
             
             for k, v in pred.items():
                 votes[k] += v * weight
         
+        # 归一化到100
         total = sum(votes.values()) or 1
         result = {k: round(v / total * 100, 2) for k, v in votes.items()}
         
         return result
     
     def get_topN(self, n=5):
+        """获取TOP N预测结果"""
         pred = self.predict()
         sorted_pred = sorted(pred.items(), key=lambda x: x[1], reverse=True)
         return sorted_pred[:n]
 
 
 # =====================================================
-# 网格搜索优化器
+# 5. 参数网格搜索
 # =====================================================
 
 class GridSearchOptimizer:
@@ -2027,6 +1931,8 @@ class GridSearchOptimizer:
         self.rows = rows
     
     def grid_search(self, test_days=10):
+        """网格搜索最优参数"""
+        # 参数网格
         param_grid = {
             "attribute_weight": [0.25, 0.30, 0.35, 0.40],
             "markov_weight": [0.15, 0.20, 0.25, 0.30],
@@ -2038,10 +1944,12 @@ class GridSearchOptimizer:
         best_roi = -float('inf')
         results = []
         
+        # 测试不同组合
         for aw in param_grid["attribute_weight"]:
             for mw in param_grid["markov_weight"]:
                 for fw in param_grid["frequency_weight"]:
                     for tw in param_grid["trend_weight"]:
+                        # 权重之和必须为1
                         total = aw + mw + fw + tw
                         if abs(total - 1.0) > 0.01:
                             continue
@@ -2053,6 +1961,7 @@ class GridSearchOptimizer:
                             "trend": tw
                         }
                         
+                        # 使用当前参数回测
                         roi = self._backtest_with_params(weights, test_days)
                         
                         results.append({
@@ -2064,6 +1973,7 @@ class GridSearchOptimizer:
                             best_roi = roi
                             best_params = weights
         
+        # 按ROI排序
         results.sort(key=lambda x: x["roi"], reverse=True)
         
         return {
@@ -2073,6 +1983,7 @@ class GridSearchOptimizer:
         }
     
     def _backtest_with_params(self, weights, test_days=10):
+        """使用指定参数回测"""
         start_idx = min(test_days, len(self.rows) - 1)
         
         total_bet = 0
@@ -2083,15 +1994,18 @@ class GridSearchOptimizer:
             history = self.rows[i:]
             actual = self.rows[i - 1]
             
+            # 使用集成模型
             ensemble = EnsemblePredictor(history, weights)
             pred = ensemble.get_topN(3)
             
             if not pred:
                 continue
             
+            # 下注TOP3
             bet_amount = 50 * 3
             total_bet += bet_amount
             
+            # 判断中奖
             hit = False
             for hh, score in pred:
                 if hh == actual["halfhalf"]:
@@ -2109,16 +2023,17 @@ class GridSearchOptimizer:
 
 
 # =====================================================
-# 滚动回测 + 动态调参
+# 6. 滚动回测 + 动态调参
 # =====================================================
 
 class RollingBacktestOptimizer:
     def __init__(self, rows, window_size=20, step=5):
         self.rows = rows
-        self.window_size = window_size
-        self.step = step
+        self.window_size = window_size  # 训练窗口大小
+        self.step = step                # 滚动步长
     
     def run(self):
+        """执行滚动回测"""
         results = []
         total_roi = 0
         total_profit = 0
@@ -2130,6 +2045,7 @@ class RollingBacktestOptimizer:
         print(f"  训练窗口: {self.window_size}期  滚动步长: {self.step}期")
         print(f"{'='*60}")
         
+        # 从最早开始滚动
         for start in range(0, len(self.rows) - self.window_size - 5, self.step):
             train_end = start + self.window_size
             test_start = train_end
@@ -2138,16 +2054,20 @@ class RollingBacktestOptimizer:
             if test_start >= len(self.rows):
                 break
             
+            # 训练数据
             train_rows = self.rows[start:train_end]
+            # 测试数据
             test_rows = self.rows[test_start:test_end]
             
             if len(train_rows) < 10 or len(test_rows) < 1:
                 continue
             
+            # 在训练集上做网格搜索
             grid = GridSearchOptimizer(train_rows)
             search_result = grid.grid_search(test_days=min(10, len(test_rows)))
             best_params = search_result["best_params"]
             
+            # 使用最优参数在测试集上预测
             ensemble = EnsemblePredictor(train_rows, best_params)
             
             period_bet = 0
@@ -2194,6 +2114,7 @@ class RollingBacktestOptimizer:
             total_bet += period_bet
             hit_count += period_hit
         
+        # 汇总统计
         avg_roi = total_roi / len(results) if results else 0
         
         print(f"\n📊 滚动回测汇总:")
@@ -2210,8 +2131,9 @@ class RollingBacktestOptimizer:
                 print(f"{r['train_period']:<15} {r['test_period']:<15} "
                       f"{r['roi']:<+12.2f}% {r['hit_rate']:<12.2f}% {r['profit']:<+12.2f}")
             
-            best_result = max(results, key=lambda x: x["roi"])
+            # 找到最优参数组合
             print(f"\n🏆 最优参数组合 (按ROI):")
+            best_result = max(results, key=lambda x: x["roi"])
             print(f"  训练期: {best_result['train_period']}")
             print(f"  ROI: {best_result['roi']:+.2f}%")
             print(f"  参数: {best_result['best_params']}")
@@ -2219,11 +2141,13 @@ class RollingBacktestOptimizer:
         return results
     
     def find_best_params(self):
+        """找到全局最优参数"""
         results = self.run()
         
         if not results:
             return None
         
+        # 按ROI排序
         sorted_results = sorted(results, key=lambda x: x["roi"], reverse=True)
         best = sorted_results[0]
         
@@ -2238,7 +2162,7 @@ class RollingBacktestOptimizer:
 
 
 # =====================================================
-# 权重优化器（5个，完整保留）
+# 全自动权重优化器（主权重）
 # =====================================================
 
 class AutoWeightOptimizer:
@@ -2248,6 +2172,7 @@ class AutoWeightOptimizer:
         self.rows = rows[:30]
     
     def evaluate_weights(self, weights, test_days=10):
+        """评估一组权重在真实回测中的表现"""
         if len(self.rows) < test_days + 1:
             return -100
         
@@ -2259,7 +2184,7 @@ class AutoWeightOptimizer:
             history = self.rows[i:]
             actual = self.rows[i - 1]
             
-            model = FusionV817(history, weights)
+            model = FusionV816(history, weights)
             pred = model.predict()
             
             if pred["candidates"]:
@@ -2282,6 +2207,7 @@ class AutoWeightOptimizer:
         return roi
     
     def random_search(self, test_days=10, iterations=300):
+        """随机搜索主权重"""
         print("\n🔍 正在搜索主权重最优组合...")
         print(f"  测试期数: {test_days}期")
         print(f"  迭代次数: {iterations}次")
@@ -2314,6 +2240,7 @@ class AutoWeightOptimizer:
         
         print(f"\n✅ 搜索完成！最优ROI: {best_roi:.1f}%")
         
+        # 如果没有找到有效权重，使用默认权重
         if best_weights is None:
             print("⚠️ 未找到有效权重，使用默认权重")
             best_weights = {"color": 0.25, "size": 0.30, "odd": 0.25, "halfhalf": 0.20}
@@ -2326,6 +2253,10 @@ class AutoWeightOptimizer:
         }
 
 
+# =====================================================
+# 颜色内部权重优化器
+# =====================================================
+
 class ColorWeightOptimizer:
     """颜色预测内部权重自动优化"""
     
@@ -2333,6 +2264,7 @@ class ColorWeightOptimizer:
         self.rows = rows[:30]
     
     def evaluate_color_weights(self, weights, test_days=10):
+        """评估颜色内部权重"""
         if len(self.rows) < test_days + 1:
             return 33
         
@@ -2354,6 +2286,7 @@ class ColorWeightOptimizer:
         return correct / total * 100 if total > 0 else 33
     
     def random_search(self, test_days=10, iterations=300):
+        """随机搜索颜色内部权重"""
         print("\n🔍 正在搜索颜色内部最优权重...")
         
         best_weights = None
@@ -2385,6 +2318,7 @@ class ColorWeightOptimizer:
         
         print(f"\n✅ 搜索完成！最优准确率: {best_accuracy:.1f}%")
         
+        # 如果没有找到有效权重，使用默认权重
         if best_weights is None:
             print("⚠️ 未找到有效权重，使用默认权重")
             best_weights = {"frequency": 0.20, "trend": 0.20, "markov": 0.20, "miss": 0.20, "zone": 0.20}
@@ -2397,6 +2331,10 @@ class ColorWeightOptimizer:
         }
 
 
+# =====================================================
+# 大小内部权重优化器
+# =====================================================
+
 class SizeWeightOptimizer:
     """大小预测内部权重自动优化"""
     
@@ -2404,6 +2342,7 @@ class SizeWeightOptimizer:
         self.rows = rows[:30]
     
     def evaluate_size_weights(self, weights, test_days=10):
+        """评估大小内部权重"""
         if len(self.rows) < test_days + 1:
             return 50
         
@@ -2425,6 +2364,7 @@ class SizeWeightOptimizer:
         return correct / total * 100 if total > 0 else 50
     
     def random_search(self, test_days=10, iterations=300):
+        """随机搜索大小内部权重"""
         print("\n🔍 正在搜索大小内部最优权重...")
         
         best_weights = None
@@ -2456,6 +2396,7 @@ class SizeWeightOptimizer:
         
         print(f"\n✅ 搜索完成！最优准确率: {best_accuracy:.1f}%")
         
+        # 如果没有找到有效权重，使用默认权重
         if best_weights is None:
             print("⚠️ 未找到有效权重，使用默认权重")
             best_weights = {"frequency": 0.20, "trend": 0.20, "markov": 0.20, "miss": 0.20, "consecutive": 0.20}
@@ -2468,6 +2409,10 @@ class SizeWeightOptimizer:
         }
 
 
+# =====================================================
+# 单双内部权重优化器
+# =====================================================
+
 class OddWeightOptimizer:
     """单双内部权重自动优化"""
     
@@ -2475,6 +2420,7 @@ class OddWeightOptimizer:
         self.rows = rows[:30]
     
     def evaluate_odd_weights(self, weights, test_days=10):
+        """评估单双内部权重"""
         if len(self.rows) < test_days + 1:
             return 50
         
@@ -2496,6 +2442,7 @@ class OddWeightOptimizer:
         return correct / total * 100 if total > 0 else 50
     
     def random_search(self, test_days=10, iterations=300):
+        """随机搜索单双内部权重"""
         print("\n🔍 正在搜索单双内部最优权重...")
         
         best_weights = None
@@ -2527,6 +2474,7 @@ class OddWeightOptimizer:
         
         print(f"\n✅ 搜索完成！最优准确率: {best_accuracy:.1f}%")
         
+        # 如果没有找到有效权重，使用默认权重
         if best_weights is None:
             print("⚠️ 未找到有效权重，使用默认权重")
             best_weights = {"frequency": 0.25, "trend": 0.20, "markov": 0.25, "tail": 0.15, "consecutive": 0.15}
@@ -2539,6 +2487,10 @@ class OddWeightOptimizer:
         }
 
 
+# =====================================================
+# 多模型集成权重优化器
+# =====================================================
+
 class EnsembleWeightOptimizer:
     """多模型集成权重自动优化"""
     
@@ -2546,6 +2498,7 @@ class EnsembleWeightOptimizer:
         self.rows = rows[:30]
     
     def evaluate_ensemble_weights(self, weights, test_days=10):
+        """评估多模型集成权重"""
         if len(self.rows) < test_days + 1:
             return -100
         
@@ -2580,6 +2533,7 @@ class EnsembleWeightOptimizer:
         return roi
     
     def random_search(self, test_days=10, iterations=300):
+        """随机搜索多模型集成权重"""
         print("\n🔍 正在搜索多模型集成最优权重...")
         
         best_weights = None
@@ -2610,6 +2564,7 @@ class EnsembleWeightOptimizer:
         
         print(f"\n✅ 搜索完成！最优ROI: {best_roi:.1f}%")
         
+        # 如果没有找到有效权重，使用默认权重
         if best_weights is None:
             print("⚠️ 未找到有效权重，使用默认权重")
             best_weights = {"attribute": 0.35, "markov": 0.25, "frequency": 0.20, "trend": 0.20}
@@ -2636,15 +2591,15 @@ class BetRecord:
         self.total_profit = 0
         self.consecutive_loss = 0
         
-    def add_record(self, issue, bets, actual, win_amount, multiplier=1):
-        bet_amount = 50 * len(bets) * multiplier
+    def add_record(self, issue, bets, actual, win_amount):
+        """添加下注记录"""
+        bet_amount = 50 * len(bets)
         profit = win_amount - bet_amount
         
         record = {
             "issue": issue,
             "bets": bets,
             "actual": actual,
-            "multiplier": multiplier,
             "bet_amount": bet_amount,
             "win_amount": win_amount,
             "profit": profit
@@ -2660,6 +2615,7 @@ class BetRecord:
             self.consecutive_loss = 0
     
     def print_summary(self):
+        """打印汇总"""
         print("\n" + "=" * 60)
         print("📋 下注记录汇总（今晚开始）")
         print("=" * 60)
@@ -2668,16 +2624,15 @@ class BetRecord:
             print("暂无记录")
             return
         
-        print(f"\n{'期号':<12} {'下注':<25} {'实际':<10} {'倍投':<6} {'投注':<8} {'中奖':<10} {'盈亏':<10}")
-        print("-" * 90)
+        print(f"\n{'期号':<12} {'下注':<25} {'实际':<10} {'投注':<8} {'中奖':<10} {'盈亏':<10}")
+        print("-" * 85)
         
         for r in self.records:
             bets_str = ",".join(r["bets"])
-            chase_str = f"x{r['multiplier']}" if r['multiplier'] > 1 else "-"
-            print(f"{r['issue']:<12} {bets_str:<25} {r['actual']:<10} {chase_str:<6} "
+            print(f"{r['issue']:<12} {bets_str:<25} {r['actual']:<10} "
                   f"{r['bet_amount']:<8.0f} {r['win_amount']:<10.2f} {r['profit']:<+10.2f}")
         
-        print("-" * 90)
+        print("-" * 85)
         print(f"\n总投注: {self.total_bet:.2f}元")
         print(f"总中奖: {self.total_win:.2f}元")
         print(f"总盈亏: {self.total_profit:+.2f}元")
@@ -2692,21 +2647,21 @@ class BetRecord:
         print("=" * 60)
     
     def save_to_file(self):
+        """保存到文件"""
         with open(BET_RECORD_FILE, "w", encoding="utf-8") as f:
-            f.write("# 香港彩下注记录（动态半波增强版 V8.17）\n\n")
+            f.write("# 香港彩下注记录（动态半波版 V8.16）\n\n")
             f.write(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
             
             if not self.records:
                 f.write("暂无记录\n")
                 return
             
-            f.write("| 期号 | 下注 | 实际开奖 | 倍投 | 投注 | 中奖 | 盈亏 |\n")
-            f.write("|------|------|----------|------|------|------|------|\n")
+            f.write("| 期号 | 下注 | 实际开奖 | 投注 | 中奖 | 盈亏 |\n")
+            f.write("|------|------|----------|------|------|------|\n")
             
             for r in self.records:
                 bets_str = ",".join(r["bets"])
-                chase_str = f"x{r['multiplier']}" if r['multiplier'] > 1 else "-"
-                f.write(f"| {r['issue']} | {bets_str} | {r['actual']} | {chase_str} | "
+                f.write(f"| {r['issue']} | {bets_str} | {r['actual']} | "
                        f"{r['bet_amount']:.0f} | {r['win_amount']:.2f} | {r['profit']:+.2f} |\n")
             
             f.write("\n## 汇总\n\n")
@@ -2730,7 +2685,7 @@ def save_report(result):
         encoding="utf-8"
     ) as f:
         f.write(
-            "# 香港彩 V8.17 预测报告（动态半波增强版）\n\n"
+            "# 香港彩 V8.16 预测报告（动态半波版）\n\n"
         )
         f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         f.write(
@@ -2788,10 +2743,10 @@ def main():
     global CONFIG, COLOR_WEIGHTS, SIZE_WEIGHTS, ODD_WEIGHTS, ENSEMBLE_WEIGHTS
 
 
-    print("=" * 60)
-    print("🎯 香港彩预测系统 V8.17（动态半波增强版）")
-    print("   核心升级: 大小权重提升 + 半波马尔可夫 + 遗漏追踪 + 追号机制")
-    print("=" * 60)
+    print("=" * 50)
+    print("🎯 香港彩预测系统 V8.16（动态半波版）")
+    print("   基于新澳门V8.17完整迁移")
+    print("=" * 50)
 
 
     print(
@@ -2823,7 +2778,7 @@ def main():
 
 
     # =====================================================
-    # 第一步 - 自动优化主权重
+    # 第一步 - 自动优化主权重（颜色/大小/单双/半半波）
     # =====================================================
     print("\n" + "=" * 60)
     print("🎯 第一步：自动优化主权重")
@@ -2933,9 +2888,6 @@ def main():
     print(f"\n多模型集成权重:")
     for k, v in ENSEMBLE_WEIGHTS.items():
         print(f"  {k}: {v:.3f}")
-    print(f"\n半波选择器权重:")
-    for k, v in CONFIG["halfwave_weights"].items():
-        print(f"  {k}: {v:.3f}")
 
 
     print()
@@ -2950,7 +2902,7 @@ def main():
 
 
 
-    for r in rows[:10]:
+    for r in rows:
 
 
         print(
@@ -2963,30 +2915,28 @@ def main():
 
             r["color"],
 
-            r["halfwave"],
-
             r["halfhalf"]
 
         )
-    
-    print("... (共30期)")
+
+
 
 
     print()
 
-    print("="*40)
+    print("="*35)
 
     print(
 
-        "香港彩 V8.17 增强版动态半波预测"
+        "香港彩 V8.16 BALANCE预测（动态半波版）"
 
     )
 
-    print("="*40)
+    print("="*35)
 
 
 
-    model=FusionV817(
+    model=FusionV816(
 
         rows
 
@@ -3014,8 +2964,19 @@ def main():
 
     ):
 
-        bar = "█" * int(v / 5)
-        print(f"  {k}: {v}% {bar}")
+
+        print(
+
+            k,
+
+            v,
+
+            "%"
+
+        )
+
+
+
 
 
     print()
@@ -3023,19 +2984,40 @@ def main():
     print("大小预测:")
 
 
-    for k,v in sorted(result["size"].items(), key=lambda x: x[1], reverse=True):
-        bar = "█" * int(v / 5)
-        print(f"  {k}: {v}% {bar}")
+    for k,v in result["size"].items():
+
+        print(
+
+            k,
+
+            v,
+
+            "%"
+
+        )
+
+
+
 
 
     print()
 
-    print("单双预测:")
+    print("单双预测 (优化版):")
 
 
-    for k,v in sorted(result["odd"].items(), key=lambda x: x[1], reverse=True):
-        bar = "█" * int(v / 5)
-        print(f"  {k}: {v}% {bar}")
+    for k,v in result["odd"].items():
+
+        print(
+
+            k,
+
+            v,
+
+            "%"
+
+        )
+
+
 
 
     print()
@@ -3052,44 +3034,24 @@ def main():
 
     ):
 
-        bar = "█" * int(c["score"] / 5)
-        print(f"  {i}. {c['halfhalf']:8s} 得分: {c['score']:6.2f} {bar}")
+
+        print(
+
+            i,
+
+            c["halfhalf"],
+
+            c["score"]
+
+        )
 
 
     # =====================================================
-    # V8.17 增强版动态半波推荐
+    # 动态半波推荐（核心改动：不再固定买绿大+红大）
     # =====================================================
-    selector = DynamicHalfwaveSelectorV2(result["color"], result["size"], rows)
+    selector = DynamicHalfwaveSelector(result["color"], result["size"])
     bets = selector.select_best(count=2)
     selector.print_recommendation(bets)
-
-    # 半波马尔可夫分析
-    if rows:
-        hw_markov = HalfwaveMarkovModel(rows)
-        detail = hw_markov.get_transition_detail()
-        if detail:
-            print(f"\n📊 半波马尔可夫分析:")
-            print(f"  当前状态: {detail['current']}")
-            sorted_trans = sorted(detail['transitions'].items(), key=lambda x: x[1], reverse=True)
-            print(f"  转移概率: {dict(sorted_trans)}")
-
-    # 半波遗漏分析
-    if rows:
-        hw_miss = HalfwaveMissTracker(rows)
-        miss_info = hw_miss.get_miss_counts()
-        print(f"\n📊 半波遗漏分析:")
-        for hw, cnt in sorted(miss_info.items(), key=lambda x: x[1], reverse=True):
-            bar = "█" * min(cnt, 20)
-            print(f"  {hw}: 遗漏{cnt}期 {bar}")
-
-    # 半波冷热分析
-    if rows:
-        hw_miss = HalfwaveMissTracker(rows)
-        analysis = hw_miss.get_cold_hot_analysis()
-        print(f"\n📊 半波冷热分析 (近10期):")
-        for hw, info in sorted(analysis.items(), key=lambda x: x[1]["frequency_10"], reverse=True):
-            status_icon = "🔥" if info["status"] == "热" else ("🌡️" if info["status"] == "温" else "❄️")
-            print(f"  {hw}: {status_icon} {info['status']} | 出现{info['frequency_10']}次 | 遗漏{info['miss_count']}期")
 
 
     # =====================================================
@@ -3104,37 +3066,52 @@ def main():
 
 
     # =====================================================
-    # V8.17 盲测
+    # V8.16 盲测
     # =====================================================
-    BackTest817(rows).print_result()
+    BackTest816(
+
+        rows
+
+    ).print_result()
 
 
-    save_report(result)
+
+
+    save_report(
+
+        result
+
+    )
+
+
 
     print()
-    print("报告生成:", REPORT_FILE)
+
+    print(
+
+        "报告生成:",
+
+        REPORT_FILE
+
+    )
 
 
     # =====================================================
-    # V8.17 增强版精确投注回测
+    # 精确投注回测（动态半波为主）
     # =====================================================
     print()
-    print("=" * 70)
-    print("💰 V8.17 增强版真实盈利回测 (含本金)")
-    print("=" * 70)
+    print("=" * 60)
+    print("💰 真实盈利回测 (含本金)")
+    print("=" * 60)
     
-    exact_test = ExactBetBackTestV2(rows, bet_amount=50)
+    exact_test = ExactBetBackTest(rows, bet_amount=50)
     
-    # 对比多种模式
+    # 对比四种模式
     exact_test.compare_modes(test_days=10)
     
-    # 详细显示增强版动态半波
+    # 详细显示动态半波模式
     print()
-    exact_test.print_report(mode="动态半波V2", test_days=10, use_chase=False)
-    
-    # 显示追号模式
-    print()
-    exact_test.print_report(mode="动态半波V2", test_days=10, use_chase=True)
+    exact_test.print_report(mode="动态半波", test_days=10)
 
 
     # =====================================================
@@ -3145,12 +3122,14 @@ def main():
     print("🤖 多模型集成 + 滚动回测 + 动态调参")
     print("=" * 60)
     
+    # 1. 多模型集成预测
     print("\n📊 多模型集成预测 (TOP5):")
     ensemble = EnsemblePredictor(rows)
     top5 = ensemble.get_topN(5)
     for i, (hh, score) in enumerate(top5, 1):
         print(f"  {i}. {hh}: {score}%")
     
+    # 2. 网格搜索最优参数
     print("\n🔍 网格搜索最优参数 (最近10期):")
     grid = GridSearchOptimizer(rows)
     search_result = grid.grid_search(test_days=10)
@@ -3160,10 +3139,12 @@ def main():
     for i, r in enumerate(search_result["top_10_results"][:3], 1):
         print(f"    {i}. ROI {r['roi']:+.2f}% - {r['weights']}")
     
+    # 3. 滚动回测 + 动态调参
     print("\n🔄 滚动回测 + 动态调参:")
     rolling = RollingBacktestOptimizer(rows, window_size=20, step=5)
     best_params = rolling.find_best_params()
     
+    # 4. 使用最优参数进行最终预测
     if best_params:
         print("\n🎯 使用最优参数的最终预测:")
         final_ensemble = EnsemblePredictor(rows, best_params)
@@ -3176,21 +3157,6 @@ def main():
     # =====================================================
     bet_record.save_to_file()
     print(f"\n📄 下注记录已保存: {BET_RECORD_FILE}")
-
-    # =====================================================
-    # 最终总结
-    # =====================================================
-    print("\n" + "=" * 70)
-    print("📋 V8.17 增强版核心改进总结:")
-    print("=" * 70)
-    print("  1. ✅ 大小权重从50%提升至40%（基于80%准确率）")
-    print("  2. ✅ 新增半波专用马尔可夫链模型（6种状态）")
-    print("  3. ✅ 新增半波遗漏追踪器（冷热分析+遗漏补偿）")
-    print("  4. ✅ 新增连续出现反向信号（连3次降30%权重）")
-    print("  5. ✅ 新增智能追号机制（可开关，连黑加倍）")
-    print("  6. ✅ 新增原版vs增强版对比回测")
-    print("  7. ✅ 完整保留V8.16所有功能")
-    print("=" * 70)
 
 
 if __name__=="__main__":
