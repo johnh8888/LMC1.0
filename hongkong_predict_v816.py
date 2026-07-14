@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-香港彩预测系统 V8.16 - 动态半波版
+香港彩预测系统 V8.16 - 动态半波版（颜色分散优化）
 
 基于新澳门V8.17完整迁移至香港彩:
 1. 香港彩专用配置
 2. 30期历史数据
-3. 动态半波选择（不固定买绿大+红大）
+3. 动态半波选择（强制颜色分散，不再只推同一颜色）
 4. 全自动权重优化（300次迭代，5个优化器）
 5. 风险控制模块
 6. 下注记录追踪
@@ -1247,11 +1247,11 @@ class FusionV816:
 
 
 # =====================================================
-# 动态半波选择器（核心：不固定买绿大+红大）
+# 动态半波选择器（颜色分散优化版）
 # =====================================================
 
 class DynamicHalfwaveSelector:
-    """根据预测动态选择最强的半波组合（不固定买绿大+红大）"""
+    """根据预测动态选择最强的半波组合，强制覆盖不同颜色"""
     
     def __init__(self, color_pred, size_pred):
         self.color_pred = color_pred
@@ -1262,18 +1262,37 @@ class DynamicHalfwaveSelector:
     def select_best(self, count=2):
         """
         选择得分最高的N个半波（颜色+大小）
-        根据颜色预测和大小预测动态计算
+        强制覆盖不同颜色，避免全推同一颜色
         """
         scores = {}
         for c in self.all_colors:
             for s in self.all_sizes:
                 color_score = self.color_pred.get(c, 0)
                 size_score = self.size_pred.get(s, 0)
-                # 颜色权重0.5，大小权重0.5
                 scores[c + s] = color_score * 0.5 + size_score * 0.5
         
         sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        return sorted_scores[:count]
+        
+        # ===== 颜色分散优化：确保推荐的半波覆盖不同颜色 =====
+        result = []
+        used_colors = set()
+        for hw, score in sorted_scores:
+            color = hw[0]  # 第一个字是颜色
+            if color not in used_colors:
+                result.append((hw, score))
+                used_colors.add(color)
+            if len(result) >= count:
+                break
+        
+        # 如果不够count个（极端情况），补充剩余最高分
+        if len(result) < count:
+            for hw, score in sorted_scores:
+                if (hw, score) not in result:
+                    result.append((hw, score))
+                if len(result) >= count:
+                    break
+        
+        return result[:count]
     
     def get_odds(self, halfwave):
         """获取半波赔率"""
@@ -1287,7 +1306,7 @@ class DynamicHalfwaveSelector:
     def print_recommendation(self, bets, bet_amount=50):
         """打印推荐"""
         print("\n" + "=" * 50)
-        print("🎯 动态半波下注建议（根据预测自动选择）")
+        print("🎯 动态半波下注建议（颜色分散优化版）")
         print("=" * 50)
         
         print(f"\n📋 推荐下注（动态半波，{len(bets)}注）:")
@@ -1309,7 +1328,7 @@ class DynamicHalfwaveSelector:
         for bw, _ in bets:
             print(f"  {bw}: {bet_amount}元")
         
-        print(f"\n💡 提示: 动态半波不固定买绿大+红大，根据预测自动选择最优组合")
+        print(f"\n💡 提示: 颜色分散优化，自动覆盖不同颜色，提高命中率")
 
 
 # =====================================================
@@ -1340,7 +1359,9 @@ class BackTest816:
 
             "halfhalf":[0,0],
 
-            "top3":[0,0]
+            "top3":[0,0],
+
+            "halfwave":[0,0]
 
         }
 
@@ -1394,6 +1415,8 @@ class BackTest816:
             result["halfhalf"][1]+=1
 
             result["top3"][1]+=1
+
+            result["halfwave"][1]+=1
 
 
 
@@ -1462,6 +1485,14 @@ class BackTest816:
 
                 result["top3"][0]+=1
 
+            # 半波盲测
+            selector = DynamicHalfwaveSelector(pred["color"], pred["size"])
+            bets = selector.select_best(count=2)
+            bet_list = [bw for bw, _ in bets]
+            actual_hw = actual["color"] + actual["size"]
+            if actual_hw in bet_list:
+                result["halfwave"][0]+=1
+
 
 
         return result
@@ -1480,7 +1511,7 @@ class BackTest816:
 
         print(
 
-            "V8.16 最近10期盲测"
+            "V8.16 最近10期盲测（颜色分散优化版）"
 
         )
 
@@ -2649,7 +2680,7 @@ class BetRecord:
     def save_to_file(self):
         """保存到文件"""
         with open(BET_RECORD_FILE, "w", encoding="utf-8") as f:
-            f.write("# 香港彩下注记录（动态半波版 V8.16）\n\n")
+            f.write("# 香港彩下注记录（动态半波版 V8.16 颜色分散优化）\n\n")
             f.write(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
             
             if not self.records:
@@ -2685,7 +2716,7 @@ def save_report(result):
         encoding="utf-8"
     ) as f:
         f.write(
-            "# 香港彩 V8.16 预测报告（动态半波版）\n\n"
+            "# 香港彩 V8.16 预测报告（动态半波版 颜色分散优化）\n\n"
         )
         f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         f.write(
@@ -2744,7 +2775,7 @@ def main():
 
 
     print("=" * 50)
-    print("🎯 香港彩预测系统 V8.16（动态半波版）")
+    print("🎯 香港彩预测系统 V8.16（动态半波版 颜色分散优化）")
     print("   基于新澳门V8.17完整迁移")
     print("=" * 50)
 
@@ -2928,7 +2959,7 @@ def main():
 
     print(
 
-        "香港彩 V8.16 BALANCE预测（动态半波版）"
+        "香港彩 V8.16 BALANCE预测（动态半波版 颜色分散优化）"
 
     )
 
@@ -3047,7 +3078,7 @@ def main():
 
 
     # =====================================================
-    # 动态半波推荐（核心改动：不再固定买绿大+红大）
+    # 动态半波推荐（颜色分散优化版）
     # =====================================================
     selector = DynamicHalfwaveSelector(result["color"], result["size"])
     bets = selector.select_best(count=2)
