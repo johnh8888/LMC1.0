@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-老澳门彩预测系统 V8.16 - 全自动优化完整版
+老澳门彩预测系统 V8.16 - 半波版（绿大+红大）
 
 核心功能:
 1. 冷热颜色平衡
@@ -16,6 +16,8 @@
 9. 网格搜索最优参数
 10. 滚动回测 + 动态调参
 11. 全自动权重优化（主权重 + 单双 + 颜色 + 大小 + 多模型集成）
+12. 下注记录追踪（今晚开始）
+13. 半波模式（绿大+红大，每期100元）
 
 """
 
@@ -24,6 +26,7 @@ import json
 import urllib.request
 import random
 from collections import defaultdict
+from datetime import datetime
 
 
 # =====================================================
@@ -33,12 +36,14 @@ from collections import defaultdict
 
 CONFIG = {
 
-    "history_limit": 30,
+    "history_limit":30,
 
     "api_url":
     "https://marksix6.net/index.php?api=1",
 
     "lottery_type": "老澳门彩",
+
+    "bet_mode": "半波",  # ← 半波模式
 
     "weights":{
 
@@ -56,6 +61,7 @@ CONFIG = {
 
 
 REPORT_FILE="oldmacau_result_v816.md"
+BET_RECORD_FILE="oldmacau_bet_record.md"
 
 
 # =====================================================
@@ -1463,10 +1469,10 @@ class ExactBetBackTest:
             "绿小单": 11.82, "绿小双": 15.76,
         }
     
-    def simulate_mode(self, mode="TOP3", test_days=10):
+    def simulate_mode(self, mode="半波", test_days=10):
         """
         模拟下注模式
-        mode: 'TOP3', 'TOP4', 'TOP5'
+        mode: '半波', 'TOP3', 'TOP4', 'TOP5'
         """
         results = []
         total_bet = 0
@@ -1489,7 +1495,33 @@ class ExactBetBackTest:
             candidates = pred["candidates"]
             bet_list = []
             
-            if mode == "TOP3":
+            if mode == "半波":
+                # 从TOP5中提取半波（颜色+大小）
+                halfwave_set = {}
+                for c in candidates[:5]:
+                    hh = c["halfhalf"]
+                    bw = hh[0] + hh[1]  # 颜色+大小
+                    if bw not in halfwave_set:
+                        halfwave_set[bw] = c["score"]
+                
+                # 优先选绿大和红大
+                priority = ["绿大", "红大"]
+                for p in priority:
+                    if p in halfwave_set:
+                        bet_list.append(p)
+                # 如果不够2个，补充其他
+                for bw in halfwave_set:
+                    if bw not in bet_list and len(bet_list) < 2:
+                        bet_list.append(bw)
+                
+                # 确保有2注
+                if len(bet_list) < 2:
+                    if "绿大" not in bet_list:
+                        bet_list.append("绿大")
+                    if len(bet_list) < 2 and "红大" not in bet_list:
+                        bet_list.append("红大")
+                        
+            elif mode == "TOP3":
                 bet_list = [c["halfhalf"] for c in candidates[:3]]
             elif mode == "TOP4":
                 bet_list = [c["halfhalf"] for c in candidates[:4]]
@@ -1511,13 +1543,25 @@ class ExactBetBackTest:
             win_amount = 0
             hit_hh = None
             
-            for hh in bet_list:
-                if hh == actual["halfhalf"]:
-                    hit = True
-                    hit_hh = hh
-                    odds = self.odds.get(hh, 0)
-                    win_amount = self.bet_amount * odds  # 含本金
-                    break
+            if mode == "半波":
+                actual_bw = actual["color"] + actual["size"]
+                for bw in bet_list:
+                    if bw == actual_bw:
+                        hit = True
+                        hit_hh = bw
+                        # 半波赔率
+                        half_odds = {"红大": 6.75, "绿大": 5.91}
+                        odds = half_odds.get(bw, 5.91)
+                        win_amount = self.bet_amount * odds
+                        break
+            else:
+                for hh in bet_list:
+                    if hh == actual["halfhalf"]:
+                        hit = True
+                        hit_hh = hh
+                        odds = self.odds.get(hh, 0)
+                        win_amount = self.bet_amount * odds
+                        break
             
             if hit:
                 hit_count += 1
@@ -1558,7 +1602,7 @@ class ExactBetBackTest:
             "balance_history": balance_history
         }
     
-    def print_report(self, mode="TOP3", test_days=10):
+    def print_report(self, mode="半波", test_days=10):
         """打印详细报告"""
         data = self.simulate_mode(mode, test_days)
         
@@ -1626,12 +1670,12 @@ class ExactBetBackTest:
         return data
     
     def compare_modes(self, test_days=10):
-        """对比TOP3、TOP4、TOP5三种模式"""
-        modes = ["TOP3", "TOP4", "TOP5"]
+        """对比半波、TOP3、TOP4、TOP5四种模式"""
+        modes = ["半波", "TOP3", "TOP4", "TOP5"]
         results = {}
         
         print(f"\n{'='*60}")
-        print(f"🔄 三种下注模式对比 (最近{test_days}期)")
+        print(f"🔄 四种下注模式对比 (最近{test_days}期)")
         print(f"{'='*60}")
         
         for mode in modes:
@@ -2482,134 +2526,158 @@ class EnsembleWeightOptimizer:
 
 
 # =====================================================
+# 下注记录管理
+# =====================================================
+
+class BetRecord:
+    """下注记录管理 - 今晚开始"""
+    
+    def __init__(self):
+        self.records = []
+        self.total_bet = 0
+        self.total_win = 0
+        self.total_profit = 0
+        self.consecutive_loss = 0
+        
+    def add_record(self, issue, bets, actual, win_amount):
+        """添加下注记录"""
+        bet_amount = 50 * len(bets)
+        profit = win_amount - bet_amount
+        
+        record = {
+            "issue": issue,
+            "bets": bets,
+            "actual": actual,
+            "bet_amount": bet_amount,
+            "win_amount": win_amount,
+            "profit": profit
+        }
+        self.records.append(record)
+        self.total_bet += bet_amount
+        self.total_win += win_amount
+        self.total_profit += profit
+        
+        if profit < 0:
+            self.consecutive_loss += 1
+        else:
+            self.consecutive_loss = 0
+    
+    def print_summary(self):
+        """打印汇总"""
+        print("\n" + "=" * 60)
+        print("📋 下注记录汇总（今晚开始）")
+        print("=" * 60)
+        
+        if not self.records:
+            print("暂无记录")
+            return
+        
+        print(f"\n{'期号':<12} {'下注':<25} {'实际':<10} {'投注':<8} {'中奖':<10} {'盈亏':<10}")
+        print("-" * 85)
+        
+        for r in self.records:
+            bets_str = ",".join(r["bets"])
+            print(f"{r['issue']:<12} {bets_str:<25} {r['actual']:<10} "
+                  f"{r['bet_amount']:<8.0f} {r['win_amount']:<10.2f} {r['profit']:<+10.2f}")
+        
+        print("-" * 85)
+        print(f"\n总投注: {self.total_bet:.2f}元")
+        print(f"总中奖: {self.total_win:.2f}元")
+        print(f"总盈亏: {self.total_profit:+.2f}元")
+        print(f"连续亏损: {self.consecutive_loss}期")
+        
+        roi = (self.total_profit / self.total_bet * 100) if self.total_bet > 0 else 0
+        print(f"ROI: {roi:+.2f}%")
+        
+        if self.consecutive_loss >= 2:
+            print(f"\n⚠️ 连续亏损{self.consecutive_loss}期，建议观望1-2期！")
+        
+        print("=" * 60)
+    
+    def save_to_file(self):
+        """保存到文件"""
+        with open(BET_RECORD_FILE, "w", encoding="utf-8") as f:
+            f.write("# 老澳门彩下注记录（半波版）\n\n")
+            f.write(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            
+            if not self.records:
+                f.write("暂无记录\n")
+                return
+            
+            f.write("| 期号 | 下注 | 实际开奖 | 投注 | 中奖 | 盈亏 |\n")
+            f.write("|------|------|----------|------|------|------|\n")
+            
+            for r in self.records:
+                bets_str = ",".join(r["bets"])
+                f.write(f"| {r['issue']} | {bets_str} | {r['actual']} | "
+                       f"{r['bet_amount']:.0f} | {r['win_amount']:.2f} | {r['profit']:+.2f} |\n")
+            
+            f.write("\n## 汇总\n\n")
+            f.write(f"- 总投注: {self.total_bet:.2f}元\n")
+            f.write(f"- 总中奖: {self.total_win:.2f}元\n")
+            f.write(f"- 总盈亏: {self.total_profit:+.2f}元\n")
+            roi = (self.total_profit / self.total_bet * 100) if self.total_bet > 0 else 0
+            f.write(f"- ROI: {roi:+.2f}%\n")
+            f.write(f"- 连续亏损: {self.consecutive_loss}期\n")
+
+
+# =====================================================
 # 报告
 # =====================================================
 
 
 def save_report(result):
-
-
     with open(
-
         REPORT_FILE,
-
         "w",
-
         encoding="utf-8"
-
     ) as f:
-
-
-
         f.write(
-
-            "# 老澳门彩 V8.16 BALANCE\n\n"
-
+            "# 老澳门彩 V8.16 BALANCE（半波版）\n\n"
         )
-
-
-
         f.write(
-
             "## 颜色预测\n\n"
-
         )
-
-
         for k,v in sorted(
-
             result["color"].items(),
-
             key=lambda x:x[1],
-
             reverse=True
-
         ):
-
-
             f.write(
-
                 f"{k}: {v}%\n"
-
             )
-
-
-
         f.write(
-
             "\n## 大小预测\n\n"
-
         )
-
-
         for k,v in sorted(
-
             result["size"].items(),
-
             key=lambda x:x[1],
-
             reverse=True
-
         ):
-
-
             f.write(
-
                 f"{k}: {v}%\n"
-
             )
-
-
-
         f.write(
-
             "\n## 单双预测\n\n"
-
         )
-
-
         for k,v in sorted(
-
             result["odd"].items(),
-
             key=lambda x:x[1],
-
             reverse=True
-
         ):
-
-
             f.write(
-
                 f"{k}: {v}%\n"
-
             )
-
-
-
         f.write(
-
             "\n## 最终TOP5\n\n"
-
         )
-
-
-
         for i,c in enumerate(
-
             result["candidates"],
-
             1
-
         ):
-
-
             f.write(
-
                 f"{i}. {c['halfhalf']} "
-
                 f"{c['score']}\n"
-
             )
 
 
@@ -2623,7 +2691,7 @@ def main():
 
 
     print("=" * 50)
-    print("🎯 老澳门彩预测系统 V8.16")
+    print("🎯 老澳门彩预测系统 V8.16（半波版）")
     print("=" * 50)
 
 
@@ -2806,7 +2874,7 @@ def main():
 
     print(
 
-        "老澳门彩 V8.16 BALANCE预测"
+        "老澳门彩 V8.16 BALANCE预测（半波版）"
 
     )
 
@@ -2924,9 +2992,68 @@ def main():
         )
 
 
+    # =====================================================
+    # 下注建议（半波：绿大+红大）
+    # =====================================================
+    print("\n" + "=" * 50)
+    print("🎯 今晚下注建议（半波：绿大+红大）")
+    print("=" * 50)
+
+    # 从TOP5中提取半波（颜色+大小）
+    top5 = result["candidates"][:5]
+    halfwave_set = {}
+    for c in top5:
+        hh = c["halfhalf"]
+        bw = hh[0] + hh[1]  # 颜色+大小
+        if bw not in halfwave_set:
+            halfwave_set[bw] = c["score"]
+
+    # 优先选绿大和红大
+    bet_list = []
+    priority = ["绿大", "红大"]
+    for p in priority:
+        if p in halfwave_set:
+            bet_list.append(p)
+    # 如果不够2个，补充其他
+    for bw in halfwave_set:
+        if bw not in bet_list and len(bet_list) < 2:
+            bet_list.append(bw)
+
+    # 确保有2注
+    if len(bet_list) < 2:
+        if "绿大" not in bet_list:
+            bet_list.append("绿大")
+        if len(bet_list) < 2 and "红大" not in bet_list:
+            bet_list.append("红大")
+
+    bet_count = len(bet_list)
+    bet_amount = bet_count * 50
+
+    print(f"\n📋 推荐下注（半波，{bet_count}注）:")
+    for i, bw in enumerate(bet_list, 1):
+        print(f"  {i}. {bw}")
+
+    print(f"\n🎨 覆盖颜色: 绿 + 红")
+    print(f"📏 大小: 大")
+    print(f"\n💰 下注金额: {bet_amount}元 ({bet_count}注×50元)")
+    for bw in bet_list:
+        print(f"  {bw}: 50元")
 
 
+    # =====================================================
+    # 下注记录初始化
+    # =====================================================
+    print("\n" + "=" * 50)
+    print("📋 下注记录（今晚开始）")
+    print("=" * 50)
 
+    bet_record = BetRecord()
+    print("\n当前无记录，等待开奖后更新...")
+
+
+    # =====================================================
+    # V8.16 盲测
+    # =====================================================
     BackTest816(
 
         rows
@@ -2955,7 +3082,9 @@ def main():
     )
 
 
-    # ===== 精确投注回测 =====
+    # =====================================================
+    # 精确投注回测（半波为主）
+    # =====================================================
     print()
     print("=" * 60)
     print("💰 真实盈利回测 (含本金)")
@@ -2963,15 +3092,17 @@ def main():
     
     exact_test = ExactBetBackTest(rows, bet_amount=50)
     
-    # 对比三种模式
+    # 对比四种模式
     exact_test.compare_modes(test_days=10)
     
-    # 详细显示TOP3模式
+    # 详细显示半波模式
     print()
-    exact_test.print_report(mode="TOP3", test_days=10)
+    exact_test.print_report(mode="半波", test_days=10)
 
 
-    # ===== 多模型集成 + 滚动回测 + 动态调参 =====
+    # =====================================================
+    # 多模型集成 + 滚动回测 + 动态调参
+    # =====================================================
     print()
     print("=" * 60)
     print("🤖 多模型集成 + 滚动回测 + 动态调参")
@@ -3006,6 +3137,12 @@ def main():
         final_top5 = final_ensemble.get_topN(5)
         for i, (hh, score) in enumerate(final_top5, 1):
             print(f"  {i}. {hh}: {score}%")
+    
+    # =====================================================
+    # 保存下注记录
+    # =====================================================
+    bet_record.save_to_file()
+    print(f"\n📄 下注记录已保存: {BET_RECORD_FILE}")
 
 
 if __name__=="__main__":
