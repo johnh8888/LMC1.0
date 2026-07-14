@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-香港彩预测系统 V8.16 - 完整版（含下注记录）
+香港彩预测系统 V8.16 - TOP4完整版
 
 核心功能:
 1. 冷热颜色平衡
@@ -17,6 +17,7 @@
 10. 滚动回测 + 动态调参
 11. 全自动权重优化（主权重 + 单双 + 颜色 + 大小 + 多模型集成）
 12. 下注记录追踪（今晚开始）
+13. TOP4模式（覆盖2色，大小100%，单双100%）
 
 """
 
@@ -41,6 +42,8 @@ CONFIG = {
     "https://marksix6.net/index.php?api=1",
 
     "lottery_type": "香港彩",
+
+    "bet_mode": "TOP4",  # ← TOP4模式
 
     "weights":{
 
@@ -1466,7 +1469,7 @@ class ExactBetBackTest:
             "绿小单": 11.82, "绿小双": 15.76,
         }
     
-    def simulate_mode(self, mode="TOP3", test_days=10):
+    def simulate_mode(self, mode="TOP4", test_days=10):
         """
         模拟下注模式
         mode: 'TOP3', 'TOP4', 'TOP5'
@@ -1561,7 +1564,7 @@ class ExactBetBackTest:
             "balance_history": balance_history
         }
     
-    def print_report(self, mode="TOP3", test_days=10):
+    def print_report(self, mode="TOP4", test_days=10):
         """打印详细报告"""
         data = self.simulate_mode(mode, test_days)
         
@@ -2556,7 +2559,7 @@ class BetRecord:
     def save_to_file(self):
         """保存到文件"""
         with open(BET_RECORD_FILE, "w", encoding="utf-8") as f:
-            f.write("# 香港彩下注记录\n\n")
+            f.write("# 香港彩下注记录（TOP4版）\n\n")
             f.write(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
             
             if not self.records:
@@ -2592,7 +2595,7 @@ def save_report(result):
         encoding="utf-8"
     ) as f:
         f.write(
-            "# 香港彩 V8.16 BALANCE\n\n"
+            "# 香港彩 V8.16 BALANCE（TOP4版）\n\n"
         )
         f.write(
             "## 颜色预测\n\n"
@@ -2650,7 +2653,7 @@ def main():
 
 
     print("=" * 50)
-    print("🎯 香港彩预测系统 V8.16")
+    print("🎯 香港彩预测系统 V8.16（TOP4版）")
     print("=" * 50)
 
 
@@ -2833,7 +2836,7 @@ def main():
 
     print(
 
-        "香港彩 V8.16 BALANCE预测"
+        "香港彩 V8.16 BALANCE预测（TOP4版）"
 
     )
 
@@ -2952,35 +2955,52 @@ def main():
 
 
     # =====================================================
-    # 下注建议（今晚开始，猜2个颜色）
+    # 下注建议（方案三：TOP4，猜2个颜色）
     # =====================================================
     print("\n" + "=" * 50)
-    print("🎯 今晚下注建议（猜2个颜色）")
+    print("🎯 今晚下注建议（方案三：TOP4）")
     print("=" * 50)
-    
-    top3 = result["candidates"][:3]
+
+    bet_mode = CONFIG.get("bet_mode", "TOP4")
+    bet_count = 4 if bet_mode == "TOP4" else 3
+    bet_list = result["candidates"][:bet_count]
+
     colors_covered = set()
-    for c in top3:
+    for c in bet_list:
         colors_covered.add(c["halfhalf"][0])
-    
-    print(f"\n📋 推荐下注（TOP3，覆盖{len(colors_covered)}种颜色）:")
-    for i, c in enumerate(top3, 1):
+
+    sizes_covered = set()
+    for c in bet_list:
+        sizes_covered.add(c["halfhalf"][1])
+
+    odds_covered = set()
+    for c in bet_list:
+        odds_covered.add(c["halfhalf"][2])
+
+    bet_amount = bet_count * 50
+
+    print(f"\n📋 推荐下注（{bet_mode}，覆盖{len(colors_covered)}种颜色）:")
+    for i, c in enumerate(bet_list, 1):
         print(f"  {i}. {c['halfhalf']} (得分: {c['score']})")
-    
+
     print(f"\n🎨 覆盖颜色: {' + '.join(sorted(colors_covered))}")
-    print(f"  颜色命中率: {len(colors_covered)/3*100:.0f}%（猜{len(colors_covered)}种颜色）")
-    print(f"\n💰 下注金额: 150元 (3注×50元)")
-    print(f"  {top3[0]['halfhalf']}: 50元")
-    print(f"  {top3[1]['halfhalf']}: 50元")
-    print(f"  {top3[2]['halfhalf']}: 50元")
-    
+    print(f"  颜色命中率: {len(colors_covered)/len(bet_list)*100:.0f}%（猜{len(colors_covered)}种颜色）")
+
+    print(f"📏 大小覆盖: {' + '.join(sorted(sizes_covered))}（{len(sizes_covered)/len(bet_list)*100:.0f}%）")
+    print(f"🔢 单双覆盖: {' + '.join(sorted(odds_covered))}（{len(odds_covered)/len(bet_list)*100:.0f}%）")
+
+    print(f"\n💰 下注金额: {bet_amount}元 ({bet_count}注×50元)")
+    for c in bet_list:
+        print(f"  {c['halfhalf']}: 50元")
+
+
     # =====================================================
     # 下注记录初始化
     # =====================================================
     print("\n" + "=" * 50)
     print("📋 下注记录（今晚开始）")
     print("=" * 50)
-    
+
     bet_record = BetRecord()
     print("\n当前无记录，等待开奖后更新...")
 
@@ -3017,7 +3037,7 @@ def main():
 
 
     # =====================================================
-    # 精确投注回测
+    # 精确投注回测（TOP4为主）
     # =====================================================
     print()
     print("=" * 60)
@@ -3029,9 +3049,9 @@ def main():
     # 对比三种模式
     exact_test.compare_modes(test_days=10)
     
-    # 详细显示TOP3模式
+    # 详细显示TOP4模式
     print()
-    exact_test.print_report(mode="TOP3", test_days=10)
+    exact_test.print_report(mode="TOP4", test_days=10)
 
 
     # =====================================================
