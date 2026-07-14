@@ -38,7 +38,7 @@ CONFIG = {
     "api_url":
     "https://marksix6.net/index.php?api=1",
 
-    "lottery_type": "澳门彩",
+    "lottery_type": "老澳门彩",
 
     "weights":{
 
@@ -266,7 +266,7 @@ def fetch_lottery(limit=30):
 
 
 
-            print(name)
+            print(f"  发现: {name}")
 
 
 
@@ -280,12 +280,12 @@ def fetch_lottery(limit=30):
 
         if not target:
 
-            print(f"未找到 {CONFIG['lottery_type']} 数据")
+            print(f"❌ 未找到 {CONFIG['lottery_type']} 数据")
 
             return []
 
 
-        print(f"找到 {CONFIG['lottery_type']} 数据")
+        print(f"✅ 找到 {CONFIG['lottery_type']} 数据")
 
 
         for line in target.get(
