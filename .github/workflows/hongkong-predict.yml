@@ -1,0 +1,68 @@
+name: 香港彩自动预测V8.3
+
+on:
+
+  schedule:
+    - cron: '36 13 * * *'
+
+  workflow_dispatch:
+
+
+
+jobs:
+
+  hongkong-predict:
+
+    runs-on: ubuntu-latest
+
+    name: 香港彩预测
+
+    steps:
+
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 检查文件
+        run: |
+          ls -la
+          echo "检查香港彩预测脚本"
+          test -f hongkong_predict_v816.py
+
+      - name: 恢复香港彩参数缓存
+        uses: actions/cache@v4
+        with:
+          path: hongkong_best_params.json
+          key: hongkong-v83-params-${{ github.run_id }}
+          restore-keys: |
+            hongkong-v83-params-
+
+      - name: 运行香港彩预测
+        run: python hongkong_predict_v816.py
+
+      - name: 保存香港彩参数
+        uses: actions/cache@v4
+        with:
+          path: hongkong_best_params.json
+          key: hongkong-v83-params-${{ github.run_id }}
+
+      - name: 上传香港彩预测报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: hongkong-v83-report
+          path: |
+            hongkong_result_v816.md
+            hongkong_result.md
+          retention-days: 7
+
+      - name: 上传香港彩日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hongkong-v83-log
+          path: hongkong_v83.log
+          retention-days: 3
