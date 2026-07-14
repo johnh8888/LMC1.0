@@ -31,23 +31,23 @@ jobs:
         run: |
           ls -la
           echo "检查老澳门彩预测脚本"
-          test -f oldmacau_predict_v816.py
+          test -f macau_predict_v816.py   # ← 改成 macau_predict_v816.py
 
       - name: 恢复老澳门彩参数缓存
         uses: actions/cache@v4
         with:
-          path: oldmacau_best_params.json
+          path: macau_best_params.json
           key: oldmacau-v83-params-${{ github.run_id }}
           restore-keys: |
             oldmacau-v83-params-
 
       - name: 运行老澳门彩预测
-        run: python oldmacau_predict_v816.py
+        run: python macau_predict_v816.py   # ← 改成 macau_predict_v816.py
 
       - name: 保存老澳门彩参数
         uses: actions/cache@v4
         with:
-          path: oldmacau_best_params.json
+          path: macau_best_params.json
           key: oldmacau-v83-params-${{ github.run_id }}
 
       - name: 上传老澳门彩预测报告
@@ -55,8 +55,8 @@ jobs:
         with:
           name: oldmacau-v83-report
           path: |
-            oldmacau_result_v816.md
-            oldmacau_result.md
+            macau_result_v816.md
+            macau_result.md
           retention-days: 7
 
       - name: 上传老澳门彩日志
