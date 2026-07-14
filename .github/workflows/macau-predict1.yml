@@ -1,0 +1,68 @@
+name: 澳门彩自动预测V8.3
+
+on:
+
+  schedule:
+    - cron: '35 13 * * *'
+
+  workflow_dispatch:
+
+
+
+jobs:
+
+  macau-predict:
+
+    runs-on: ubuntu-latest
+
+    name: 澳门彩预测
+
+    steps:
+
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 检查文件
+        run: |
+          ls -la
+          echo "检查澳门彩预测脚本"
+          test -f macau_predict_v816.py
+
+      - name: 恢复澳门彩参数缓存
+        uses: actions/cache@v4
+        with:
+          path: macau_best_params.json
+          key: macau-v83-params-${{ github.run_id }}
+          restore-keys: |
+            macau-v83-params-
+
+      - name: 运行澳门彩预测
+        run: python macau_predict_v816.py
+
+      - name: 保存澳门彩参数
+        uses: actions/cache@v4
+        with:
+          path: macau_best_params.json
+          key: macau-v83-params-${{ github.run_id }}
+
+      - name: 上传澳门彩预测报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: macau-v83-report
+          path: |
+            macau_result_v816.md
+            macau_result.md
+          retention-days: 7
+
+      - name: 上传澳门彩日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macau-v83-log
+          path: macau_v83.log
+          retention-days: 3
