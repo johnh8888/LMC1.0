@@ -1,71 +1,35 @@
-name: 🎯 新澳门六合彩预测
+name: 🎯 新澳门六合彩每日预测
 
 on:
   schedule:
-    - cron: '35 13 * * *'  # 每天13:35运行
-  workflow_dispatch:        # 支持手动触发
+    - cron: '35 13 * * *'
+  workflow_dispatch:
 
 jobs:
   predict:
     runs-on: ubuntu-latest
-
     steps:
-      - name: 拉取代码
-        uses: actions/checkout@v4
-
-      - name: 安装Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
+      
       - name: 安装依赖
-        run: |
-          pip install requests --quiet
-          echo "✅ 依赖安装完成"
-
-      - name: 检查文件
-        run: |
-          ls -la
-          test -f macau_predict.py || exit 1
-          echo "✅ 脚本文件存在"
-
-      - name: 恢复参数缓存
-        uses: actions/cache@v4
-        with:
-          path: macau_best_params.json
-          key: macau-params-${{ github.run_id }}
-          restore-keys: |
-            macau-params-
-
+        run: pip install requests --quiet
+      
       - name: 运行预测
-        run: |
-          echo "========================================"
-          echo "🚀 开始预测..."
-          echo "========================================"
-          python macau_predict.py
-          echo "✅ 预测完成"
-
-      - name: 保存参数缓存
-        uses: actions/cache@v4
-        with:
-          path: macau_best_params.json
-          key: macau-params-${{ github.run_id }}
-
-      - name: 上传预测报告
+        run: python macau_predict.py
+      
+      - name: 上传报告
         uses: actions/upload-artifact@v4
         with:
-          name: predict-report-${{ github.run_id }}
-          path: |
-            result.md
-            macau_best_params.json
-
-      - name: 打印结果预览
+          name: predict-report
+          path: result.md
+      
+      - name: 打印结果
         run: |
           echo "========================================"
           echo "📋 今日预测结果"
           echo "========================================"
-          if [ -f result.md ]; then
-            cat result.md
-          else
-            echo "⚠️ 未找到报告"
-          fi
+          cat result.md
