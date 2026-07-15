@@ -2,11 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-新澳门六合彩 - 3注半半波策略回测 + 最近10期查看
-功能：
-1. 显示最近10期命中情况（最新数据）
-2. 拉取历史数据回测
-3. 生成回测报告
+新澳门六合彩 - 4注半半波策略回测 + 最近10期查看
+策略：蓝小单 + 绿大单 + 蓝大双 + 红小双
 """
 
 import re
@@ -18,7 +15,7 @@ import sys
 import os
 
 # =====================================================
-# 配置
+# 配置（4注策略）
 # =====================================================
 
 CONFIG = {
@@ -29,6 +26,7 @@ CONFIG = {
         {"name": "蓝小单", "odds": 15.76, "numbers": [3, 9, 15, 21]},
         {"name": "绿大单", "odds": 11.82, "numbers": [27, 33, 39, 43, 49]},
         {"name": "蓝大双", "odds": 11.82, "numbers": [26, 36, 42, 47, 48]},
+        {"name": "红小双", "odds": 9.45, "numbers": [2, 8, 12, 18, 24]},  # ✅ 新增
     ]
 }
 
@@ -68,10 +66,9 @@ def get_hit_bet(n):
 # 获取数据
 # =====================================================
 
-def fetch_data(limit=730, cache_file="history_cache.json"):
+def fetch_data(limit=730, cache_file="history_cache_4bet.json"):
     """获取历史数据（带缓存）"""
     
-    # 1. 尝试从缓存读取
     if os.path.exists(cache_file):
         print(f"📂 从缓存读取数据: {cache_file}")
         try:
@@ -79,7 +76,6 @@ def fetch_data(limit=730, cache_file="history_cache.json"):
                 rows = json.load(f)
             if len(rows) >= limit:
                 print(f"✅ 缓存数据充足: {len(rows)}期")
-                # 按日期倒序排列（最新在前）
                 rows.sort(key=lambda x: x["issue"], reverse=True)
                 return rows[:limit]
             else:
@@ -87,7 +83,6 @@ def fetch_data(limit=730, cache_file="history_cache.json"):
         except Exception as e:
             print(f"⚠️ 缓存读取失败: {e}")
 
-    # 2. 从API拉取
     print(f"📡 正在从API获取数据（最多{limit}期）...")
     rows = []
     try:
@@ -129,14 +124,12 @@ def fetch_data(limit=730, cache_file="history_cache.json"):
         print(f"❌ 获取失败: {e}")
         return []
 
-    # 去重并排序（最新在前）
     cache = {}
     for r in rows:
         cache[r["issue"]] = r
     rows = list(cache.values())
-    rows.sort(key=lambda x: x["issue"], reverse=True)  # ✅ 最新在前
+    rows.sort(key=lambda x: x["issue"], reverse=True)
     
-    # 保存缓存
     try:
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(rows, f, ensure_ascii=False, indent=2)
@@ -148,21 +141,20 @@ def fetch_data(limit=730, cache_file="history_cache.json"):
 
 
 # =====================================================
-# 最近10期命中查看（最新数据）
+# 最近10期命中查看
 # =====================================================
 
 def show_recent_hits(rows, show_count=10):
-    """显示最近N期命中情况（最新数据）"""
+    """显示最近N期命中情况"""
     
-    # rows 已经是倒序（最新在前），直接取前N个
     if len(rows) < show_count:
         print(f"⚠️ 数据不足，仅获取到 {len(rows)} 期")
         show_count = len(rows)
 
-    recent = rows[:show_count]  # ✅ 最新的N期
+    recent = rows[:show_count]
 
     print("\n" + "=" * 70)
-    print(f"📊 最近{show_count}期开奖明细（最新数据）")
+    print(f"📊 最近{show_count}期开奖明细（4注策略）")
     print("=" * 70)
     print(f"{'期号':<12} {'特码':<6} {'半半波':<12} {'命中':<10} {'中奖玩法':<12}")
     print("-" * 70)
@@ -191,7 +183,6 @@ def show_recent_hits(rows, show_count=10):
 
         print(f"{r['issue']:<12} {r['special']:<6} {r['halfhalf']:<12} {hit_icon:<10} {hit_bet or '-':<12}")
 
-    # 汇总统计
     print("-" * 70)
     
     total_numbers = sum(len(bet["numbers"]) for bet in CONFIG["bets"])
@@ -206,10 +197,7 @@ def show_recent_hits(rows, show_count=10):
         print(f"  ✅ 最近表现优于理论预期！")
     elif hit_count < theoretical:
         print(f"  ⚠️ 最近表现低于理论预期，属正常波动")
-    else:
-        print(f"  ℹ️ 最近表现与理论预期一致")
 
-    # 命中详情
     if hit_details:
         print(f"\n🎯 命中详情:")
         for h in hit_details:
@@ -217,7 +205,6 @@ def show_recent_hits(rows, show_count=10):
     else:
         print(f"\n❌ 最近{show_count}期未命中任何号码")
 
-    # 连续未中提醒
     if consecutive_miss > 0:
         print(f"\n⚠️ 当前已连续 {consecutive_miss} 期未中")
         if consecutive_miss >= 10:
@@ -225,8 +212,8 @@ def show_recent_hits(rows, show_count=10):
     else:
         print(f"\n✅ 最近一期命中！")
 
-    # 盈亏估算
-    total_bet = show_count * 300
+    # 盈亏估算（4注 = 400元/期）
+    total_bet = show_count * 400
     total_win = 0
     for h in hit_details:
         for bet in CONFIG["bets"]:
@@ -235,7 +222,7 @@ def show_recent_hits(rows, show_count=10):
                 break
 
     profit = total_win - total_bet
-    print(f"\n💰 盈亏估算（最近{show_count}期，每期300元）:")
+    print(f"\n💰 盈亏估算（最近{show_count}期，每期400元）:")
     print(f"  总投注: {total_bet:,.0f}元")
     print(f"  总中奖: {total_win:,.0f}元")
     print(f"  净盈亏: {profit:+,.0f}元")
@@ -262,9 +249,9 @@ def run_backtest(rows):
     total_numbers = sum(len(bet["numbers"]) for bet in bets)
 
     print("\n" + "=" * 70)
-    print("📊 回测配置")
+    print("📊 回测配置（4注策略）")
     print("=" * 70)
-    print(f"  策略: 3注半半波策略")
+    print(f"  策略: 4注半半波策略")
     print(f"  每注: {CONFIG['bet_per_note']}元")
     print(f"  每期投入: {bet_per_period}元")
     print(f"  回测期数: {len(rows)}期")
@@ -279,7 +266,6 @@ def run_backtest(rows):
     max_consecutive_loss = 0
     hit_stats = defaultdict(int)
 
-    # rows 是倒序（最新在前），回测需要从旧到新
     rows_chrono = list(reversed(rows))
     
     for r in rows_chrono:
@@ -315,11 +301,8 @@ def run_backtest(rows):
     hit_rate = hit_count / total * 100 if total > 0 else 0
     roi = balance / (total * bet_per_period) * 100 if total > 0 else 0
 
-    # =====================================================
-    # 输出结果
-    # =====================================================
     print("\n" + "=" * 70)
-    print("📊 回测结果")
+    print("📊 回测结果（4注策略）")
     print("=" * 70)
     print(f"  📅 回测期数: {total}期")
     print(f"  🎯 命中次数: {hit_count}次")
@@ -330,35 +313,14 @@ def run_backtest(rows):
     print(f"  🔥 最长连续未中: {max_consecutive_loss}期")
     print(f"  📊 ROI: {roi:+.2f}%")
 
-    # =====================================================
-    # 各玩法命中统计
-    # =====================================================
     print("\n🎯 各玩法命中统计:")
     for bet in bets:
         count = hit_stats.get(bet["name"], 0)
         pct = count / hit_count * 100 if hit_count > 0 else 0
         print(f"  {bet['name']}: {count}次 ({pct:.1f}%)")
 
-    # =====================================================
-    # 年度对比
-    # =====================================================
-    if len(results) >= 365:
-        year1 = results[:365]
-        year2 = results[365:730] if len(results) >= 730 else results[365:]
-        
-        y1_balance = year1[-1]["balance"] if year1 else 0
-        y2_balance = year2[-1]["balance"] - y1_balance if year2 else 0
-        
-        print("\n📅 年度对比:")
-        print(f"  第一年 (365期): {y1_balance:+,.0f}元")
-        if len(results) >= 730:
-            print(f"  第二年 (365期): {y2_balance:+,.0f}元")
-            print(f"  两年合计: {y1_balance + y2_balance:+,.0f}元")
-
-    # =====================================================
     # 生成报告
-    # =====================================================
-    report = f"""# 新澳门六合彩 - 3注半半波策略回测报告
+    report = f"""# 新澳门六合彩 - 4注半半波策略回测报告
 
 **时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 **数据**: 最近{total}期
@@ -391,12 +353,12 @@ def run_backtest(rows):
 
 ## 结论
 
-{"✅ 策略可行！" if balance > 0 and roi > 0 else "❌ 策略需谨慎"}
+{"✅ 4注策略可行！" if balance > 0 and roi > 0 else "❌ 策略需谨慎"}
 
 建议启动资金: {max(10000, int(abs(max_drawdown) * 1.5)):,}元
 """
 
-    with open("backtest_result.md", "w", encoding="utf-8") as f:
+    with open("backtest_result_4bet.md", "w", encoding="utf-8") as f:
         f.write(report)
 
     return {
@@ -416,11 +378,10 @@ def run_backtest(rows):
 
 def main():
     print("=" * 70)
-    print("🎯 新澳门六合彩 - 3注半半波策略回测 + 最近10期查看")
+    print("🎯 新澳门六合彩 - 4注半半波策略回测 + 最近10期查看")
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
-    # 获取数据（自动按最新排序）
     rows = fetch_data(CONFIG["history_limit"])
 
     if len(rows) < 30:
@@ -429,48 +390,39 @@ def main():
 
     print(f"✅ 获取 {len(rows)} 期数据")
     print(f"📅 最新期号: {rows[0]['issue']}")
-    print(f"📅 最早期号: {rows[-1]['issue']}")
 
-    # =====================================================
-    # 1. 显示最近10期命中（最新数据）
-    # =====================================================
     show_recent_hits(rows, show_count=10)
-
-    # =====================================================
-    # 2. 执行回测
-    # =====================================================
     result = run_backtest(rows)
 
-    # =====================================================
-    # 3. 最终结论
-    # =====================================================
     print("\n" + "=" * 70)
-    print("📋 最终结论")
+    print("📋 最终结论（4注策略）")
     print("=" * 70)
 
     if result["balance"] > 0 and result["roi"] > 0:
         print(f"""
-✅ 策略可行！
+✅ 4注策略可行！
 
-关键数据:
-  回测期数: {result['total']}期
-  命中率: {result['hit_rate']:.2f}%
-  总盈亏: {result['balance']:+,.0f}元
-  ROI: {result['roi']:+.2f}%
-  最大回撤: {result['max_drawdown']:.0f}元
-  最长连续未中: {result['max_consecutive_loss']}期
+📊 与3注对比:
+┌─────────────┬─────────────┬─────────────┐
+│  指标        │  3注策略    │  4注策略    │
+├─────────────┼─────────────┼─────────────┤
+│  每期投入    │  300元      │  400元      │
+│  覆盖号码    │  14个       │  19个       │
+│  命中率      │  28.14%     │  {result['hit_rate']:.2f}%      │
+│  总盈亏      │  +41,660元  │  {result['balance']:+,.0f}元   │
+│  最长连续未中│  16期       │  {result['max_consecutive_loss']}期       │
+│  ROI         │  21.83%     │  {result['roi']:.2f}%        │
+└─────────────┴─────────────┴─────────────┘
 
 建议:
   启动资金: {int(abs(result['max_drawdown']) * 1.5):,}元
-  每期投入: 300元 (3注×100元)
+  每期投入: 400元 (4注×100元)
   严格执行: 不倍投、不追号
 """)
     else:
-        print("""
-❌ 策略需谨慎，建议继续观察
-""")
+        print("❌ 4注策略需谨慎，建议继续观察")
 
-    print(f"📄 详细报告已生成: backtest_result.md")
+    print(f"📄 详细报告已生成: backtest_result_4bet.md")
 
 
 if __name__ == "__main__":
