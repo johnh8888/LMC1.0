@@ -1,14 +1,14 @@
-name: 新澳门六合彩 - 半半波正期望值策略 V1.0
+name: 新澳门六合彩自动预测V8.3
 
 on:
   schedule:
-    - cron: '35 13 * * *'  # 每天13:35运行（北京时间）
-  workflow_dispatch:        # 支持手动触发
+    - cron: '35 13 * * *'
+  workflow_dispatch:
 
 jobs:
   predict:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
@@ -20,51 +20,42 @@ jobs:
 
       - name: 安装依赖
         run: |
-          pip install requests matplotlib --quiet
+          pip install requests --quiet
           echo "✅ 依赖安装完成"
 
       - name: 检查文件
         run: |
           ls -la
           echo "🔍 检查预测脚本..."
-          test -f macau_halfwave_predict.py
+          # 改为检查实际存在的文件
+          test -f macau_color_predict_V8.py
           echo "✅ 脚本文件存在"
 
       - name: 恢复参数缓存
         uses: actions/cache@v4
         with:
           path: macau_best_params.json
-          key: macau-halfwave-v1-${{ github.run_id }}
+          key: macau-v83-params-${{ github.run_id }}
           restore-keys: |
-            macau-halfwave-v1-
+            macau-v83-params-
 
       - name: 运行预测
         run: |
           echo "🚀 开始运行预测..."
-          python macau_halfwave_predict.py
+          python macau_color_predict_V8.py
           echo "✅ 预测完成"
 
-      - name: 保存参数缓存
+      - name: 保存参数
         uses: actions/cache@v4
         with:
           path: macau_best_params.json
-          key: macau-halfwave-v1-${{ github.run_id }}
+          key: macau-v83-params-${{ github.run_id }}
 
       - name: 上传预测报告
         uses: actions/upload-artifact@v4
         with:
-          name: macau-halfwave-report-${{ github.run_id }}
+          name: macau-v83-report
           path: |
             result.md
+            newmacau_result_v817.md
             macau_best_params.json
-
-      - name: 打印结果
-        run: |
-          echo "========================================"
-          echo "📋 预测结果预览:"
-          echo "========================================"
-          if [ -f result.md ]; then
-            cat result.md
-          else
-            echo "⚠️ 未找到报告文件"
-          fi
