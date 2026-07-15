@@ -15,7 +15,7 @@ import sys
 
 CONFIG = {
     "api_url": "https://marksix6.net/index.php?api=1",
-    "history_limit": 730,
+    "history_limit": 10,
     "bet_per_note": 100,
     "bets": [
         {"name": "蓝小单", "odds": 15.76, "numbers": [3, 9, 15, 21]},
