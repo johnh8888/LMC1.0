@@ -1,12 +1,12 @@
-name: 📊 策略回测验证
+name: 🎯 新澳门六合彩预测
 
 on:
-  workflow_dispatch:  # 手动触发
   schedule:
-    - cron: '0 14 * * 0'  # 每周日下午2点自动回测一次
+    - cron: '35 13 * * *'  # 每天13:35运行
+  workflow_dispatch:        # 支持手动触发
 
 jobs:
-  backtest:
+  predict:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,35 +20,52 @@ jobs:
 
       - name: 安装依赖
         run: |
-          pip install requests matplotlib --quiet
+          pip install requests --quiet
           echo "✅ 依赖安装完成"
 
-      - name: 检查回测脚本
+      - name: 检查文件
         run: |
           ls -la
-          test -f backtest_halfwave.py || echo "⚠️ 回测脚本不存在"
-          test -f macau_predict.py || echo "⚠️ 预测脚本不存在"
+          test -f macau_predict.py || exit 1
+          echo "✅ 脚本文件存在"
 
-      - name: 运行回测
+      - name: 恢复参数缓存
+        uses: actions/cache@v4
+        with:
+          path: macau_best_params.json
+          key: macau-params-${{ github.run_id }}
+          restore-keys: |
+            macau-params-
+
+      - name: 运行预测
         run: |
           echo "========================================"
-          echo "📊 开始策略回测..."
+          echo "🚀 开始预测..."
           echo "========================================"
-          python backtest_halfwave.py
+          python macau_predict.py
+          echo "✅ 预测完成"
 
-      - name: 上传回测报告
+      - name: 保存参数缓存
+        uses: actions/cache@v4
+        with:
+          path: macau_best_params.json
+          key: macau-params-${{ github.run_id }}
+
+      - name: 上传预测报告
         uses: actions/upload-artifact@v4
         with:
-          name: backtest-report-${{ github.run_id }}
+          name: predict-report-${{ github.run_id }}
           path: |
-            backtest_result.md
-            backtest_chart.png
+            result.md
+            macau_best_params.json
 
-      - name: 打印结论
+      - name: 打印结果预览
         run: |
           echo "========================================"
-          echo "📋 回测完成"
+          echo "📋 今日预测结果"
           echo "========================================"
-          if [ -f backtest_result.md ]; then
-            head -50 backtest_result.md
+          if [ -f result.md ]; then
+            cat result.md
+          else
+            echo "⚠️ 未找到报告"
           fi
