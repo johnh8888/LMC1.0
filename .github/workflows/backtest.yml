@@ -1,0 +1,54 @@
+name: 📊 策略回测验证
+
+on:
+  workflow_dispatch:  # 手动触发
+  schedule:
+    - cron: '0 14 * * 0'  # 每周日下午2点自动回测一次
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: |
+          pip install requests matplotlib --quiet
+          echo "✅ 依赖安装完成"
+
+      - name: 检查回测脚本
+        run: |
+          ls -la
+          test -f backtest_halfwave.py || echo "⚠️ 回测脚本不存在"
+          test -f macau_predict.py || echo "⚠️ 预测脚本不存在"
+
+      - name: 运行回测
+        run: |
+          echo "========================================"
+          echo "📊 开始策略回测..."
+          echo "========================================"
+          python backtest_halfwave.py
+
+      - name: 上传回测报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-report-${{ github.run_id }}
+          path: |
+            backtest_result.md
+            backtest_chart.png
+
+      - name: 打印结论
+        run: |
+          echo "========================================"
+          echo "📋 回测完成"
+          echo "========================================"
+          if [ -f backtest_result.md ]; then
+            head -50 backtest_result.md
+          fi
