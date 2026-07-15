@@ -1,12 +1,12 @@
-name: 新澳门六合彩自动预测V8.3
+name: 📊 策略回测验证
 
 on:
+  workflow_dispatch:  # 手动触发
   schedule:
-    - cron: '35 13 * * *'
-  workflow_dispatch:
+    - cron: '0 14 * * 0'  # 每周日下午2点自动回测一次
 
 jobs:
-  predict:
+  backtest:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,42 +20,35 @@ jobs:
 
       - name: 安装依赖
         run: |
-          pip install requests --quiet
+          pip install requests matplotlib --quiet
           echo "✅ 依赖安装完成"
 
-      - name: 检查文件
+      - name: 检查回测脚本
         run: |
           ls -la
-          echo "🔍 检查预测脚本..."
-          # 改为检查实际存在的文件
-          test -f macau_color_predict_V8.py
-          echo "✅ 脚本文件存在"
+          test -f backtest_halfwave.py || echo "⚠️ 回测脚本不存在"
+          test -f macau_predict.py || echo "⚠️ 预测脚本不存在"
 
-      - name: 恢复参数缓存
-        uses: actions/cache@v4
-        with:
-          path: macau_best_params.json
-          key: macau-v83-params-${{ github.run_id }}
-          restore-keys: |
-            macau-v83-params-
-
-      - name: 运行预测
+      - name: 运行回测
         run: |
-          echo "🚀 开始运行预测..."
-          python macau_color_predict_V8.py
-          echo "✅ 预测完成"
+          echo "========================================"
+          echo "📊 开始策略回测..."
+          echo "========================================"
+          python backtest_halfwave.py
 
-      - name: 保存参数
-        uses: actions/cache@v4
-        with:
-          path: macau_best_params.json
-          key: macau-v83-params-${{ github.run_id }}
-
-      - name: 上传预测报告
+      - name: 上传回测报告
         uses: actions/upload-artifact@v4
         with:
-          name: macau-v83-report
+          name: backtest-report-${{ github.run_id }}
           path: |
-            result.md
-            newmacau_result_v817.md
-            macau_best_params.json
+            backtest_result.md
+            backtest_chart.png
+
+      - name: 打印结论
+        run: |
+          echo "========================================"
+          echo "📋 回测完成"
+          echo "========================================"
+          if [ -f backtest_result.md ]; then
+            head -50 backtest_result.md
+          fi
