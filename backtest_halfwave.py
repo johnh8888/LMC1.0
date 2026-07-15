@@ -2,23 +2,26 @@
 # -*- coding: utf-8 -*-
 
 """
-新澳门六合彩 - 最近10期命中查看（精简版）
-只拉取最新数据，显示最近10期命中情况
+三彩回测 - 4注策略（蓝小单+绿大单+蓝大双+红小）
+支持：香港彩、新澳门彩、老澳门彩
 """
 
 import re
 import json
 import urllib.request
+from collections import defaultdict
 from datetime import datetime
+import sys
 
 # =====================================================
-# 3注策略（最终版）
+# 4注策略配置
 # =====================================================
 
 BETS = [
-    {"name": "蓝小单", "odds": 15.76, "numbers": [3, 9, 15, 21]},
-    {"name": "绿大单", "odds": 11.82, "numbers": [27, 33, 39, 43, 49]},
-    {"name": "蓝大双", "odds": 11.82, "numbers": [26, 36, 42, 47, 48]},
+    {"name": "蓝小单", "odds": 15.75, "numbers": [3, 9, 15, 21]},
+    {"name": "绿大单", "odds": 11.80, "numbers": [27, 33, 39, 43, 49]},
+    {"name": "蓝大双", "odds": 11.80, "numbers": [26, 36, 42, 47, 48]},
+    {"name": "红小", "odds": 4.70, "numbers": [1, 2, 7, 8, 12, 13, 18, 19, 23, 24, 29]},
 ]
 
 # 合并所有号码
@@ -27,7 +30,7 @@ for bet in BETS:
     for n in bet["numbers"]:
         MY_NUMBERS.add(n)
 
-# 官方号码表（用于显示半半波）
+# 官方号码表
 RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
 BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
@@ -52,33 +55,37 @@ def get_halfhalf(n):
 
 
 def get_hit_bet(n):
-    """检查命中了哪个玩法"""
     for bet in BETS:
         if n in bet["numbers"]:
             return bet["name"]
     return None
 
 
-def fetch_recent(limit=20):
-    """获取最近N期数据"""
+# =====================================================
+# 数据获取
+# =====================================================
+
+def fetch_data(lottery_name, limit=200):
+    """获取指定彩种的历史数据"""
     rows = []
     try:
-        print("📡 正在获取最新数据...")
+        print(f"📡 正在获取 {lottery_name} 数据...")
         req = urllib.request.Request(
             "https://marksix6.net/index.php?api=1",
             headers={"User-Agent": "Mozilla/5.0"}
         )
-        data = urllib.request.urlopen(req, timeout=30).read()
+        data = urllib.request.urlopen(req, timeout=60).read()
         data = json.loads(data.decode("utf-8"))
 
         target = None
         for item in data.get("lottery_data", []):
-            if item.get("name", "").strip() == "新澳门彩":
+            name = item.get("name", "").strip()
+            if name == lottery_name:
                 target = item
                 break
 
         if not target:
-            print("❌ 未找到新澳门彩数据")
+            print(f"❌ 未找到 {lottery_name} 数据")
             return []
 
         for line in target.get("history", []):
@@ -102,117 +109,219 @@ def fetch_recent(limit=20):
         print(f"❌ 获取失败: {e}")
         return []
 
-    # 去重并排序（最新在前）
     cache = {}
     for r in rows:
         cache[r["issue"]] = r
     rows = list(cache.values())
     rows.sort(key=lambda x: x["issue"], reverse=True)
+    
+    print(f"✅ 获取 {len(rows)} 期数据")
     return rows[:limit]
 
 
-def main():
-    print("=" * 60)
-    print("🎯 新澳门六合彩 - 最近10期命中查看")
-    print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 60)
+# =====================================================
+# 回测引擎
+# =====================================================
 
-    # 显示策略
-    print("\n📋 3注策略:")
+def run_backtest(rows, lottery_name):
+    """执行回测"""
+    if len(rows) < 10:
+        return None
+
+    bet_per_period = len(BETS) * 100  # 4注 × 100元 = 400元
+    total_numbers = len(MY_NUMBERS)
+
+    results = []
+    balance = 0
+    hit_count = 0
+    max_drawdown = 0
+    max_balance = 0
+    consecutive_loss = 0
+    max_consecutive_loss = 0
+    hit_stats = defaultdict(int)
+    total_win = 0
+    total_bet = 0
+
+    # 从旧到新回测
+    rows_chrono = list(reversed(rows))
+
+    for r in rows_chrono:
+        hit = None
+        for bet in BETS:
+            if r["special"] in bet["numbers"]:
+                hit = bet
+                break
+
+        if hit:
+            hit_count += 1
+            hit_stats[hit["name"]] += 1
+            win_amount = hit["odds"] * 100
+            profit = win_amount - bet_per_period
+            total_win += win_amount
+            balance += profit
+            consecutive_loss = 0
+        else:
+            profit = -bet_per_period
+            balance += profit
+            consecutive_loss += 1
+            max_consecutive_loss = max(max_consecutive_loss, consecutive_loss)
+
+        total_bet += bet_per_period
+
+        if balance > max_balance:
+            max_balance = balance
+        max_drawdown = max(max_drawdown, max_balance - balance)
+
+        results.append({
+            "issue": r["issue"],
+            "number": r["special"],
+            "hit": hit["name"] if hit else None,
+            "balance": balance,
+        })
+
+    total = len(results)
+    hit_rate = hit_count / total * 100 if total > 0 else 0
+    roi = balance / total_bet * 100 if total_bet > 0 else 0
+
+    return {
+        "lottery": lottery_name,
+        "total": total,
+        "hit_count": hit_count,
+        "hit_rate": hit_rate,
+        "balance": balance,
+        "total_bet": total_bet,
+        "total_win": total_win,
+        "max_drawdown": max_drawdown,
+        "max_consecutive_loss": max_consecutive_loss,
+        "roi": roi,
+        "hit_stats": hit_stats,
+        "results": results,
+    }
+
+
+# =====================================================
+# 显示结果
+# =====================================================
+
+def print_result(result):
+    """打印单个彩种结果"""
+    if not result:
+        return
+
+    print("\n" + "=" * 70)
+    print(f"📊 {result['lottery']} 回测结果")
+    print("=" * 70)
+    print(f"  📅 回测期数: {result['total']}期")
+    print(f"  🎯 命中次数: {result['hit_count']}次")
+    print(f"  📈 命中率: {result['hit_rate']:.2f}%")
+    print(f"  💰 总投注: {result['total_bet']:,.0f}元")
+    print(f"  🏆 总中奖: {result['total_win']:,.0f}元")
+    print(f"  📊 最终盈亏: {result['balance']:+,.0f}元")
+    print(f"  📉 最大回撤: {result['max_drawdown']:,.0f}元")
+    print(f"  🔥 最长连续未中: {result['max_consecutive_loss']}期")
+    print(f"  📊 ROI: {result['roi']:+.2f}%")
+
+    print(f"\n🎯 各玩法命中统计:")
+    for bet in BETS:
+        count = result["hit_stats"].get(bet["name"], 0)
+        pct = count / result["hit_count"] * 100 if result["hit_count"] > 0 else 0
+        print(f"  {bet['name']}: {count}次 ({pct:.1f}%)")
+
+
+def print_summary(results):
+    """打印三彩汇总对比"""
+    print("\n" + "=" * 70)
+    print("📊 三彩汇总对比")
+    print("=" * 70)
+    print(f"{'彩种':<12} {'期数':<8} {'命中率':<12} {'盈亏':<14} {'ROI':<10} {'最大回撤':<12} {'最长连未中':<10}")
+    print("-" * 80)
+
+    for r in results:
+        if r:
+            print(f"{r['lottery']:<12} {r['total']:<8} {r['hit_rate']:.2f}%{'':<6} {r['balance']:+,.0f}元{'':<6} {r['roi']:+.2f}%{'':<4} {r['max_drawdown']:,.0f}元{'':<4} {r['max_consecutive_loss']}期")
+
+    print("-" * 80)
+
+    # 统计结论
+    valid = [r for r in results if r]
+    if valid:
+        profitable = sum(1 for r in valid if r["balance"] > 0)
+        print(f"\n✅ {profitable}/{len(valid)} 个彩种盈利")
+        if profitable == len(valid):
+            print("🎉 所有彩种均盈利！策略通用！")
+        elif profitable >= len(valid) * 0.6:
+            print("👍 大部分彩种盈利，策略基本通用")
+        else:
+            print("⚠️ 部分彩种亏损，需调整策略")
+
+
+# =====================================================
+# 主程序
+# =====================================================
+
+def main():
+    print("=" * 70)
+    print("🎯 三彩回测 - 4注策略（蓝小单+绿大单+蓝大双+红小）")
+    print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 70)
+
+    print("\n📋 4注策略:")
     for bet in BETS:
         nums = ", ".join([f"{n:02d}" for n in bet["numbers"]])
         print(f"  {bet['name']} (赔率{bet['odds']}): {nums}")
+    print(f"\n📊 覆盖号码: {len(MY_NUMBERS)}个/49个 ({len(MY_NUMBERS)/49*100:.1f}%)")
 
-    total_numbers = sum(len(bet["numbers"]) for bet in BETS)
-    print(f"\n📊 覆盖号码: {total_numbers}个/49个 ({total_numbers/49*100:.1f}%)")
-    print(f"🎯 理论命中率: {total_numbers/49*100:.1f}%")
+    # 三个彩种
+    lotteries = ["香港彩", "新澳门彩", "老澳门彩"]
+    results = []
 
-    # 获取数据
-    rows = fetch_recent(20)
-    if len(rows) < 10:
-        print("❌ 数据不足")
-        return
+    for name in lotteries:
+        rows = fetch_data(name, limit=200)
+        if len(rows) < 10:
+            print(f"⚠️ {name} 数据不足，跳过")
+            results.append(None)
+            continue
 
-    # 显示最近10期
-    recent = rows[:10]
+        result = run_backtest(rows, name)
+        if result:
+            print_result(result)
+            results.append(result)
 
-    print("\n" + "=" * 60)
-    print(f"📊 最近10期开奖明细")
-    print("=" * 60)
-    print(f"{'期号':<12} {'特码':<6} {'半半波':<12} {'命中':<8} {'中奖玩法':<12}")
-    print("-" * 60)
+    # 汇总对比
+    print_summary(results)
 
-    hit_count = 0
-    hit_details = []
-    consecutive_miss = 0
+    # 最终结论
+    print("\n" + "=" * 70)
+    print("📋 最终结论")
+    print("=" * 70)
 
-    for r in recent:
-        hit_bet = get_hit_bet(r["special"])
-        is_hit = hit_bet is not None
+    valid = [r for r in results if r]
+    if valid:
+        all_profit = all(r["balance"] > 0 for r in valid)
+        avg_roi = sum(r["roi"] for r in valid) / len(valid)
+        avg_hit = sum(r["hit_rate"] for r in valid) / len(valid)
 
-        if is_hit:
-            hit_count += 1
-            hit_icon = "✅"
-            hit_details.append({
-                "issue": r["issue"],
-                "number": r["special"],
-                "bet": hit_bet,
-                "halfhalf": r["halfhalf"],
-            })
-            consecutive_miss = 0
+        if all_profit:
+            print("""
+✅ 策略在所有彩种上均盈利！
+
+关键数据:
+  平均命中率: {:.2f}%
+  平均ROI: {:.2f}%
+  策略通用性: 高 ✅
+
+建议:
+  可以在三个彩种上同时执行此策略
+""".format(avg_hit, avg_roi))
         else:
-            hit_icon = "❌"
-            consecutive_miss += 1
+            print("""
+⚠️ 策略在部分彩种上表现不佳
 
-        print(f"{r['issue']:<12} {r['special']:<6} {r['halfhalf']:<12} {hit_icon:<8} {hit_bet or '-':<12}")
-
-    print("-" * 60)
-
-    # 汇总
-    theoretical = total_numbers / 49 * 10
-
-    print(f"\n📊 最近10期汇总:")
-    print(f"  命中: {hit_count}/10 ({hit_count*10:.1f}%)")
-    print(f"  理论预期: {theoretical:.1f}次")
-    print(f"  偏差: {hit_count - theoretical:+.1f}次")
-
-    if hit_count > theoretical:
-        print(f"  ✅ 最近表现优于理论预期！")
-    elif hit_count < theoretical:
-        print(f"  ⚠️ 最近表现低于理论预期，属正常波动")
-    else:
-        print(f"  ℹ️ 与理论预期一致")
-
-    # 命中详情
-    if hit_details:
-        print(f"\n🎯 命中详情:")
-        for h in hit_details:
-            print(f"  {h['issue']} 开{h['number']:02d} → 中{h['bet']} ({h['halfhalf']})")
-    else:
-        print(f"\n❌ 最近10期未命中")
-
-    # 连续未中
-    if consecutive_miss > 0:
-        print(f"\n⚠️ 当前已连续 {consecutive_miss} 期未中")
-        if consecutive_miss >= 10:
-            print(f"  🔴 连续未中已达 {consecutive_miss} 期，请注意风险！")
-    else:
-        print(f"\n✅ 最近一期命中！")
-
-    # 盈亏估算（3注，每期300元）
-    total_bet = 10 * 300
-    total_win = 0
-    for h in hit_details:
-        for bet in BETS:
-            if bet["name"] == h["bet"]:
-                total_win += bet["odds"] * 100
-                break
-
-    profit = total_win - total_bet
-    print(f"\n💰 盈亏估算（最近10期，每期300元）:")
-    print(f"  总投注: {total_bet:,.0f}元")
-    print(f"  总中奖: {total_win:,.0f}元")
-    print(f"  净盈亏: {profit:+,.0f}元")
+建议:
+  1. 优先选择表现好的彩种
+  2. 针对不同彩种调整策略
+  3. 继续观察更多数据
+""")
 
 
 if __name__ == "__main__":
