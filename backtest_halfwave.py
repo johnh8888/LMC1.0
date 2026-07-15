@@ -4,8 +4,8 @@
 """
 新澳门六合彩 - 3注半半波策略回测 + 最近10期查看
 功能：
-1. 拉取历史数据回测（默认636期）
-2. 显示最近10期命中情况
+1. 显示最近10期命中情况（最新数据）
+2. 拉取历史数据回测
 3. 生成回测报告
 """
 
@@ -79,6 +79,8 @@ def fetch_data(limit=730, cache_file="history_cache.json"):
                 rows = json.load(f)
             if len(rows) >= limit:
                 print(f"✅ 缓存数据充足: {len(rows)}期")
+                # 按日期倒序排列（最新在前）
+                rows.sort(key=lambda x: x["issue"], reverse=True)
                 return rows[:limit]
             else:
                 print(f"⚠️ 缓存数据不足 ({len(rows)}期)，重新拉取...")
@@ -127,12 +129,12 @@ def fetch_data(limit=730, cache_file="history_cache.json"):
         print(f"❌ 获取失败: {e}")
         return []
 
-    # 去重并排序
+    # 去重并排序（最新在前）
     cache = {}
     for r in rows:
         cache[r["issue"]] = r
     rows = list(cache.values())
-    rows.sort(key=lambda x: x["issue"])
+    rows.sort(key=lambda x: x["issue"], reverse=True)  # ✅ 最新在前
     
     # 保存缓存
     try:
@@ -142,24 +144,25 @@ def fetch_data(limit=730, cache_file="history_cache.json"):
     except Exception as e:
         print(f"⚠️ 缓存保存失败: {e}")
     
-    return rows[-limit:]
+    return rows[:limit]
 
 
 # =====================================================
-# 最近10期命中查看
+# 最近10期命中查看（最新数据）
 # =====================================================
 
 def show_recent_hits(rows, show_count=10):
-    """显示最近N期命中情况"""
+    """显示最近N期命中情况（最新数据）"""
+    
+    # rows 已经是倒序（最新在前），直接取前N个
     if len(rows) < show_count:
         print(f"⚠️ 数据不足，仅获取到 {len(rows)} 期")
         show_count = len(rows)
 
-    # 取最近的期数（rows已经是倒序）
-    recent = rows[:show_count]
+    recent = rows[:show_count]  # ✅ 最新的N期
 
     print("\n" + "=" * 70)
-    print(f"📊 最近{show_count}期开奖明细")
+    print(f"📊 最近{show_count}期开奖明细（最新数据）")
     print("=" * 70)
     print(f"{'期号':<12} {'特码':<6} {'半半波':<12} {'命中':<10} {'中奖玩法':<12}")
     print("-" * 70)
@@ -276,10 +279,10 @@ def run_backtest(rows):
     max_consecutive_loss = 0
     hit_stats = defaultdict(int)
 
-    # 按月统计
-    monthly = defaultdict(list)
+    # rows 是倒序（最新在前），回测需要从旧到新
+    rows_chrono = list(reversed(rows))
     
-    for r in rows:
+    for r in rows_chrono:
         hit = None
         for bet in bets:
             if r["special"] in bet["numbers"]:
@@ -300,10 +303,6 @@ def run_backtest(rows):
             max_balance = balance
         max_drawdown = max(max_drawdown, max_balance - balance)
 
-        # 按月统计
-        month = r["issue"][:7]
-        monthly[month].append(balance)
-        
         results.append({
             "issue": r["issue"],
             "number": r["special"],
@@ -408,8 +407,6 @@ def run_backtest(rows):
         "max_drawdown": max_drawdown,
         "max_consecutive_loss": max_consecutive_loss,
         "roi": roi,
-        "year1": y1_balance if len(results) >= 365 else None,
-        "year2": y2_balance if len(results) >= 730 else None,
     }
 
 
@@ -423,7 +420,7 @@ def main():
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
-    # 获取数据
+    # 获取数据（自动按最新排序）
     rows = fetch_data(CONFIG["history_limit"])
 
     if len(rows) < 30:
@@ -431,10 +428,11 @@ def main():
         sys.exit(1)
 
     print(f"✅ 获取 {len(rows)} 期数据")
-    print(f"📅 数据范围: {rows[-1]['issue']} ~ {rows[0]['issue']}")
+    print(f"📅 最新期号: {rows[0]['issue']}")
+    print(f"📅 最早期号: {rows[-1]['issue']}")
 
     # =====================================================
-    # 1. 显示最近10期命中
+    # 1. 显示最近10期命中（最新数据）
     # =====================================================
     show_recent_hits(rows, show_count=10)
 
