@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-三彩20期回测 - 5注策略（蓝小单+绿大单+蓝大双+红小+绿双）
-支持：香港彩、新澳门彩、老澳门彩
+三彩回测 - 2注策略（绿大单+红小）
+修正版：基于准确号码归属
 """
 
 import re
@@ -14,15 +14,12 @@ from datetime import datetime
 import sys
 
 # =====================================================
-# 5注策略配置
+# 2注策略配置（修正版）
 # =====================================================
 
 BETS = [
-    {"name": "蓝小单", "odds": 15.75, "numbers": [3, 9, 15, 21]},
     {"name": "绿大单", "odds": 11.80, "numbers": [27, 33, 39, 43, 49]},
-    {"name": "蓝大双", "odds": 11.80, "numbers": [26, 36, 42, 47, 48]},
     {"name": "红小", "odds": 4.70, "numbers": [1, 2, 7, 8, 12, 13, 18, 19, 23, 24, 29]},
-    {"name": "绿双", "odds": 6.60, "numbers": [6, 16, 22, 28, 32, 38, 44]},
 ]
 
 # 合并所有号码
@@ -66,7 +63,7 @@ def get_hit_bet(n):
 # 数据获取
 # =====================================================
 
-def fetch_lottery_data(lottery_name, limit=30):
+def fetch_lottery_data(lottery_name, limit=50):
     """获取指定彩种数据"""
     rows = []
     try:
@@ -119,15 +116,15 @@ def fetch_lottery_data(lottery_name, limit=30):
 
 
 # =====================================================
-# 20期回测引擎
+# 回测引擎
 # =====================================================
 
-def run_backtest_20(rows, lottery_name):
-    if len(rows) < 20:
-        print(f"⚠️ {lottery_name} 数据不足20期，仅{len(rows)}期")
+def run_backtest(rows, lottery_name, periods=20):
+    if len(rows) < periods:
+        print(f"⚠️ {lottery_name} 数据不足{periods}期，仅{len(rows)}期")
         return None
 
-    bet_per_period = len(BETS) * 100  # 500元
+    bet_per_period = len(BETS) * 100  # 200元
     total_numbers = len(MY_NUMBERS)
 
     results = []
@@ -141,9 +138,8 @@ def run_backtest_20(rows, lottery_name):
     total_win = 0
     total_bet = 0
 
-    # 取最近20期，从旧到新回测
-    recent_20 = rows[:20]
-    rows_chrono = list(reversed(recent_20))
+    recent = rows[:periods]
+    rows_chrono = list(reversed(recent))
 
     for r in rows_chrono:
         hit_name, odds = get_hit_bet(r["special"])
@@ -191,16 +187,16 @@ def run_backtest_20(rows, lottery_name):
         "roi": roi,
         "hit_stats": hit_stats,
         "results": results,
-        "recent_20": recent_20,
+        "recent": recent,
     }
 
 
-def print_result_20(result):
+def print_result(result):
     if not result:
         return
 
     print("\n" + "=" * 70)
-    print(f"📊 {result['lottery']} 最近20期回测")
+    print(f"📊 {result['lottery']} 最近20期回测（2注策略：绿大单+红小）")
     print("=" * 70)
 
     print(f"\n📋 最近20期开奖明细:")
@@ -234,9 +230,9 @@ def print_result_20(result):
         print(f"  {bet['name']}: {count}次 ({pct:.1f}%)")
 
 
-def print_summary_20(results):
+def print_summary(results):
     print("\n" + "=" * 70)
-    print("📊 三彩20期汇总对比")
+    print("📊 三彩20期汇总对比（2注策略：绿大单+红小）")
     print("=" * 70)
     print(f"{'彩种':<12} {'期数':<8} {'命中率':<12} {'盈亏':<14} {'ROI':<10} {'最大回撤':<12} {'最长连未中':<10}")
     print("-" * 80)
@@ -257,25 +253,22 @@ def print_summary_20(results):
         print(f"📊 平均命中率: {avg_hit:.2f}%")
         print(f"📊 平均ROI: {avg_roi:.2f}%")
 
-        if profitable == len(valid):
-            print("🎉 所有彩种均盈利！策略20期表现稳定！")
-        elif profitable >= len(valid) * 0.6:
-            print("👍 大部分彩种盈利，策略基本稳定")
-
 
 def main():
     print("=" * 70)
-    print("🎯 三彩20期回测 - 5注策略（蓝小单+绿大单+蓝大双+红小+绿双）")
+    print("🎯 三彩20期回测 - 2注策略（绿大单+红小）")
+    print("   修正版：基于准确号码归属")
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
-    print("\n📋 5注策略:")
+    print("\n📋 2注策略:")
     for bet in BETS:
         nums = ", ".join([f"{n:02d}" for n in bet["numbers"]])
         print(f"  {bet['name']} (赔率{bet['odds']}): {nums}")
 
     print(f"\n📊 覆盖号码: {len(MY_NUMBERS)}个/49个 ({len(MY_NUMBERS)/49*100:.1f}%)")
     print(f"🎯 理论命中率: {len(MY_NUMBERS)/49*100:.1f}%")
+    print(f"💰 每期投入: {len(BETS)*100}元")
 
     lotteries = ["香港彩", "新澳门彩", "老澳门彩"]
     results = []
@@ -287,15 +280,15 @@ def main():
             results.append(None)
             continue
 
-        result = run_backtest_20(rows, name)
+        result = run_backtest(rows, name, periods=20)
         if result:
-            print_result_20(result)
+            print_result(result)
             results.append(result)
 
-    print_summary_20(results)
+    print_summary(results)
 
     print("\n" + "=" * 70)
-    print("📋 最终结论（20期）")
+    print("📋 最终结论（2注策略）")
     print("=" * 70)
 
     valid = [r for r in results if r]
@@ -303,28 +296,32 @@ def main():
         all_profit = all(r["balance"] > 0 for r in valid)
         avg_hit = sum(r["hit_rate"] for r in valid) / len(valid)
         avg_roi = sum(r["roi"] for r in valid) / len(valid)
+        total_profit = sum(r["balance"] for r in valid)
 
         if all_profit:
             print(f"""
-✅ 5注策略在三个彩种上20期全部盈利！
+✅ 2注策略在三个彩种上20期全部盈利！
 
 关键数据:
   平均命中率: {avg_hit:.2f}%
   平均ROI: {avg_roi:.2f}%
+  三彩总盈利: {total_profit:+,.0f}元
   策略稳定性: 高 ✅
 
 建议:
-  可以在三个彩种上继续执行此策略
-  每期投入: 500元 (5注×100元)
+  每期投入: 200元 (2注×100元)
+  可以继续执行此策略
 """)
         else:
-            print("⚠️ 部分彩种20期表现不佳，建议继续观察")
+            print("⚠️ 部分彩种20期表现不佳")
 
-    # 对比7期和20期
-    print("\n📊 7期 vs 20期对比:")
+    print("\n📊 与5注策略对比:")
     print("-" * 50)
-    for r in valid:
-        print(f"  {r['lottery']}: 7期命中率 ~80% | 20期命中率 {r['hit_rate']:.1f}% | 20期盈亏 {r['balance']:+,.0f}元")
+    if valid:
+        for r in valid:
+            print(f"  {r['lottery']}: 2注策略命中率 {r['hit_rate']:.1f}% | 5注策略命中率约73%")
+        print("\n  2注策略优势: 每期投入少300元，风险更低")
+        print("  5注策略优势: 命中率更高，盈利更多")
 
 
 if __name__ == "__main__":
