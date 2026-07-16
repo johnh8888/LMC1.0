@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-最终5注全覆盖方案回测（红波+蓝波+绿单+绿大单+绿双）
-每期500元，覆盖红/蓝/绿所有颜色
+纯正期望值策略回测
+只买正期望值玩法：绿大单 + 绿单 + 绿双
+每期300元
 """
 
 import re
@@ -14,18 +15,16 @@ from datetime import datetime
 import sys
 
 # =====================================================
-# 5注策略配置
+# 策略配置（只保留正期望值玩法）
 # =====================================================
 
 BETS = [
-    {"name": "红波", "odds": 2.70, "numbers": [1, 2, 7, 8, 12, 13, 18, 19, 23, 24, 29, 30, 34, 35, 40, 45, 46]},
-    {"name": "蓝波", "odds": 2.80, "numbers": [3, 4, 9, 10, 14, 15, 20, 25, 26, 31, 36, 37, 41, 42, 47, 48]},
-    {"name": "绿单", "odds": 5.82, "numbers": [5, 11, 17, 21, 27, 33, 39, 43, 49]},
     {"name": "绿大单", "odds": 11.82, "numbers": [27, 33, 39, 43, 49]},
+    {"name": "绿单", "odds": 5.82, "numbers": [5, 11, 17, 21, 27, 33, 39, 43, 49]},
     {"name": "绿双", "odds": 6.60, "numbers": [6, 16, 22, 28, 32, 38, 44]},
 ]
 
-# 合并所有号码（用于显示覆盖）
+# 合并所有号码
 ALL_NUMBERS = set()
 for bet in BETS:
     for n in bet["numbers"]:
@@ -56,8 +55,7 @@ def get_halfhalf(n):
 
 
 def get_hit_bet(n):
-    """检查命中了哪个玩法（按优先级返回赔率最高的）"""
-    # 按赔率从高到低排序
+    """检查命中了哪个玩法（按赔率从高到低）"""
     sorted_bets = sorted(BETS, key=lambda x: x["odds"], reverse=True)
     for bet in sorted_bets:
         if n in bet["numbers"]:
@@ -121,7 +119,7 @@ def run_backtest(rows, lottery_name, periods=20):
         print(f"⚠️ {lottery_name} 数据不足{periods}期")
         return None
 
-    bet_per_period = len(BETS) * 100  # 500元
+    bet_per_period = len(BETS) * 100  # 300元
 
     results = []
     balance = 0
@@ -192,8 +190,8 @@ def print_result(result):
         return
 
     print("\n" + "=" * 70)
-    print(f"📊 {result['lottery']} 最近{result['total']}期回测（5注全覆盖）")
-    print(f"   每期投入: 500元（5注×100元）")
+    print(f"📊 {result['lottery']} 最近{result['total']}期回测（纯正期望值策略）")
+    print(f"   每期投入: 300元（3注×100元）")
     print("=" * 70)
 
     print(f"\n📋 最近{result['total']}期开奖明细:")
@@ -229,7 +227,7 @@ def print_result(result):
 
 def print_summary(results):
     print("\n" + "=" * 70)
-    print("📊 5注全覆盖策略汇总对比")
+    print("📊 纯正期望值策略20期汇总对比")
     print("=" * 70)
     print(f"{'彩种':<12} {'期数':<8} {'命中率':<12} {'盈亏':<14} {'ROI':<10} {'最大回撤':<12} {'最长连未中':<10}")
     print("-" * 80)
@@ -262,17 +260,19 @@ def print_summary(results):
 
 def main():
     print("=" * 70)
-    print("🎯 5注全覆盖策略回测（红波+蓝波+绿单+绿大单+绿双）")
-    print("   每期投入: 500元，覆盖红/蓝/绿所有颜色")
+    print("🎯 纯正期望值策略20期回测（绿大单+绿单+绿双）")
+    print("   只买正期望值玩法，每期300元")
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
-    print("\n📋 5注策略:")
+    print("\n📋 3注策略:")
     for bet in BETS:
         nums = ", ".join([f"{n:02d}" for n in bet["numbers"]])
         print(f"  {bet['name']} (赔率{bet['odds']}): {nums}")
 
-    print(f"\n📊 覆盖号码: {len(ALL_NUMBERS)}个/49个 ({len(ALL_NUMBERS)/49*100:.1f}%)")
+    # 计算覆盖
+    total_numbers = len(ALL_NUMBERS)
+    print(f"\n📊 覆盖号码: {total_numbers}个/49个 ({total_numbers/49*100:.1f}%)")
     print(f"💰 每期投入: {len(BETS)*100}元")
 
     results = []
@@ -314,13 +314,11 @@ def main():
             avg_roi = sum(r["roi"] for r in results) / len(results)
 
             print(f"""
-✅ 5注全覆盖策略全部盈利！
+✅ 纯正期望值策略全部盈利！
 
 策略配置:
-  红波: 100元 (2.7)
-  蓝波: 100元 (2.8)
-  绿单: 100元 (5.82)
   绿大单: 100元 (11.82)
+  绿单: 100元 (5.82)
   绿双: 100元 (6.60)
 
 关键数据:
@@ -329,12 +327,11 @@ def main():
   平均ROI: {avg_roi:.2f}%
 
 每周预期:
-  单期投入: 500元
-  每周投入: 3,500元
+  单期投入: 300元
+  每周投入: 2,100元
   每周预期盈利: ~{total_profit/20*7:.0f}元
 
-建议:
-  ✅ 策略验证通过！可以继续执行！
+🎯 策略验证通过！可以执行！
 """)
         else:
             print("⚠️ 部分彩种表现不佳，建议优化")
