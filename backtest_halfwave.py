@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 
 """
-纯正期望值策略回测
-只买正期望值玩法：绿大单 + 绿单 + 绿双
-每期300元
+方案B：新澳门加蓝波（4注优化版）
+香港彩: 3注（绿大单+绿单+绿双）
+新澳门彩: 4注（绿大单+绿单+绿双+蓝波）
+老澳门彩: 3注（绿大单+绿单+绿双）
 """
 
 import re
@@ -15,20 +16,23 @@ from datetime import datetime
 import sys
 
 # =====================================================
-# 策略配置（只保留正期望值玩法）
+# 策略配置
 # =====================================================
 
-BETS = [
+# 香港彩、老澳门彩：3注
+BETS_3 = [
     {"name": "绿大单", "odds": 11.82, "numbers": [27, 33, 39, 43, 49]},
     {"name": "绿单", "odds": 5.82, "numbers": [5, 11, 17, 21, 27, 33, 39, 43, 49]},
     {"name": "绿双", "odds": 6.60, "numbers": [6, 16, 22, 28, 32, 38, 44]},
 ]
 
-# 合并所有号码
-ALL_NUMBERS = set()
-for bet in BETS:
-    for n in bet["numbers"]:
-        ALL_NUMBERS.add(n)
+# 新澳门彩：4注（加蓝波）
+BETS_4 = [
+    {"name": "绿大单", "odds": 11.82, "numbers": [27, 33, 39, 43, 49]},
+    {"name": "绿单", "odds": 5.82, "numbers": [5, 11, 17, 21, 27, 33, 39, 43, 49]},
+    {"name": "绿双", "odds": 6.60, "numbers": [6, 16, 22, 28, 32, 38, 44]},
+    {"name": "蓝波", "odds": 2.80, "numbers": [3, 4, 9, 10, 14, 15, 20, 25, 26, 31, 36, 37, 41, 42, 47, 48]},
+]
 
 # 官方号码表
 RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
@@ -54,9 +58,8 @@ def get_halfhalf(n):
     return get_color(n) + get_size(n) + get_odd(n)
 
 
-def get_hit_bet(n):
-    """检查命中了哪个玩法（按赔率从高到低）"""
-    sorted_bets = sorted(BETS, key=lambda x: x["odds"], reverse=True)
+def get_hit_bet(n, bets):
+    sorted_bets = sorted(bets, key=lambda x: x["odds"], reverse=True)
     for bet in sorted_bets:
         if n in bet["numbers"]:
             return bet["name"], bet["odds"]
@@ -114,12 +117,12 @@ def fetch_lottery_data(lottery_name, limit=30):
     return rows[:limit]
 
 
-def run_backtest(rows, lottery_name, periods=20):
+def run_backtest(rows, lottery_name, bets, periods=20):
     if len(rows) < periods:
         print(f"⚠️ {lottery_name} 数据不足{periods}期")
         return None
 
-    bet_per_period = len(BETS) * 100  # 300元
+    bet_per_period = len(bets) * 100
 
     results = []
     balance = 0
@@ -136,7 +139,7 @@ def run_backtest(rows, lottery_name, periods=20):
     rows_chrono = list(reversed(recent))
 
     for r in rows_chrono:
-        hit_name, odds = get_hit_bet(r["special"])
+        hit_name, odds = get_hit_bet(r["special"], bets)
         if hit_name:
             hit_count += 1
             hit_stats[hit_name] += 1
@@ -185,13 +188,15 @@ def run_backtest(rows, lottery_name, periods=20):
     }
 
 
-def print_result(result):
+def print_result(result, bets):
     if not result:
         return
 
+    bets_count = len(bets)
+
     print("\n" + "=" * 70)
-    print(f"📊 {result['lottery']} 最近{result['total']}期回测（纯正期望值策略）")
-    print(f"   每期投入: 300元（3注×100元）")
+    print(f"📊 {result['lottery']} 最近{result['total']}期回测")
+    print(f"   注数: {bets_count}注 | 每期投入: {bets_count*100}元")
     print("=" * 70)
 
     print(f"\n📋 最近{result['total']}期开奖明细:")
@@ -199,7 +204,7 @@ def print_result(result):
     print("-" * 80)
 
     for r in result["results"]:
-        hit_name, _ = get_hit_bet(r["number"])
+        hit_name, _ = get_hit_bet(r["number"], bets)
         if hit_name:
             print(f"{r['issue']:<12} {r['number']:<6} {get_halfhalf(r['number']):<12} ✅ {'':<4} {hit_name:<14} {r['profit']:<+12.0f} {r['balance']:<+12.0f}")
         else:
@@ -219,25 +224,26 @@ def print_result(result):
     print(f"  📊 ROI: {result['roi']:+.2f}%")
 
     print(f"\n🎯 各玩法命中统计:")
-    for bet in BETS:
+    for bet in bets:
         count = result["hit_stats"].get(bet["name"], 0)
         pct = count / result["hit_count"] * 100 if result["hit_count"] > 0 else 0
         print(f"  {bet['name']}: {count}次 ({pct:.1f}%)")
 
 
-def print_summary(results):
+def print_summary(results, configs):
     print("\n" + "=" * 70)
-    print("📊 纯正期望值策略20期汇总对比")
+    print("📊 方案B汇总对比（新澳门加蓝波）")
     print("=" * 70)
-    print(f"{'彩种':<12} {'期数':<8} {'命中率':<12} {'盈亏':<14} {'ROI':<10} {'最大回撤':<12} {'最长连未中':<10}")
+    print(f"{'彩种':<12} {'注数':<8} {'命中率':<12} {'盈亏':<14} {'ROI':<10} {'最大回撤':<12} {'最长连未中':<10}")
     print("-" * 80)
 
     total_profit = 0
     total_bet = 0
 
-    for r in results:
+    for r, config in zip(results, configs):
         if r:
-            print(f"{r['lottery']:<12} {r['total']:<8} {r['hit_rate']:.2f}%{'':<6} {r['balance']:+,.0f}元{'':<6} {r['roi']:+.2f}%{'':<4} {r['max_drawdown']:,.0f}元{'':<4} {r['max_consecutive_loss']}期")
+            bets_count = config["count"]
+            print(f"{r['lottery']:<12} {bets_count}注{'':<4} {r['hit_rate']:.2f}%{'':<6} {r['balance']:+,.0f}元{'':<6} {r['roi']:+.2f}%{'':<4} {r['max_drawdown']:,.0f}元{'':<4} {r['max_consecutive_loss']}期")
             total_profit += r["balance"]
             total_bet += r["total_bet"]
 
@@ -260,50 +266,46 @@ def print_summary(results):
 
 def main():
     print("=" * 70)
-    print("🎯 纯正期望值策略20期回测（绿大单+绿单+绿双）")
-    print("   只买正期望值玩法，每期300元")
+    print("🎯 方案B：新澳门加蓝波（4注优化版）")
+    print("   香港彩: 3注（绿大单+绿单+绿双）")
+    print("   新澳门彩: 4注（绿大单+绿单+绿双+蓝波）")
+    print("   老澳门彩: 3注（绿大单+绿单+绿双）")
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
-    print("\n📋 3注策略:")
-    for bet in BETS:
-        nums = ", ".join([f"{n:02d}" for n in bet["numbers"]])
-        print(f"  {bet['name']} (赔率{bet['odds']}): {nums}")
-
-    # 计算覆盖
-    total_numbers = len(ALL_NUMBERS)
-    print(f"\n📊 覆盖号码: {total_numbers}个/49个 ({total_numbers/49*100:.1f}%)")
-    print(f"💰 每期投入: {len(BETS)*100}元")
-
     results = []
+    configs = []
 
-    # 香港彩
+    # 香港彩 - 3注
     rows_hk = fetch_lottery_data("香港彩", limit=25)
     if len(rows_hk) >= 20:
-        result_hk = run_backtest(rows_hk, "香港彩", periods=20)
+        result_hk = run_backtest(rows_hk, "香港彩", BETS_3, periods=20)
         if result_hk:
-            print_result(result_hk)
+            print_result(result_hk, BETS_3)
             results.append(result_hk)
+            configs.append({"count": 3})
 
-    # 新澳门彩
+    # 新澳门彩 - 4注（加蓝波）
     rows_mo = fetch_lottery_data("新澳门彩", limit=25)
     if len(rows_mo) >= 20:
-        result_mo = run_backtest(rows_mo, "新澳门彩", periods=20)
+        result_mo = run_backtest(rows_mo, "新澳门彩", BETS_4, periods=20)
         if result_mo:
-            print_result(result_mo)
+            print_result(result_mo, BETS_4)
             results.append(result_mo)
+            configs.append({"count": 4})
 
-    # 老澳门彩
+    # 老澳门彩 - 3注
     rows_old = fetch_lottery_data("老澳门彩", limit=25)
     if len(rows_old) >= 20:
-        result_old = run_backtest(rows_old, "老澳门彩", periods=20)
+        result_old = run_backtest(rows_old, "老澳门彩", BETS_3, periods=20)
         if result_old:
-            print_result(result_old)
+            print_result(result_old, BETS_3)
             results.append(result_old)
+            configs.append({"count": 3})
 
     # 汇总
     if results:
-        total_profit, total_bet = print_summary(results)
+        total_profit, total_bet = print_summary(results, configs)
 
         print("\n" + "=" * 70)
         print("📋 最终结论（20期）")
@@ -314,12 +316,12 @@ def main():
             avg_roi = sum(r["roi"] for r in results) / len(results)
 
             print(f"""
-✅ 纯正期望值策略全部盈利！
+✅ 方案B全部盈利！
 
 策略配置:
-  绿大单: 100元 (11.82)
-  绿单: 100元 (5.82)
-  绿双: 100元 (6.60)
+  香港彩: 3注 (300元/期) → 绿大单+绿单+绿双
+  新澳门彩: 4注 (400元/期) → 绿大单+绿单+绿双+蓝波
+  老澳门彩: 3注 (300元/期) → 绿大单+绿单+绿双
 
 关键数据:
   三彩总盈利: {total_profit:+,.0f}元
@@ -327,14 +329,14 @@ def main():
   平均ROI: {avg_roi:.2f}%
 
 每周预期:
-  单期投入: 300元
-  每周投入: 2,100元
+  单期总投入: 1,000元
+  每周总投入: 7,000元
   每周预期盈利: ~{total_profit/20*7:.0f}元
 
 🎯 策略验证通过！可以执行！
 """)
         else:
-            print("⚠️ 部分彩种表现不佳，建议优化")
+            print("⚠️ 部分彩种表现不佳，建议继续优化")
 
 
 if __name__ == "__main__":
