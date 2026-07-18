@@ -3,7 +3,7 @@
 
 """
 回测"大"和"单"的出现频率
-分别统计1-100期中"大"和"单"的开出次数
+统计最近100期中"大"和"单"的开出次数
 """
 
 import re
@@ -32,10 +32,10 @@ def get_halfhalf(n):
     return get_color(n) + get_size(n) + get_odd(n)
 
 def fetch_lottery_data(lottery_name, limit=100):
-    """获取彩票历史数据"""
+    """获取彩票历史数据（最近100期）"""
     rows = []
     try:
-        print(f"📡 正在获取 {lottery_name} 数据...")
+        print(f"📡 正在获取 {lottery_name} 最近100期数据...")
         req = urllib.request.Request(
             "https://marksix6.net/index.php?api=1",
             headers={"User-Agent": "Mozilla/5.0"}
@@ -86,25 +86,29 @@ def fetch_lottery_data(lottery_name, limit=100):
         cache[r["issue"]] = r
     rows = list(cache.values())
     rows.sort(key=lambda x: x["issue"], reverse=True)
-    print(f"✅ 获取 {len(rows)} 期数据")
+    
+    # 只取最近100期
+    rows = rows[:100]
+    
+    print(f"✅ 获取 {len(rows)} 期数据（最近100期）")
     
     if rows:
         print(f"📅 最新期号: {rows[0]['issue']}")
         print(f"📅 最新特码: {rows[0]['special']} ({rows[0]['halfhalf']})")
         print(f"📅 最早期号: {rows[-1]['issue']}")
+        print(f"📅 数据范围: {rows[-1]['issue']} ~ {rows[0]['issue']} (共{len(rows)}期)")
     
-    return rows[:limit], update_time
+    return rows, update_time
 
-def analyze_big_odd(rows, lottery_name, periods=100):
-    """分析大和单的出现次数"""
-    if len(rows) < periods:
-        print(f"⚠️ {lottery_name} 数据不足{periods}期，实际{len(rows)}期")
-        periods = len(rows)
+def analyze_big_odd(rows, lottery_name):
+    """分析最近100期大和单的出现次数"""
+    periods = len(rows)
     
-    # 取最近的periods期
-    recent = rows[:periods]
+    if periods < 100:
+        print(f"⚠️ {lottery_name} 数据不足100期，实际{periods}期")
+    
     # 按时间顺序（从旧到新）
-    recent_chrono = list(reversed(recent))
+    recent_chrono = list(reversed(rows))
     
     # 统计"大"
     big_count = 0
@@ -208,79 +212,71 @@ def print_analysis(result):
         return
     
     print("\n" + "=" * 70)
-    print(f"📊 {result['lottery']} 大小单双分析")
+    print(f"📊 {result['lottery']} 最近{result['total_periods']}期大小单双分析")
     print("=" * 70)
     
     print(f"\n📅 数据范围:")
     print(f"  最新期号: {result['latest_issue']}")
     print(f"  最新特码: {result['latest_special']} ({result['latest_halfhalf']})")
     print(f"  最早期号: {result['earliest_issue']}")
+    print(f"  总期数: {result['total_periods']}期（最近100期）")
     
     # 显示最近10期
-    print(f"\n📋 最近10期开奖:")
-    print(f"{'期号':<12} {'特码':<6} {'半半波':<12} {'大':<6} {'单':<6}")
-    print("-" * 50)
+    print(f"\n📋 最近10期开奖明细:")
+    print(f"{'期号':<12} {'特码':<6} {'半半波':<12} {'是否大':<8} {'是否单':<8}")
+    print("-" * 55)
     for r in result['recent_10']:
-        big_status = "✅" if r['is_big'] else "❌"
-        odd_status = "✅" if r['is_odd'] else "❌"
-        print(f"{r['issue']:<12} {r['special']:<6} {r['halfhalf']:<12} {big_status:<6} {odd_status:<6}")
+        big_status = "✅ 大" if r['is_big'] else "❌ 小"
+        odd_status = "✅ 单" if r['is_odd'] else "❌ 双"
+        print(f"{r['issue']:<12} {r['special']:<6} {r['halfhalf']:<12} {big_status:<8} {odd_status:<8}")
     
     print("\n" + "-" * 70)
     
     # "大"的统计
-    print(f"\n📈 【大】统计:")
-    print(f"  📅 回测期数: {result['total_periods']}期")
+    print(f"\n📈 【大号】统计 (号码≥25):")
+    print(f"  📅 回测期数: {result['total_periods']}期（最近100期）")
     print(f"  🎯 开出次数: {result['big_count']}次")
     print(f"  📈 开出率: {result['big_rate']:.2f}%")
     print(f"  🔥 最长连续开出: {result['big_max_consecutive']}期")
     print(f"  📊 平均间隔: {result['big_avg_gap']:.1f}期")
     print(f"  📊 理论概率: 50.00%")
-    print(f"  📊 偏差: {result['big_rate'] - 50.00:+.2f}%")
+    if result['big_rate'] > 50:
+        print(f"  📊 偏差: {result['big_rate'] - 50.00:+.2f}% ✅ 大号偏热")
+    elif result['big_rate'] < 50:
+        print(f"  📊 偏差: {result['big_rate'] - 50.00:+.2f}% ⚠️ 小号偏热")
+    else:
+        print(f"  📊 偏差: {result['big_rate'] - 50.00:+.2f}% ⚖️ 大小平衡")
     
     # "单"的统计
-    print(f"\n📈 【单】统计:")
-    print(f"  📅 回测期数: {result['total_periods']}期")
+    print(f"\n📈 【单号】统计 (奇数码):")
+    print(f"  📅 回测期数: {result['total_periods']}期（最近100期）")
     print(f"  🎯 开出次数: {result['odd_count']}次")
     print(f"  📈 开出率: {result['odd_rate']:.2f}%")
     print(f"  🔥 最长连续开出: {result['odd_max_consecutive']}期")
     print(f"  📊 平均间隔: {result['odd_avg_gap']:.1f}期")
     print(f"  📊 理论概率: 50.00%")
-    print(f"  📊 偏差: {result['odd_rate'] - 50.00:+.2f}%")
+    if result['odd_rate'] > 50:
+        print(f"  📊 偏差: {result['odd_rate'] - 50.00:+.2f}% ✅ 单号偏热")
+    elif result['odd_rate'] < 50:
+        print(f"  📊 偏差: {result['odd_rate'] - 50.00:+.2f}% ⚠️ 双号偏热")
+    else:
+        print(f"  📊 偏差: {result['odd_rate'] - 50.00:+.2f}% ⚖️ 单双平衡")
     
     # 大单组合统计（同时满足大和单）
     both_count = 0
-    for i in range(len(result['recent_10'])):
-        if result['recent_10'][i]['is_big'] and result['recent_10'][i]['is_odd']:
+    both_issues = []
+    for r in result['recent_10']:
+        if r['is_big'] and r['is_odd']:
             both_count += 1
+            both_issues.append(r['issue'])
     
     print(f"\n📈 【大+单组合】最近10期统计:")
     print(f"  大单同时出现: {both_count}次")
     print(f"  占比: {both_count/10*100:.0f}%")
     print(f"  理论概率: 25.00%")
     print(f"  偏差: {both_count/10*100 - 25.00:+.2f}%")
-    
-    # 显示大单出现位置
-    if result['big_positions']:
-        print(f"\n📍 大出现位置（第几期）:")
-        positions_str = []
-        for i, pos in enumerate(result['big_positions']):
-            positions_str.append(str(pos))
-            if (i + 1) % 20 == 0:
-                print(f"    {' '.join(positions_str)}")
-                positions_str = []
-        if positions_str:
-            print(f"    {' '.join(positions_str)}")
-    
-    if result['odd_positions']:
-        print(f"\n📍 单出现位置（第几期）:")
-        positions_str = []
-        for i, pos in enumerate(result['odd_positions']):
-            positions_str.append(str(pos))
-            if (i + 1) % 20 == 0:
-                print(f"    {' '.join(positions_str)}")
-                positions_str = []
-        if positions_str:
-            print(f"    {' '.join(positions_str)}")
+    if both_count > 0:
+        print(f"  出现期号: {' '.join(both_issues)}")
     
     print("\n" + "-" * 70)
 
@@ -290,11 +286,11 @@ def print_comparison(results):
         return
     
     print("\n" + "=" * 70)
-    print("📊 三彩大小单双对比分析")
+    print("📊 三彩最近100期大小单双对比分析")
     print("=" * 70)
     
     print(f"\n{'彩种':<12} {'大次数':<10} {'大开出率':<12} {'大最长连开':<12} {'单次数':<10} {'单开出率':<12} {'单最长连开':<12}")
-    print("-" * 85)
+    print("-" * 90)
     
     total_big = 0
     total_odd = 0
@@ -307,16 +303,15 @@ def print_comparison(results):
             total_odd += r['odd_count']
             total_periods += r['total_periods']
     
-    print("-" * 85)
+    print("-" * 90)
     
     if total_periods > 0:
         big_overall = total_big / total_periods * 100
         odd_overall = total_odd / total_periods * 100
         
-        print(f"\n📊 三彩合计:")
-        print(f"  总期数: {total_periods}期")
-        print(f"  大总次数: {total_big}次, 综合开出率: {big_overall:.2f}% (理论50.00%, 偏差{big_overall - 50.00:+.2f}%)")
-        print(f"  单总次数: {total_odd}次, 综合开出率: {odd_overall:.2f}% (理论50.00%, 偏差{odd_overall - 50.00:+.2f}%)")
+        print(f"\n📊 三彩合计（最近{total_periods}期）:")
+        print(f"  【大】总次数: {total_big}次, 综合开出率: {big_overall:.2f}% (理论50.00%, 偏差{big_overall - 50.00:+.2f}%)")
+        print(f"  【单】总次数: {total_odd}次, 综合开出率: {odd_overall:.2f}% (理论50.00%, 偏差{odd_overall - 50.00:+.2f}%)")
         
         print(f"\n📅 最新一期汇总:")
         for r in results:
@@ -326,17 +321,17 @@ def print_comparison(results):
 
 def main():
     print("=" * 70)
-    print("🎯 大小单双出现频率回测")
+    print("🎯 最近100期大小单双出现频率回测")
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
     
     results = []
     
-    # 获取三个彩种的数据并分析
+    # 获取三个彩种的最近100期数据并分析
     for lottery_name in ["香港彩", "新澳门彩", "老澳门彩"]:
         rows, update_time = fetch_lottery_data(lottery_name, limit=100)
         if rows:
-            result = analyze_big_odd(rows, lottery_name, periods=100)
+            result = analyze_big_odd(rows, lottery_name)
             if result:
                 result['update_time'] = update_time
                 print_analysis(result)
@@ -348,7 +343,7 @@ def main():
         
         # 总结
         print("\n" + "=" * 70)
-        print("📋 结论")
+        print("📋 最近100期结论")
         print("=" * 70)
         
         total_big = sum(r['big_count'] for r in results)
@@ -358,24 +353,31 @@ def main():
         odd_rate = total_odd / total_periods * 100 if total_periods > 0 else 0
         
         print(f"""
-三彩综合统计:
+三彩最近100期综合统计:
   总回测期数: {total_periods}期
   
-  【大】
+  【大号】(≥25)
   总次数: {total_big}次
   综合开出率: {big_rate:.2f}%
   理论概率: 50.00%
-  结论: {'✅ 大的出现频率高于理论值' if big_rate > 50 else '⚠️ 大的出现频率低于理论值'}
+  偏差: {big_rate - 50.00:+.2f}%
+  结论: {'✅ 大号偏热，近期大号出现频率较高' if big_rate > 51 else '⚠️ 小号偏热，近期小号出现频率较高' if big_rate < 49 else '⚖️ 大小基本平衡'}
   
-  【单】
+  【单号】(奇数)
   总次数: {total_odd}次
   综合开出率: {odd_rate:.2f}%
   理论概率: 50.00%
-  结论: {'✅ 单的出现频率高于理论值' if odd_rate > 50 else '⚠️ 单的出现频率低于理论值'}
+  偏差: {odd_rate - 50.00:+.2f}%
+  结论: {'✅ 单号偏热，近期单号出现频率较高' if odd_rate > 51 else '⚠️ 双号偏热，近期双号出现频率较高' if odd_rate < 49 else '⚖️ 单双基本平衡'}
 
-建议:
-  {'📌 近期大号偏热，可关注大号' if big_rate > 50 else '📌 近期小号偏热，可关注小号'}
-  {'📌 近期单号偏热，可关注单号' if odd_rate > 50 else '📌 近期双号偏热，可关注双号'}
+策略建议（基于最近100期数据）:
+  {'📌 可关注大号投注' if big_rate > 51 else '📌 可关注小号投注' if big_rate < 49 else '📌 大小号均衡投注'}
+  {'📌 可关注单号投注' if odd_rate > 51 else '📌 可关注双号投注' if odd_rate < 49 else '📌 单双号均衡投注'}
+  
+  大单组合理论概率: 25.00%
+  大双组合理论概率: 25.00%
+  小单组合理论概率: 25.00%
+  小双组合理论概率: 25.00%
 """)
 
 if __name__ == "__main__":
