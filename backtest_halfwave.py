@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-三彩大/单 置信度下注建议 + 反向策略回测
-包含：
-1. 正向策略（压大/单）
-2. 反向策略（压小/双）
-3. 对比分析
+三彩（香港彩 / 新澳门彩 / 老澳门彩）大/单 置信度下注建议
+------------------------------------------------------
+逻辑：
+  - "大"(>=25，含49) 和 "单"(奇数，含49) 理论概率均为 25/49 ≈ 51.02%
+  - 本脚本用 z 检验，判断近期(默认30期)实际出现率是否显著偏离理论值。
+  - 只有 z >= 1.96（95%置信度，显著偏高）才建议"下注"，否则一律"观望"。
+  - 显著偏低(z <= -1.96)也不下注（没道理去押偏低的方向）。
+  - 支持多窗口综合判断（30/50/100期）
+  - 包含历史准确率回测
+  - 每周固定投注方案
 """
 
 import re
@@ -17,17 +22,18 @@ from collections import defaultdict
 
 API_URL = "https://marksix6.net/index.php?api=1"
 
-# ============ 配置 ============
-CONFIG = {
-    "per_bet_amount": 200,
-    "max_daily_bets": 3,
-    "weekly_target": 2000,
-    "daily_target": 300,
-    "weekly_stop_loss": -2000,
-    "daily_stop_loss": -500,
-    "consecutive_loss_days": 3,
+# ============ 每周固定方案配置 ============
+WEEKLY_CONFIG = {
+    "per_bet_amount": 200,          # 每期基础投注额
+    "max_daily_bets": 3,            # 每天最多3期
+    "weekly_target": 2000,          # 每周目标盈利
+    "daily_target": 300,            # 每日目标盈利
+    "weekly_stop_loss": -2000,      # 每周止损线
+    "daily_stop_loss": -500,        # 每日止损线
+    "consecutive_loss_days": 3,     # 连续亏损天数限制
 }
 
+# 三彩配置
 LOTTERIES = [
     {"key": "hk", "name": "香港彩", "label": "香港彩"},
     {"key": "xam", "name": "新澳门彩", "label": "新澳门彩"},
@@ -36,7 +42,82 @@ LOTTERIES = [
 
 THEORY_P = 25 / 49
 
-# ============ 数据获取 ============
+# ============ 全局状态追踪 ============
+class WeeklyTracker:
+    def __init__(self):
+        self.week_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        self.week_start = self.week_start - timedelta(days=self.week_start.weekday())
+        self.daily_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        self.weekly_profit = 0
+        self.daily_profit = 0
+        self.bets_today = 0
+        self.bets_this_week = 0
+        self.consecutive_loss_days = 0
+        self.today_betted = []
+        self.history = []
+        self.status = "正常"
+    
+    def update(self, profit, hit, lottery_name):
+        self.weekly_profit += profit
+        self.daily_profit += profit
+        self.bets_today += 1
+        self.bets_this_week += 1
+        self.today_betted.append(lottery_name)
+        
+        if hit:
+            self.consecutive_loss_days = 0
+        else:
+            self.consecutive_loss_days += 1
+        
+        self._update_status()
+        self.history.append({
+            "time": datetime.now(),
+            "lottery": lottery_name,
+            "profit": profit,
+            "hit": hit,
+            "status": self.status,
+        })
+    
+    def _update_status(self):
+        if self.weekly_profit <= WEEKLY_CONFIG["weekly_stop_loss"]:
+            self.status = "暂停_周止损"
+        elif self.daily_profit <= WEEKLY_CONFIG["daily_stop_loss"]:
+            self.status = "暂停_日止损"
+        elif self.consecutive_loss_days >= WEEKLY_CONFIG["consecutive_loss_days"]:
+            self.status = "暂停_连亏"
+        elif self.weekly_profit >= WEEKLY_CONFIG["weekly_target"]:
+            self.status = "完成_周目标"
+        elif self.daily_profit >= WEEKLY_CONFIG["daily_target"]:
+            self.status = "完成_日目标"
+        elif self.bets_today >= WEEKLY_CONFIG["max_daily_bets"]:
+            self.status = "暂停_日次数"
+        elif self.weekly_profit < 0:
+            self.status = "谨慎_亏损中"
+        else:
+            self.status = "正常"
+    
+    def can_bet(self, lottery_name):
+        if self.status not in ["正常", "谨慎_亏损中"]:
+            return False, self.get_recommendation()
+        if lottery_name in self.today_betted:
+            return False, f"⚠️ 今日已投过{lottery_name}"
+        return True, "✅ 可以投注"
+    
+    def get_recommendation(self):
+        messages = {
+            "暂停_周止损": f"❌ 本周亏损{self.weekly_profit}元，已到止损线",
+            "暂停_日止损": f"❌ 今日亏损{self.daily_profit}元，已到止损线",
+            "暂停_连亏": f"❌ 已连续{self.consecutive_loss_days}天未中",
+            "完成_周目标": f"✅ 本周已盈利{self.weekly_profit}元，达到目标",
+            "完成_日目标": f"✅ 今日已盈利{self.daily_profit}元，达到目标",
+            "暂停_日次数": f"⚠️ 今日已投{self.bets_today}期（上限3期）",
+            "谨慎_亏损中": f"⚠️ 本周亏损{self.weekly_profit}元，建议减仓",
+        }
+        return messages.get(self.status, "✅ 状态正常")
+
+# ============ 核心功能 ============
+
 def parse_numbers(text):
     nums = re.findall(r"\d+", text)
     return [int(x) for x in nums if 1 <= int(x) <= 49]
@@ -82,13 +163,14 @@ def fetch_lottery(lottery_name, limit=200):
         
         print(f"✅ 获取 {len(rows)} 期数据")
         if rows:
-            print(f"📅 范围: {rows[0]['issue']} ~ {rows[-1]['issue']} ({len(rows)}期)")
+            print(f"📅 数据范围: {rows[0]['issue']} ~ {rows[-1]['issue']} (共{len(rows)}期)")
         return rows
     except Exception as e:
         print(f"❌ 获取失败: {e}")
         return []
 
 def z_test(hits, n, p0=THEORY_P):
+    """z检验"""
     if n == 0:
         return 0.0, 0.0
     p_hat = hits / n
@@ -96,274 +178,275 @@ def z_test(hits, n, p0=THEORY_P):
     z = (p_hat - p0) / se if se > 0 else 0.0
     return z, p_hat
 
-# ============ 正向 + 反向策略回测 ============
-def backtest_both_strategies(rows, window=30, z_threshold=1.96):
-    """
-    同时回测正向和反向策略
-    正向：z>=阈值时押大/单
-    反向：z<=-阈值时押小/双（即大偏冷时押小，单偏冷时押双）
-    """
-    if len(rows) < window + 1:
-        return None
-    
-    strategies = {
-        "正向_大": {"bets": 0, "hits": 0, "profits": [], "z_values": []},
-        "反向_小": {"bets": 0, "hits": 0, "profits": [], "z_values": []},
-        "正向_单": {"bets": 0, "hits": 0, "profits": [], "z_values": []},
-        "反向_双": {"bets": 0, "hits": 0, "profits": [], "z_values": []},
-    }
-    
-    for i in range(window, len(rows)):
-        history = rows[:i]
-        actual = rows[i]
-        recent = history[-window:]
-        
-        n = len(recent)
-        hits_big = sum(1 for r in recent if r["is_big"])
-        hits_odd = sum(1 for r in recent if r["is_odd"])
-        
-        z_big, p_big = z_test(hits_big, n)
-        z_odd, p_odd = z_test(hits_odd, n)
-        
-        # === 正向策略：押大 ===
-        if z_big >= z_threshold:
-            strategies["正向_大"]["bets"] += 1
-            strategies["正向_大"]["z_values"].append(z_big)
-            if actual["is_big"]:
-                strategies["正向_大"]["hits"] += 1
-                strategies["正向_大"]["profits"].append(95)  # 赔率1.95
-            else:
-                strategies["正向_大"]["profits"].append(-100)
-        
-        # === 反向策略：押小（大号偏冷时） ===
-        if z_big <= -z_threshold:
-            strategies["反向_小"]["bets"] += 1
-            strategies["反向_小"]["z_values"].append(z_big)
-            if actual["is_small"]:
-                strategies["反向_小"]["hits"] += 1
-                strategies["反向_小"]["profits"].append(95)
-            else:
-                strategies["反向_小"]["profits"].append(-100)
-        
-        # === 正向策略：押单 ===
-        if z_odd >= z_threshold:
-            strategies["正向_单"]["bets"] += 1
-            strategies["正向_单"]["z_values"].append(z_odd)
-            if actual["is_odd"]:
-                strategies["正向_单"]["hits"] += 1
-                strategies["正向_单"]["profits"].append(95)
-            else:
-                strategies["正向_单"]["profits"].append(-100)
-        
-        # === 反向策略：押双（单号偏冷时） ===
-        if z_odd <= -z_threshold:
-            strategies["反向_双"]["bets"] += 1
-            strategies["反向_双"]["z_values"].append(z_odd)
-            if actual["is_even"]:
-                strategies["反向_双"]["hits"] += 1
-                strategies["反向_双"]["profits"].append(95)
-            else:
-                strategies["反向_双"]["profits"].append(-100)
-    
-    # 计算结果
-    results = {}
-    for name, s in strategies.items():
-        if s["bets"] > 0:
-            hit_rate = s["hits"] / s["bets"] * 100
-            total_profit = sum(s["profits"])
-            avg_z = sum(s["z_values"]) / len(s["z_values"]) if s["z_values"] else 0
-            results[name] = {
-                "bets": s["bets"],
-                "hits": s["hits"],
-                "hit_rate": hit_rate,
-                "total_profit": total_profit,
-                "avg_profit": total_profit / s["bets"] if s["bets"] > 0 else 0,
-                "avg_z": avg_z,
-                "max_consecutive_loss": 0,  # 简化
-            }
-    
-    return results
-
-def backtest_threshold_sensitivity(rows, window=30):
-    """测试不同阈值下的表现"""
-    thresholds = [1.0, 1.3, 1.6, 1.96, 2.33, 2.58]
-    results = {}
-    
-    for threshold in thresholds:
-        result = backtest_both_strategies(rows, window=window, z_threshold=threshold)
-        if result:
-            results[threshold] = result
-    
-    return results
-
-def print_backtest_results(results, lottery_name):
-    """打印回测结果"""
-    if not results:
-        print("无回测数据")
-        return
-    
-    print(f"\n{'='*70}")
-    print(f"📊 {lottery_name} 正向vs反向策略回测（窗口30期）")
-    print("="*70)
-    
-    print(f"\n{'策略':<12} {'投注次数':<10} {'命中次数':<10} {'命中率':<12} {'总盈亏':<12} {'平均Z值':<10}")
-    print("-"*75)
-    
-    # 按策略类型分组显示
-    for strategy in ["正向_大", "反向_小", "正向_单", "反向_双"]:
-        if strategy in results:
-            r = results[strategy]
-            label = {
-                "正向_大": "✅ 押大",
-                "反向_小": "🔄 押小(反)",
-                "正向_单": "✅ 押单",
-                "反向_双": "🔄 押双(反)"
-            }[strategy]
-            print(f"{label:<12} {r['bets']:<10} {r['hits']:<10} {r['hit_rate']:.1f}%{'':<6} {r['total_profit']:+.0f}元{'':<4} {r['avg_z']:+.2f}")
-    
-    # 对比分析
-    print(f"\n📋 对比分析:")
-    
-    big_forward = results.get("正向_大", None)
-    small_reverse = results.get("反向_小", None)
-    odd_forward = results.get("正向_单", None)
-    even_reverse = results.get("反向_双", None)
-    
-    # 大号对比
-    if big_forward and small_reverse:
-        diff = big_forward["hit_rate"] - small_reverse["hit_rate"]
-        better = "正向押大" if diff > 0 else "反向押小"
-        print(f"  大号方向: 正向押大 {big_forward['hit_rate']:.1f}% vs 反向押小 {small_reverse['hit_rate']:.1f}%")
-        print(f"  差异: {diff:+.1f}% → {better}更好")
-    
-    # 单号对比
-    if odd_forward and even_reverse:
-        diff = odd_forward["hit_rate"] - even_reverse["hit_rate"]
-        better = "正向押单" if diff > 0 else "反向押双"
-        print(f"  单号方向: 正向押单 {odd_forward['hit_rate']:.1f}% vs 反向押双 {even_reverse['hit_rate']:.1f}%")
-        print(f"  差异: {diff:+.1f}% → {better}更好")
-    
-    # 总结建议
-    print(f"\n💡 策略建议:")
-    best_strategy = max(results.items(), key=lambda x: x[1]["hit_rate"])
-    best_name = {
-        "正向_大": "✅ 正向押大号",
-        "反向_小": "🔄 反向押小号",
-        "正向_单": "✅ 正向押单号",
-        "反向_双": "🔄 反向押双号"
-    }[best_strategy[0]]
-    print(f"  最佳策略: {best_name} (命中率{best_strategy[1]['hit_rate']:.1f}%)")
-
-def print_threshold_sensitivity(results):
-    """打印不同阈值的敏感性分析"""
-    if not results:
-        return
-    
-    print(f"\n{'='*70}")
-    print(f"📊 不同阈值下策略表现对比")
-    print("="*70)
-    
-    print(f"\n{'阈值':<8} {'策略':<12} {'投注次数':<10} {'命中率':<12} {'总盈亏':<10}")
-    print("-"*55)
-    
-    for threshold in sorted(results.keys()):
-        r = results[threshold]
-        for strategy in ["正向_大", "反向_小"]:
-            if strategy in r:
-                label = "押大" if strategy == "正向_大" else "押小(反)"
-                print(f"{threshold:.2f}  {label:<10} {r[strategy]['bets']:<10} {r[strategy]['hit_rate']:.1f}%{'':<6} {r[strategy]['total_profit']:+.0f}元")
-
-def print_current_signal(rows, lottery_name, window=30):
-    """打印当前信号"""
+def bet_decision(rows, window=30, z_threshold=1.96):
+    """单窗口判断"""
     if len(rows) < window:
-        return
+        return None
     
     recent = rows[-window:]
     n = len(recent)
     hits_big = sum(1 for r in recent if r["is_big"])
     hits_odd = sum(1 for r in recent if r["is_odd"])
-    
+    hits_small = sum(1 for r in recent if r["is_small"])
+    hits_even = sum(1 for r in recent if r["is_even"])
+
     z_big, p_big = z_test(hits_big, n)
     z_odd, p_odd = z_test(hits_odd, n)
+    z_small, p_small = z_test(hits_small, n)
+    z_even, p_even = z_test(hits_even, n)
+
+    return {
+        "大": {"action": "下注" if z_big >= z_threshold else "观望", "z": z_big, "p": p_big, "hits": hits_big, "n": n},
+        "单": {"action": "下注" if z_odd >= z_threshold else "观望", "z": z_odd, "p": p_odd, "hits": hits_odd, "n": n},
+        "小": {"action": "下注" if z_small >= z_threshold else "观望", "z": z_small, "p": p_small, "hits": hits_small, "n": n},
+        "双": {"action": "下注" if z_even >= z_threshold else "观望", "z": z_even, "p": p_even, "hits": hits_even, "n": n},
+    }
+
+def multi_window_decision(rows, windows=[30, 50, 100], z_threshold=1.96):
+    """多窗口综合判断"""
+    if not rows or len(rows) < min(windows):
+        return None
+    
+    results = {}
+    for w in windows:
+        if len(rows) >= w:
+            d = bet_decision(rows, window=w, z_threshold=z_threshold)
+            if d:
+                results[w] = d
+    
+    if not results:
+        return None
+    
+    # 投票统计
+    directions = ["大", "单", "小", "双"]
+    votes = {d: 0 for d in directions}
+    
+    for w, d in results.items():
+        for dir_name in directions:
+            if d[dir_name]["action"] == "下注":
+                votes[dir_name] += 1
+    
+    total_windows = len(results)
+    threshold = total_windows / 2
+    
+    result = {}
+    for dir_name in directions:
+        result[dir_name] = {
+            "action": "下注" if votes[dir_name] > threshold else "观望",
+            "votes": votes[dir_name],
+            "total_windows": total_windows,
+            "detail": {w: results[w][dir_name] for w in results.keys()}
+        }
+    
+    return result
+
+def backtest_signal_accuracy(rows, window=50, z_threshold=1.96):
+    """历史准确率回测"""
+    stats = {"大": {"bet_count": 0, "hit_count": 0},
+             "单": {"bet_count": 0, "hit_count": 0}}
+
+    if len(rows) < window + 1:
+        print(f"\n⚠️ 数据不足 {window+1} 期，无法进行历史准确率回测")
+        return stats
+
+    for i in range(window, len(rows)):
+        history = rows[:i]
+        actual_next = rows[i]
+
+        recent = history[-window:]
+        n = len(recent)
+        hits_big = sum(1 for r in recent if r["is_big"])
+        hits_odd = sum(1 for r in recent if r["is_odd"])
+        z_big, _ = z_test(hits_big, n)
+        z_odd, _ = z_test(hits_odd, n)
+
+        if z_big >= z_threshold:
+            stats["大"]["bet_count"] += 1
+            if actual_next["is_big"]:
+                stats["大"]["hit_count"] += 1
+
+        if z_odd >= z_threshold:
+            stats["单"]["bet_count"] += 1
+            if actual_next["is_odd"]:
+                stats["单"]["hit_count"] += 1
+
+    print(f"\n{'='*70}")
+    print(f"📈 信号历史准确率回测（窗口={window}期，基于{len(rows)}期数据）")
+    print("="*70)
+    
+    for label, s in stats.items():
+        bc, hc = s["bet_count"], s["hit_count"]
+        if bc == 0:
+            print(f"【{label}】 历史从未触发下注信号")
+            continue
+        acc = hc / bc * 100
+        z_acc, _ = z_test(hc, bc)
+        
+        if bc >= 50 and abs(z_acc) >= 1.96:
+            verdict = "✅ 显著高于理论值" if z_acc > 0 else "⚠️ 显著低于理论值"
+        elif bc >= 30:
+            verdict = "📊 有一定参考价值（需继续观察）"
+        else:
+            verdict = "⚠️ 样本太少，结论不可靠"
+            
+        print(f"【{label}】 信号触发 {bc} 次，命中 {hc} 次 = {acc:.1f}%  "
+              f"(理论基准 {THEORY_P*100:.1f}%)  → {verdict}")
+        
+        if bc > 0:
+            se = math.sqrt(acc/100 * (1 - acc/100) / bc)
+            ci_low = max(0, acc/100 - 1.96*se) * 100
+            ci_high = min(1, acc/100 + 1.96*se) * 100
+            print(f"   95%置信区间: {ci_low:.1f}% ~ {ci_high:.1f}%")
+    
+    return stats
+
+def calculate_bet_amount(tracker, signal_strength):
+    """计算投注额"""
+    base = WEEKLY_CONFIG["per_bet_amount"]
+    
+    if tracker.status == "谨慎_亏损中":
+        multiplier = 0.5
+    elif tracker.weekly_profit > WEEKLY_CONFIG["weekly_target"] * 0.5:
+        multiplier = 0.7
+    else:
+        multiplier = 1.0
+    
+    if signal_strength >= 2.5:
+        multiplier *= 1.2
+    elif signal_strength >= 2.0:
+        multiplier *= 1.0
+    else:
+        multiplier *= 0.8
+    
+    if datetime.now().weekday() >= 5:
+        multiplier *= 0.8
+    
+    bet = int(base * multiplier)
+    bet = max(50, min(bet, 500))
+    bet = round(bet, -1)
+    return bet
+
+def print_full_analysis(lottery_name, rows, decision, backtest_results, tracker):
+    """完整分析打印"""
+    print("\n" + "=" * 70)
+    print(f"📊 {lottery_name} 综合分析")
+    print("=" * 70)
+    
+    if not rows:
+        print("❌ 无数据")
+        return
     
     latest = rows[-1]
+    print(f"\n📅 最新数据:")
+    print(f"  期号: {latest['issue']}")
+    print(f"  特码: {latest['special']}")
+    print(f"  大号: {'是' if latest['is_big'] else '否'}")
+    print(f"  单号: {'是' if latest['is_odd'] else '否'}")
     
-    print(f"\n{'='*70}")
-    print(f"📡 {lottery_name} 当前信号（最近{window}期）")
-    print("="*70)
-    print(f"  最新: {latest['issue']} 特码{latest['special']}")
-    print(f"  大号: z={z_big:+.2f} 出现率={p_big*100:.1f}%")
-    print(f"  单号: z={z_odd:+.2f} 出现率={p_odd*100:.1f}%")
+    # 多窗口判断
+    if decision:
+        print(f"\n📊 多窗口综合判断 ({decision['大']['total_windows']}个窗口):")
+        for dir_name in ["大", "单", "小", "双"]:
+            d = decision[dir_name]
+            status = "✅ 下注" if d["action"] == "下注" else "⏸️ 观望"
+            print(f"  {dir_name}: {status} ({d['votes']}/{d['total_windows']}窗口)")
+        
+        # 各窗口详情
+        print(f"\n📋 各窗口详情:")
+        print(f"{'窗口':<8} {'大-z值':<10} {'大判断':<8} {'单-z值':<10} {'单判断':<8} {'小-z值':<10} {'双-z值':<10}")
+        print("-" * 80)
+        
+        for w in sorted(decision["大"]["detail"].keys()):
+            big = decision["大"]["detail"][w]
+            odd = decision["单"]["detail"][w]
+            small = decision["小"]["detail"][w]
+            even = decision["双"]["detail"][w]
+            print(f"{w}期{'':<4} {big['z']:+.2f}     {'✅' if big['action']=='下注' else '⏸️':<6} "
+                  f"{odd['z']:+.2f}     {'✅' if odd['action']=='下注' else '⏸️':<6} "
+                  f"{small['z']:+.2f}     {even['z']:+.2f}")
     
-    # 当前建议
-    print(f"\n🎯 当前建议:")
-    if z_big >= 1.96:
-        print(f"  ✅ 押大号 (z={z_big:+.2f})")
-    elif z_big <= -1.96:
-        print(f"  🔄 押小号 (反向，z={z_big:+.2f})")
-    else:
-        print(f"  ⏸️ 大号方向观望")
+    # 历史回测
+    if backtest_results:
+        print(f"\n📈 历史回测 (50期窗口):")
+        for label in ["大", "单"]:
+            if label in backtest_results:
+                r = backtest_results[label]
+                print(f"  {label}: 触发{r['bets']}次 命中{r['hits']}次 命中率{r['hit_rate']:.1f}%")
     
-    if z_odd >= 1.96:
-        print(f"  ✅ 押单号 (z={z_odd:+.2f})")
-    elif z_odd <= -1.96:
-        print(f"  🔄 押双号 (反向，z={z_odd:+.2f})")
-    else:
-        print(f"  ⏸️ 单号方向观望")
+    # 每周方案建议
+    print(f"\n💰 每周方案建议:")
+    
+    if decision:
+        has_signal = False
+        for dir_name in ["大", "单"]:
+            if decision[dir_name]["action"] == "下注":
+                has_signal = True
+                can_bet, msg = tracker.can_bet(lottery_name)
+                if not can_bet:
+                    print(f"  ⏸️ {dir_name}: {msg}")
+                else:
+                    z = decision[dir_name]["detail"][50]["z"] if 50 in decision[dir_name]["detail"] else 0
+                    bet = calculate_bet_amount(tracker, z)
+                    print(f"  ✅ {dir_name}: 建议投注 {bet}元 (z={z:+.2f})")
+        
+        if not has_signal:
+            print(f"  ⏸️ 无信号，建议观望")
 
 def main():
-    print("="*70)
-    print("🎯 三彩 正向vs反向策略回测")
+    tracker = WeeklyTracker()
+    
+    print("=" * 70)
+    print("🎯 三彩大/单置信度下注建议 + 每周固定方案")
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("="*70)
+    print("=" * 70)
     
-    all_results = {}
+    # 显示每周状态
+    print(f"\n📊 本周状态:")
+    print(f"  本周盈亏: {tracker.weekly_profit:+.0f}元 (目标+{WEEKLY_CONFIG['weekly_target']}元)")
+    print(f"  今日盈亏: {tracker.daily_profit:+.0f}元 (目标+{WEEKLY_CONFIG['daily_target']}元)")
+    print(f"  今日已投: {tracker.bets_today}/{WEEKLY_CONFIG['max_daily_bets']}期")
+    print(f"  状态: {tracker.status}")
+    print(f"  建议: {tracker.get_recommendation()}")
     
+    # 如果状态不允许投注，提前退出
+    if tracker.status in ["暂停_周止损", "暂停_日止损", "暂停_连亏", "完成_周目标", "完成_日目标", "暂停_日次数"]:
+        print(f"\n⏸️ {tracker.get_recommendation()}")
+        print("今天不再分析，休息！")
+        return
+    
+    # 分析每个彩种
     for lot in LOTTERIES:
         rows = fetch_lottery(lot["name"], limit=200)
         if len(rows) < 100:
             print(f"⚠️ {lot['label']} 数据不足，跳过")
             continue
         
-        # 打印当前信号
-        print_current_signal(rows, lot["label"], window=30)
+        # 多窗口判断
+        decision = multi_window_decision(rows, windows=[30, 50, 100], z_threshold=1.96)
         
-        # 标准回测（阈值1.96）
-        results = backtest_both_strategies(rows, window=30, z_threshold=1.96)
-        if results:
-            print_backtest_results(results, lot["label"])
-            all_results[lot["label"]] = results
+        # 历史回测
+        backtest_results = backtest_signal_accuracy(rows, window=50, z_threshold=1.96)
         
-        # 阈值敏感性分析
-        sensitivity = backtest_threshold_sensitivity(rows, window=30)
-        if sensitivity:
-            print_threshold_sensitivity(sensitivity)
-        
-        print("\n" + "-"*70)
+        # 打印完整分析
+        print_full_analysis(lot["label"], rows, decision, backtest_results, tracker)
     
-    # 全局汇总
-    print("\n" + "="*70)
-    print("📊 全局汇总：什么时候该反向？")
-    print("="*70)
-    print("""
-📋 结论：
+    # 每日汇总
+    print("\n" + "=" * 70)
+    print("📋 今日汇总")
+    print("=" * 70)
+    
+    print(f"""
+今日已投: {tracker.bets_today}/{WEEKLY_CONFIG['max_daily_bets']}期
+今日盈亏: {tracker.daily_profit:+.0f}元 (目标+{WEEKLY_CONFIG['daily_target']}元)
+本周盈亏: {tracker.weekly_profit:+.0f}元 (目标+{WEEKLY_CONFIG['weekly_target']}元)
 
-1. 大号方向：
-   - 当 z > 1.96 (大号偏热) → ✅ 押大号（正向）
-   - 当 z < -1.96 (大号偏冷) → 🔄 押小号（反向）
-   - 当 -1.96 ≤ z ≤ 1.96 → ⏸️ 观望
-
-2. 单号方向：
-   - 当 z > 1.96 (单号偏热) → ✅ 押单号（正向）
-   - 当 z < -1.96 (单号偏冷) → 🔄 押双号（反向）
-   - 当 -1.96 ≤ z ≤ 1.96 → ⏸️ 观望
-
-3. 当前状态：
-   - 老澳门彩 大号: z=+2.40 (偏热) → ✅ 押大号
-   - 其他彩种: 未达阈值 → ⏸️ 观望
-
-⚠️ 反向策略仅在原方向显著偏冷时有效！
-    """ + "="*70)
+建议:
+{tracker.get_recommendation()}
+""")
+    
+    print("=" * 70)
+    print("⚠️ 只投强信号(z≥1.96)！没信号就等！")
+    print("=" * 70)
 
 if __name__ == "__main__":
     main()
