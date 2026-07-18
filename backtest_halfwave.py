@@ -1,28 +1,84 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-大/单 置信度检测工具
-------------------------------------
-核心思路：
-  - "大"和"单"在49个号码中各占25个（含49），理论概率 = 25/49 ≈ 51.02%
-  - 该理论概率已经是数学期望最优的选择（配合1:1.95赔率，EV≈99.5%）
-  - 本脚本不会用历史频率去"预测"下一期，而是用统计检验(z检验)判断：
-      近期实际出现率是否显著偏离理论值 51.02%
-  - 只有偏离达到统计显著水平（|z| >= 1.96，对应95%置信度）时才提示关注，
-    绝大多数情况下会提示"无显著偏离"——这是真实情况，不是脚本没写好。
+三彩（香港彩 / 新澳门彩 / 老澳门彩）大/单 置信度下注建议
+------------------------------------------------------
+逻辑：
+  - "大"(>=25，含49) 和 "单"(奇数，含49) 理论概率均为 25/49 ≈ 51.02%
+    这已经是数学期望最优方向（配合1:1.95赔率，EV≈99.5%），本身不需要"预测"。
+  - 本脚本用 z 检验，判断近期(默认30期)实际出现率是否显著偏离理论值。
+  - 只有 z >= 1.96（95%置信度，显著偏高）才建议"下注"，否则一律"观望"。
+  - 显著偏低(z <= -1.96)也不下注（没道理去押偏低的方向）。
 
 ⚠️ 重要说明：
-  即使检测到"显著偏离"，也只能说明近期分布不均，不能证明未来会延续。
-  真正决定长期结果的是赔率结构（EV≈99.5%，仍是负期望），不是"追热号"。
-  本工具的作用是防止你把正常随机波动误判成"规律"，而不是帮你找规律。
+  - 95%置信度意味着即使数据完全随机，约每20次判断也会有1次"假显著"。
+  - 多彩种、多窗口同时检验会放大总体误报率，建议固定窗口（如30期），
+    不要因为哪个窗口显示"下注"就采信哪个。
+  - 即使某次真的显著，也只说明"近期分布不均"，不代表下一期会延续。
+    这不是盈利保证，只是风险控制工具。
 """
 
+import re
+import json
 import math
+import urllib.request
 
-THEORY_P = 25 / 49  # 大 和 单 的理论概率（含49）
+API_URL = "https://marksix6.net/index.php?api=1"
+
+# 三彩配置：name 对应 API 返回数据里的 "name" 字段
+LOTTERIES = [
+    {"key": "hk",   "name": "香港六合彩", "label": "香港彩"},
+    {"key": "xam",  "name": "新澳门彩",   "label": "新澳门彩"},
+    {"key": "lam",  "name": "老澳门彩",   "label": "老澳门彩"},
+]
+
+THEORY_P = 25 / 49  # 大 / 单 理论概率（49参与判定，不退款）
+
+
+def parse_numbers(text):
+    nums = re.findall(r"\d+", text)
+    return [int(x) for x in nums if 1 <= int(x) <= 49]
+
+
+def fetch_lottery(lottery_name, limit=100):
+    """抓取指定彩种最近 limit 期特码数据，返回按期号升序(旧->新)的列表"""
+    print(f"📡 正在获取 {lottery_name} 最近{limit}期数据...")
+    try:
+        req = urllib.request.Request(API_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+        rows = []
+        for item in data.get("lottery_data", []):
+            if item.get("name", "").strip() == lottery_name:
+                for line in item.get("history", []):
+                    nums = parse_numbers(line)
+                    if len(nums) < 7:
+                        continue
+                    special = nums[-1]
+                    m = re.search(r"(20\d{5,8})", line)
+                    if not m:
+                        continue
+                    raw = m.group(1)
+                    issue = raw[:4] + "/" + str(int(raw[4:])).zfill(3)
+                    rows.append({
+                        "issue": issue,
+                        "special": special,
+                        "is_big": special >= 25,
+                        "is_odd": special % 2 == 1,
+                    })
+                break
+
+        rows = list({r["issue"]: r for r in rows}.values())
+        rows.sort(key=lambda x: x["issue"])  # 升序：旧 -> 新
+        print(f"✅ 获取 {len(rows)} 期数据")
+        return rows[-limit:]
+    except Exception as e:
+        print(f"❌ 获取失败: {e}")
+        return []
+
 
 def z_test(hits, n, p0=THEORY_P):
-    """二项分布近似正态检验，返回 z 值和实际频率"""
     if n == 0:
         return 0.0, 0.0
     p_hat = hits / n
@@ -30,89 +86,65 @@ def z_test(hits, n, p0=THEORY_P):
     z = (p_hat - p0) / se if se > 0 else 0.0
     return z, p_hat
 
-def judge(z):
-    """根据z值给出结论，而不是无脑推荐"""
-    if abs(z) >= 2.58:
-        level = "高置信 (99%)"
-    elif abs(z) >= 1.96:
-        level = "中等置信 (95%)"
-    else:
-        return "无显著偏离，建议按固定策略执行，不额外加仓", None
-    direction = "偏高" if z > 0 else "偏低"
-    return f"{level}：实际出现率显著{direction}于理论值", level
 
-def analyze(name, results, window_sizes=(10, 20, 30, 50, 100)):
-    """
-    results: 按时间顺序（旧->新）的记录列表，每条是 dict:
-        {"issue": "2026/199", "is_big": True/False, "is_odd": True/False}
-    """
-    print(f"\n{'='*70}\n📊 {name} 大/单 置信度分析\n{'='*70}")
-    print(f"理论概率（含49规则）: 大 = {THEORY_P*100:.2f}%, 单 = {THEORY_P*100:.2f}%\n")
-
-    for key, label in (("is_big", "大"), ("is_odd", "单")):
-        print(f"—— 【{label}】 ——")
-        for w in window_sizes:
-            if len(results) < w:
-                continue
-            recent = results[-w:]
-            hits = sum(1 for r in recent if r[key])
-            z, p_hat = z_test(hits, w)
-            msg, level = judge(z)
-            flag = "🔥" if level else "  "
-            print(f"{flag} 近{w:>3}期: {label}出现 {hits:>3}/{w} = {p_hat*100:5.1f}%  "
-                  f"z={z:+.2f}  → {msg}")
-        print()
-
-    # 最新一期实际结果
-    latest = results[-1]
-    print(f"最新一期: {latest['issue']}  大={'是' if latest['is_big'] else '否'}  "
-          f"单={'是' if latest['is_odd'] else '否'}")
-
-
-def make_recommendation(results, window=30, z_threshold=1.96):
-    """
-    基于最近window期数据，给出当期建议（诚实版）：
-    - 若"大"或"单"任一方向出现统计显著偏离，标注为"可关注"
-    - 否则给出默认建议：按大/单固定策略压注（因为这本身就是EV最优选择），
-      而不是等信号才下注
-    """
+def bet_decision(results, window=30, z_threshold=1.96):
+    """只有显著偏高(z>=阈值)才建议下注，否则观望"""
     recent = results[-window:] if len(results) >= window else results
     n = len(recent)
+    if n == 0:
+        return {}
     hits_big = sum(1 for r in recent if r["is_big"])
     hits_odd = sum(1 for r in recent if r["is_odd"])
 
     z_big, p_big = z_test(hits_big, n)
     z_odd, p_odd = z_test(hits_odd, n)
 
-    print(f"\n{'='*70}\n💡 当期建议（基于最近{n}期）\n{'='*70}")
+    return {
+        "大": ("下注" if z_big >= z_threshold else "观望", z_big, p_big),
+        "单": ("下注" if z_odd >= z_threshold else "观望", z_odd, p_odd),
+        "n": n,
+    }
 
-    for label, z, p in (("大", z_big, p_big), ("单", z_odd, p_odd)):
-        if abs(z) >= z_threshold:
-            direction = "近期出现率偏高，无额外风险信号" if z > 0 else "近期出现率偏低，注意可能只是短期波动"
-            print(f"【{label}】z={z:+.2f}（显著）— {direction}")
-        else:
-            print(f"【{label}】z={z:+.2f}（不显著）— 无统计证据支持临时调整，"
-                  f"维持默认压注（{label}本身EV≈99.5%，是长期最优方向）")
 
-    print("\n⚠️ 提醒：无论z值如何，长期期望值都低于1（负期望）。"
-          "统计检验只用于识别异常，不构成盈利保证。")
+def run_all(window=30, z_threshold=1.96, fetch_limit=100):
+    print("=" * 70)
+    print(f"🎯 三彩大/单置信度下注建议（窗口={window}期，阈值z>={z_threshold}）")
+    print("=" * 70)
+
+    summary = []
+    for lot in LOTTERIES:
+        rows = fetch_lottery(lot["name"], limit=fetch_limit)
+        if len(rows) < 10:
+            print(f"⚠️ {lot['label']} 数据不足，跳过\n")
+            continue
+
+        latest = rows[-1]
+        d = bet_decision(rows, window=window, z_threshold=z_threshold)
+
+        print(f"\n—— {lot['label']} ——")
+        print(f"最新期号: {latest['issue']}  特码: {latest['special']}  "
+              f"大={'是' if latest['is_big'] else '否'}  单={'是' if latest['is_odd'] else '否'}")
+
+        for label in ("大", "单"):
+            action, z, p = d[label]
+            mark = "✅ 下注" if action == "下注" else "⏸️ 观望"
+            print(f"  【{label}】 z={z:+.2f}  近{d['n']}期出现率={p*100:.1f}%  → {mark}")
+            summary.append({"lottery": lot["label"], "type": label, "action": action, "z": z})
+        print()
+
+    print("=" * 70)
+    print("📋 本期汇总（只列出建议下注的项，其余均为观望）")
+    print("=" * 70)
+    bets = [s for s in summary if s["action"] == "下注"]
+    if not bets:
+        print("本期无任何彩种/方向达到显著阈值，建议全部观望。")
+    else:
+        for b in bets:
+            print(f"  {b['lottery']} - {b['type']}  (z={b['z']:+.2f})")
+
+    print("\n⚠️ 提醒：下注信号基于统计显著性，仍可能是随机波动的误报（约5%概率）。")
+    print("   长期期望值约99.5%（负期望），本工具用于减少下注频率，不构成盈利保证。")
 
 
 if __name__ == "__main__":
-    # 示例：把你实际抓取的开奖数据填进来（旧 -> 新排列）
-    # 示例数据仅作演示，请替换为真实历史记录
-    demo_results = [
-        {"issue": "2026/190", "is_big": True,  "is_odd": True},
-        {"issue": "2026/191", "is_big": True,  "is_odd": True},
-        {"issue": "2026/192", "is_big": True,  "is_odd": True},
-        {"issue": "2026/193", "is_big": False, "is_odd": True},
-        {"issue": "2026/194", "is_big": True,  "is_odd": False},
-        {"issue": "2026/195", "is_big": True,  "is_odd": True},
-        {"issue": "2026/196", "is_big": True,  "is_odd": True},
-        {"issue": "2026/197", "is_big": False, "is_odd": False},
-        {"issue": "2026/198", "is_big": False, "is_odd": True},
-        {"issue": "2026/199", "is_big": True,  "is_odd": False},
-    ]
-
-    analyze("示例数据", demo_results)
-    make_recommendation(demo_results, window=10)
+    run_all(window=30, z_threshold=1.96, fetch_limit=100)
