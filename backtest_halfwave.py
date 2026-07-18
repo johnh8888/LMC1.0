@@ -106,7 +106,56 @@ def bet_decision(results, window=30, z_threshold=1.96):
     }
 
 
-def run_all(window=30, z_threshold=1.96, fetch_limit=100):
+def backtest_signal_accuracy(results, window=30, z_threshold=1.96):
+    """
+    历史回测：走位验证(walk-forward)信号准确率。
+    对每一期，只用它之前的数据算z值判断是否"下注"，
+    若触发下注，则检查下一期实际是否真的开出该方向，统计命中率。
+
+    这个命中率如果显著高于理论值51.02%，才说明信号真的有效；
+    如果命中率接近51%甚至更低，说明信号只是噪音，不具备预测力。
+    """
+    stats = {"大": {"bet_count": 0, "hit_count": 0},
+             "单": {"bet_count": 0, "hit_count": 0}}
+
+    for i in range(window, len(results)):
+        history = results[:i]          # 只用当前期之前的数据
+        actual_next = results[i]       # 实际发生的下一期结果
+
+        recent = history[-window:]
+        n = len(recent)
+        hits_big = sum(1 for r in recent if r["is_big"])
+        hits_odd = sum(1 for r in recent if r["is_odd"])
+        z_big, _ = z_test(hits_big, n)
+        z_odd, _ = z_test(hits_odd, n)
+
+        if z_big >= z_threshold:
+            stats["大"]["bet_count"] += 1
+            if actual_next["is_big"]:
+                stats["大"]["hit_count"] += 1
+
+        if z_odd >= z_threshold:
+            stats["单"]["bet_count"] += 1
+            if actual_next["is_odd"]:
+                stats["单"]["hit_count"] += 1
+
+    print(f"\n{'='*70}\n📈 信号历史准确率回测（走位验证，窗口={window}期）\n{'='*70}")
+    for label, s in stats.items():
+        bc, hc = s["bet_count"], s["hit_count"]
+        if bc == 0:
+            print(f"【{label}】 历史从未触发下注信号（数据不足或长期无显著偏离）")
+            continue
+        acc = hc / bc * 100
+        # 用二项检验判断这个命中率本身是否显著高于理论值
+        z_acc, _ = z_test(hc, bc)
+        verdict = "⚠️ 与理论值无显著差异，信号可能只是噪音" if abs(z_acc) < 1.96 else \
+                  ("✅ 显著高于理论值" if z_acc > 0 else "⚠️ 显著低于理论值，信号方向可能反了")
+        print(f"【{label}】 信号触发 {bc} 次，命中 {hc} 次 = {acc:.1f}%  "
+              f"(理论基准 {THEORY_P*100:.1f}%)  → {verdict}")
+
+    print("\n⚠️ 提醒：触发次数(bet_count)太少时（比如<20次），这个准确率本身的")
+    print("   置信区间会很宽，不能当作可靠结论；触发次数越多，结果才越可信。")
+    return stats
     print("=" * 70)
     print(f"🎯 三彩大/单置信度下注建议（窗口={window}期，阈值z>={z_threshold}）")
     print("=" * 70)
@@ -130,6 +179,9 @@ def run_all(window=30, z_threshold=1.96, fetch_limit=100):
             mark = "✅ 下注" if action == "下注" else "⏸️ 观望"
             print(f"  【{label}】 z={z:+.2f}  近{d['n']}期出现率={p*100:.1f}%  → {mark}")
             summary.append({"lottery": lot["label"], "type": label, "action": action, "z": z})
+
+        # 历史准确率回测：这个信号过去触发时到底准不准
+        backtest_signal_accuracy(rows, window=window, z_threshold=z_threshold)
         print()
 
     print("=" * 70)
