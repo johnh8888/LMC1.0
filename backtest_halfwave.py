@@ -27,7 +27,7 @@ API_URL = "https://marksix6.net/index.php?api=1"
 
 # 三彩配置：name 对应 API 返回数据里的 "name" 字段
 LOTTERIES = [
-    {"key": "hk",   "name": "香港六合彩", "label": "香港彩"},
+    {"key": "hk",   "name": "香港彩", "label": "香港彩"},
     {"key": "xam",  "name": "新澳门彩",   "label": "新澳门彩"},
     {"key": "lam",  "name": "老澳门彩",   "label": "老澳门彩"},
 ]
