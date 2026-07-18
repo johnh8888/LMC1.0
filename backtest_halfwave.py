@@ -35,7 +35,7 @@ def fetch_lottery_data(lottery_name, limit=100):
     """获取彩票历史数据（最近100期）"""
     rows = []
     try:
-        print(f"📡 正在获取 {lottery_name} 最近100期数据...")
+        print(f"📡 正在获取 {lottery_name} 最近{limit}期数据...")
         req = urllib.request.Request(
             "https://marksix6.net/index.php?api=1",
             headers={"User-Agent": "Mozilla/5.0"}
@@ -85,12 +85,14 @@ def fetch_lottery_data(lottery_name, limit=100):
     for r in rows:
         cache[r["issue"]] = r
     rows = list(cache.values())
+    
+    # 按期号排序（从新到旧）
     rows.sort(key=lambda x: x["issue"], reverse=True)
     
-    # 只取最近100期
-    rows = rows[:100]
+    # 只取最近limit期
+    rows = rows[:limit]
     
-    print(f"✅ 获取 {len(rows)} 期数据（最近100期）")
+    print(f"✅ 获取 {len(rows)} 期数据（最近{limit}期）")
     
     if rows:
         print(f"📅 最新期号: {rows[0]['issue']}")
@@ -107,10 +109,10 @@ def analyze_big_odd(rows, lottery_name):
     if periods < 100:
         print(f"⚠️ {lottery_name} 数据不足100期，实际{periods}期")
     
-    # 按时间顺序（从旧到新）
-    recent_chrono = list(reversed(rows))
+    # rows已经是按从新到旧排序，取前10期作为最近10期
+    recent_10 = rows[:10]  # 最近10期（从新到旧）
     
-    # 统计"大"
+    # 统计"大"和"单" - 使用全部periods期
     big_count = 0
     big_issues = []
     big_numbers = []
@@ -118,9 +120,7 @@ def analyze_big_odd(rows, lottery_name):
     big_max_consecutive = 0
     big_gaps = []
     big_last_index = -1
-    big_positions = []
     
-    # 统计"单"
     odd_count = 0
     odd_issues = []
     odd_numbers = []
@@ -128,18 +128,16 @@ def analyze_big_odd(rows, lottery_name):
     odd_max_consecutive = 0
     odd_gaps = []
     odd_last_index = -1
-    odd_positions = []
     
-    # 最近10期
-    recent_10 = []
+    # 从旧到新遍历（用于计算间隔）
+    rows_old_to_new = list(reversed(rows))
     
-    for idx, r in enumerate(recent_chrono):
+    for idx, r in enumerate(rows_old_to_new):
         # 统计"大"
         if r["is_big"]:
             big_count += 1
             big_issues.append(r["issue"])
             big_numbers.append(r["special"])
-            big_positions.append(idx + 1)
             big_consecutive += 1
             big_max_consecutive = max(big_max_consecutive, big_consecutive)
             if big_last_index != -1:
@@ -153,7 +151,6 @@ def analyze_big_odd(rows, lottery_name):
             odd_count += 1
             odd_issues.append(r["issue"])
             odd_numbers.append(r["special"])
-            odd_positions.append(idx + 1)
             odd_consecutive += 1
             odd_max_consecutive = max(odd_max_consecutive, odd_consecutive)
             if odd_last_index != -1:
@@ -161,16 +158,6 @@ def analyze_big_odd(rows, lottery_name):
             odd_last_index = idx
         else:
             odd_consecutive = 0
-        
-        # 记录最近10期
-        if idx < 10:
-            recent_10.append({
-                "issue": r["issue"],
-                "special": r["special"],
-                "is_big": r["is_big"],
-                "is_odd": r["is_odd"],
-                "halfhalf": r["halfhalf"]
-            })
     
     # 计算命中率
     big_rate = big_count / periods * 100 if periods > 0 else 0
@@ -187,7 +174,6 @@ def analyze_big_odd(rows, lottery_name):
         "big_rate": big_rate,
         "big_max_consecutive": big_max_consecutive,
         "big_avg_gap": big_avg_gap,
-        "big_positions": big_positions,
         "big_issues": big_issues,
         "big_numbers": big_numbers,
         "big_gaps": big_gaps,
@@ -195,11 +181,10 @@ def analyze_big_odd(rows, lottery_name):
         "odd_rate": odd_rate,
         "odd_max_consecutive": odd_max_consecutive,
         "odd_avg_gap": odd_avg_gap,
-        "odd_positions": odd_positions,
         "odd_issues": odd_issues,
         "odd_numbers": odd_numbers,
         "odd_gaps": odd_gaps,
-        "recent_10": recent_10,
+        "recent_10": recent_10,  # 最近10期（从新到旧）
         "latest_issue": rows[0]["issue"] if rows else "N/A",
         "latest_special": rows[0]["special"] if rows else "N/A",
         "latest_halfhalf": rows[0]["halfhalf"] if rows else "N/A",
@@ -221,8 +206,8 @@ def print_analysis(result):
     print(f"  最早期号: {result['earliest_issue']}")
     print(f"  总期数: {result['total_periods']}期（最近100期）")
     
-    # 显示最近10期
-    print(f"\n📋 最近10期开奖明细:")
+    # 显示最近10期（从新到旧）
+    print(f"\n📋 最近10期开奖明细（从新到旧）:")
     print(f"{'期号':<12} {'特码':<6} {'半半波':<12} {'是否大':<8} {'是否单':<8}")
     print("-" * 55)
     for r in result['recent_10']:
@@ -240,9 +225,9 @@ def print_analysis(result):
     print(f"  🔥 最长连续开出: {result['big_max_consecutive']}期")
     print(f"  📊 平均间隔: {result['big_avg_gap']:.1f}期")
     print(f"  📊 理论概率: 50.00%")
-    if result['big_rate'] > 50:
+    if result['big_rate'] > 51:
         print(f"  📊 偏差: {result['big_rate'] - 50.00:+.2f}% ✅ 大号偏热")
-    elif result['big_rate'] < 50:
+    elif result['big_rate'] < 49:
         print(f"  📊 偏差: {result['big_rate'] - 50.00:+.2f}% ⚠️ 小号偏热")
     else:
         print(f"  📊 偏差: {result['big_rate'] - 50.00:+.2f}% ⚖️ 大小平衡")
@@ -255,14 +240,14 @@ def print_analysis(result):
     print(f"  🔥 最长连续开出: {result['odd_max_consecutive']}期")
     print(f"  📊 平均间隔: {result['odd_avg_gap']:.1f}期")
     print(f"  📊 理论概率: 50.00%")
-    if result['odd_rate'] > 50:
+    if result['odd_rate'] > 51:
         print(f"  📊 偏差: {result['odd_rate'] - 50.00:+.2f}% ✅ 单号偏热")
-    elif result['odd_rate'] < 50:
+    elif result['odd_rate'] < 49:
         print(f"  📊 偏差: {result['odd_rate'] - 50.00:+.2f}% ⚠️ 双号偏热")
     else:
         print(f"  📊 偏差: {result['odd_rate'] - 50.00:+.2f}% ⚖️ 单双平衡")
     
-    # 大单组合统计（同时满足大和单）
+    # 大单组合统计（最近10期）
     both_count = 0
     both_issues = []
     for r in result['recent_10']:
@@ -373,11 +358,6 @@ def main():
 策略建议（基于最近100期数据）:
   {'📌 可关注大号投注' if big_rate > 51 else '📌 可关注小号投注' if big_rate < 49 else '📌 大小号均衡投注'}
   {'📌 可关注单号投注' if odd_rate > 51 else '📌 可关注双号投注' if odd_rate < 49 else '📌 单双号均衡投注'}
-  
-  大单组合理论概率: 25.00%
-  大双组合理论概率: 25.00%
-  小单组合理论概率: 25.00%
-  小双组合理论概率: 25.00%
 """)
 
 if __name__ == "__main__":
