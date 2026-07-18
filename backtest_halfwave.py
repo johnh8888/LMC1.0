@@ -27,7 +27,7 @@ API_URL = "https://marksix6.net/index.php?api=1"
 
 # 三彩配置：name 对应 API 返回数据里的 "name" 字段
 LOTTERIES = [
-    {"key": "hk",   "name": "香港彩", "label": "香港彩"},
+    {"key": "hk",   "name": "香港六合彩", "label": "香港彩"},
     {"key": "xam",  "name": "新澳门彩",   "label": "新澳门彩"},
     {"key": "lam",  "name": "老澳门彩",   "label": "老澳门彩"},
 ]
@@ -156,6 +156,9 @@ def backtest_signal_accuracy(results, window=30, z_threshold=1.96):
     print("\n⚠️ 提醒：触发次数(bet_count)太少时（比如<20次），这个准确率本身的")
     print("   置信区间会很宽，不能当作可靠结论；触发次数越多，结果才越可信。")
     return stats
+
+
+def run_all(window=30, z_threshold=1.96, fetch_limit=100):
     print("=" * 70)
     print(f"🎯 三彩大/单置信度下注建议（窗口={window}期，阈值z>={z_threshold}）")
     print("=" * 70)
