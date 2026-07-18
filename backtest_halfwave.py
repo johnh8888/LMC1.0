@@ -69,10 +69,23 @@ def fetch_lottery(lottery_name, limit=100):
                     })
                 break
 
-        rows = list({r["issue"]: r for r in rows}.values())
+        # 去重（按期号）
+        unique_rows = {}
+        for r in rows:
+            unique_rows[r["issue"]] = r
+        rows = list(unique_rows.values())
+        
+        # 按从新到旧排序，取前limit期，再转回升序
+        rows.sort(key=lambda x: x["issue"], reverse=True)
+        rows = rows[:limit]  # 只取最近limit期
         rows.sort(key=lambda x: x["issue"])  # 升序：旧 -> 新
-        print(f"✅ 获取 {len(rows)} 期数据")
-        return rows[-limit:]
+        
+        print(f"✅ 获取 {len(rows)} 期数据（最近{limit}期）")
+        
+        if rows:
+            print(f"📅 数据范围: {rows[0]['issue']} ~ {rows[-1]['issue']} (共{len(rows)}期)")
+        
+        return rows
     except Exception as e:
         print(f"❌ 获取失败: {e}")
         return []
@@ -118,6 +131,11 @@ def backtest_signal_accuracy(results, window=30, z_threshold=1.96):
     stats = {"大": {"bet_count": 0, "hit_count": 0},
              "单": {"bet_count": 0, "hit_count": 0}}
 
+    # 需要至少window期数据才能开始回测
+    if len(results) < window + 1:
+        print(f"\n⚠️ 数据不足 {window+1} 期，无法进行历史准确率回测")
+        return stats
+
     for i in range(window, len(results)):
         history = results[:i]          # 只用当前期之前的数据
         actual_next = results[i]       # 实际发生的下一期结果
@@ -139,7 +157,7 @@ def backtest_signal_accuracy(results, window=30, z_threshold=1.96):
             if actual_next["is_odd"]:
                 stats["单"]["hit_count"] += 1
 
-    print(f"\n{'='*70}\n📈 信号历史准确率回测（走位验证，窗口={window}期）\n{'='*70}")
+    print(f"\n{'='*70}\n📈 信号历史准确率回测（走位验证，窗口={window}期，基于最近{len(results)}期数据）\n{'='*70}")
     for label, s in stats.items():
         bc, hc = s["bet_count"], s["hit_count"]
         if bc == 0:
@@ -161,6 +179,7 @@ def backtest_signal_accuracy(results, window=30, z_threshold=1.96):
 def run_all(window=30, z_threshold=1.96, fetch_limit=100):
     print("=" * 70)
     print(f"🎯 三彩大/单置信度下注建议（窗口={window}期，阈值z>={z_threshold}）")
+    print(f"   基于最近{fetch_limit}期数据")
     print("=" * 70)
 
     summary = []
