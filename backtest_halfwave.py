@@ -2,9 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-回测大单（绿大单）出现频率
-统计1-100期中大单（绿大单）的开出次数
-显示最新期数和数据更新时间
+回测"大"和"单"的出现频率
+分别统计1-100期中"大"和"单"的开出次数
 """
 
 import re
@@ -17,9 +16,6 @@ from datetime import datetime
 RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
 BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
-
-# 绿大单号码
-BIG_ODD_GREEN = [27, 33, 39, 43, 49]
 
 def get_color(n):
     if n in RED: return "红"
@@ -57,7 +53,6 @@ def fetch_lottery_data(lottery_name, limit=100):
             print(f"❌ 未找到 {lottery_name} 数据")
             return [], None
 
-        # 获取数据更新时间
         update_time = target.get("update_time", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         
         for line in target.get("history", []):
@@ -75,7 +70,10 @@ def fetch_lottery_data(lottery_name, limit=100):
                 "issue": issue,
                 "special": special,
                 "halfhalf": get_halfhalf(special),
-                "is_big_odd_green": special in BIG_ODD_GREEN,
+                "is_big": special >= 25,  # 大
+                "is_small": special < 25,  # 小
+                "is_odd": special % 2 == 1,  # 单
+                "is_even": special % 2 == 0,  # 双
             })
 
     except Exception as e:
@@ -90,20 +88,15 @@ def fetch_lottery_data(lottery_name, limit=100):
     rows.sort(key=lambda x: x["issue"], reverse=True)
     print(f"✅ 获取 {len(rows)} 期数据")
     
-    # 显示最新几期
     if rows:
         print(f"📅 最新期号: {rows[0]['issue']}")
         print(f"📅 最新特码: {rows[0]['special']} ({rows[0]['halfhalf']})")
-        if rows[0]['is_big_odd_green']:
-            print(f"🎯 最新一期是大单！")
-        else:
-            print(f"❌ 最新一期不是大单")
         print(f"📅 最早期号: {rows[-1]['issue']}")
     
     return rows[:limit], update_time
 
-def analyze_big_odd_green(rows, lottery_name, periods=100):
-    """分析大单出现次数"""
+def analyze_big_odd(rows, lottery_name, periods=100):
+    """分析大和单的出现次数"""
     if len(rows) < periods:
         print(f"⚠️ {lottery_name} 数据不足{periods}期，实际{len(rows)}期")
         periods = len(rows)
@@ -113,75 +106,109 @@ def analyze_big_odd_green(rows, lottery_name, periods=100):
     # 按时间顺序（从旧到新）
     recent_chrono = list(reversed(recent))
     
-    total_big_odd_green = 0
-    big_odd_green_issues = []
-    big_odd_green_numbers = []
-    consecutive_count = 0
-    max_consecutive = 0
-    gap_since_last = 0
-    gaps = []
-    last_index = -1
-    positions = []
+    # 统计"大"
+    big_count = 0
+    big_issues = []
+    big_numbers = []
+    big_consecutive = 0
+    big_max_consecutive = 0
+    big_gaps = []
+    big_last_index = -1
+    big_positions = []
     
-    # 最近10期大单情况
-    recent_10_big = []
+    # 统计"单"
+    odd_count = 0
+    odd_issues = []
+    odd_numbers = []
+    odd_consecutive = 0
+    odd_max_consecutive = 0
+    odd_gaps = []
+    odd_last_index = -1
+    odd_positions = []
+    
+    # 最近10期
+    recent_10 = []
     
     for idx, r in enumerate(recent_chrono):
-        if r["is_big_odd_green"]:
-            total_big_odd_green += 1
-            big_odd_green_issues.append(r["issue"])
-            big_odd_green_numbers.append(r["special"])
-            positions.append(idx + 1)
-            consecutive_count += 1
-            max_consecutive = max(max_consecutive, consecutive_count)
-            
-            # 计算间隔
-            if last_index != -1:
-                gaps.append(idx - last_index)
-            last_index = idx
+        # 统计"大"
+        if r["is_big"]:
+            big_count += 1
+            big_issues.append(r["issue"])
+            big_numbers.append(r["special"])
+            big_positions.append(idx + 1)
+            big_consecutive += 1
+            big_max_consecutive = max(big_max_consecutive, big_consecutive)
+            if big_last_index != -1:
+                big_gaps.append(idx - big_last_index)
+            big_last_index = idx
         else:
-            consecutive_count = 0
+            big_consecutive = 0
+        
+        # 统计"单"
+        if r["is_odd"]:
+            odd_count += 1
+            odd_issues.append(r["issue"])
+            odd_numbers.append(r["special"])
+            odd_positions.append(idx + 1)
+            odd_consecutive += 1
+            odd_max_consecutive = max(odd_max_consecutive, odd_consecutive)
+            if odd_last_index != -1:
+                odd_gaps.append(idx - odd_last_index)
+            odd_last_index = idx
+        else:
+            odd_consecutive = 0
         
         # 记录最近10期
         if idx < 10:
-            recent_10_big.append({
+            recent_10.append({
                 "issue": r["issue"],
                 "special": r["special"],
-                "is_big": r["is_big_odd_green"]
+                "is_big": r["is_big"],
+                "is_odd": r["is_odd"],
+                "halfhalf": r["halfhalf"]
             })
     
     # 计算命中率
-    hit_rate = total_big_odd_green / periods * 100 if periods > 0 else 0
+    big_rate = big_count / periods * 100 if periods > 0 else 0
+    odd_rate = odd_count / periods * 100 if periods > 0 else 0
     
     # 计算平均间隔
-    avg_gap = sum(gaps) / len(gaps) if gaps else 0
+    big_avg_gap = sum(big_gaps) / len(big_gaps) if big_gaps else 0
+    odd_avg_gap = sum(odd_gaps) / len(odd_gaps) if odd_gaps else 0
     
     return {
         "lottery": lottery_name,
         "total_periods": periods,
-        "hit_count": total_big_odd_green,
-        "hit_rate": hit_rate,
-        "max_consecutive": max_consecutive,
-        "avg_gap": avg_gap,
-        "positions": positions,
-        "big_odd_green_issues": big_odd_green_issues,
-        "big_odd_green_numbers": big_odd_green_numbers,
-        "gaps": gaps,
-        "recent_data": recent_chrono,
-        "recent_10_big": recent_10_big,
+        "big_count": big_count,
+        "big_rate": big_rate,
+        "big_max_consecutive": big_max_consecutive,
+        "big_avg_gap": big_avg_gap,
+        "big_positions": big_positions,
+        "big_issues": big_issues,
+        "big_numbers": big_numbers,
+        "big_gaps": big_gaps,
+        "odd_count": odd_count,
+        "odd_rate": odd_rate,
+        "odd_max_consecutive": odd_max_consecutive,
+        "odd_avg_gap": odd_avg_gap,
+        "odd_positions": odd_positions,
+        "odd_issues": odd_issues,
+        "odd_numbers": odd_numbers,
+        "odd_gaps": odd_gaps,
+        "recent_10": recent_10,
         "latest_issue": rows[0]["issue"] if rows else "N/A",
         "latest_special": rows[0]["special"] if rows else "N/A",
         "latest_halfhalf": rows[0]["halfhalf"] if rows else "N/A",
         "earliest_issue": rows[-1]["issue"] if rows else "N/A",
     }
 
-def print_analysis(result, show_detail=True):
+def print_analysis(result):
     """打印分析结果"""
     if not result:
         return
     
     print("\n" + "=" * 70)
-    print(f"📊 {result['lottery']} 大单（绿大单）分析")
+    print(f"📊 {result['lottery']} 大小单双分析")
     print("=" * 70)
     
     print(f"\n📅 数据范围:")
@@ -191,56 +218,69 @@ def print_analysis(result, show_detail=True):
     
     # 显示最近10期
     print(f"\n📋 最近10期开奖:")
-    print(f"{'期号':<12} {'特码':<6} {'半半波':<12} {'是否大单':<10}")
-    print("-" * 45)
-    for r in result['recent_10_big']:
-        status = "✅ 是" if r['is_big'] else "❌ 否"
-        print(f"{r['issue']:<12} {r['special']:<6} {get_halfhalf(r['special']):<12} {status:<10}")
+    print(f"{'期号':<12} {'特码':<6} {'半半波':<12} {'大':<6} {'单':<6}")
+    print("-" * 50)
+    for r in result['recent_10']:
+        big_status = "✅" if r['is_big'] else "❌"
+        odd_status = "✅" if r['is_odd'] else "❌"
+        print(f"{r['issue']:<12} {r['special']:<6} {r['halfhalf']:<12} {big_status:<6} {odd_status:<6}")
     
     print("\n" + "-" * 70)
     
-    print(f"\n📈 基本统计:")
+    # "大"的统计
+    print(f"\n📈 【大】统计:")
     print(f"  📅 回测期数: {result['total_periods']}期")
-    print(f"  🎯 大单开出次数: {result['hit_count']}次")
-    print(f"  📈 大单开出率: {result['hit_rate']:.2f}%")
-    print(f"  🔥 最长连续开出: {result['max_consecutive']}期")
-    print(f"  📊 平均间隔: {result['avg_gap']:.1f}期")
+    print(f"  🎯 开出次数: {result['big_count']}次")
+    print(f"  📈 开出率: {result['big_rate']:.2f}%")
+    print(f"  🔥 最长连续开出: {result['big_max_consecutive']}期")
+    print(f"  📊 平均间隔: {result['big_avg_gap']:.1f}期")
+    print(f"  📊 理论概率: 50.00%")
+    print(f"  📊 偏差: {result['big_rate'] - 50.00:+.2f}%")
     
-    if result['positions']:
-        print(f"\n📍 大单开出位置（第几期）:")
-        # 分组显示，每10个一组
+    # "单"的统计
+    print(f"\n📈 【单】统计:")
+    print(f"  📅 回测期数: {result['total_periods']}期")
+    print(f"  🎯 开出次数: {result['odd_count']}次")
+    print(f"  📈 开出率: {result['odd_rate']:.2f}%")
+    print(f"  🔥 最长连续开出: {result['odd_max_consecutive']}期")
+    print(f"  📊 平均间隔: {result['odd_avg_gap']:.1f}期")
+    print(f"  📊 理论概率: 50.00%")
+    print(f"  📊 偏差: {result['odd_rate'] - 50.00:+.2f}%")
+    
+    # 大单组合统计（同时满足大和单）
+    both_count = 0
+    for i in range(len(result['recent_10'])):
+        if result['recent_10'][i]['is_big'] and result['recent_10'][i]['is_odd']:
+            both_count += 1
+    
+    print(f"\n📈 【大+单组合】最近10期统计:")
+    print(f"  大单同时出现: {both_count}次")
+    print(f"  占比: {both_count/10*100:.0f}%")
+    print(f"  理论概率: 25.00%")
+    print(f"  偏差: {both_count/10*100 - 25.00:+.2f}%")
+    
+    # 显示大单出现位置
+    if result['big_positions']:
+        print(f"\n📍 大出现位置（第几期）:")
         positions_str = []
-        for i, pos in enumerate(result['positions']):
+        for i, pos in enumerate(result['big_positions']):
             positions_str.append(str(pos))
-            if (i + 1) % 10 == 0:
+            if (i + 1) % 20 == 0:
                 print(f"    {' '.join(positions_str)}")
                 positions_str = []
         if positions_str:
             print(f"    {' '.join(positions_str)}")
     
-    if result['gaps']:
-        print(f"\n📏 间隔分布（期数）:")
-        gap_counts = defaultdict(int)
-        for g in result['gaps']:
-            gap_counts[g] += 1
-        
-        # 显示主要间隔
-        for gap in sorted(gap_counts.keys()):
-            count = gap_counts[gap]
-            bar = "█" * min(count, 20)
-            print(f"  间隔 {gap}期: {count}次 {bar}")
-    
-    if show_detail and result['big_odd_green_issues']:
-        print(f"\n🎯 大单开出期号及号码:")
-        issues = result['big_odd_green_issues']
-        numbers = result['big_odd_green_numbers']
-        # 每行显示5个
-        for i in range(0, len(issues), 5):
-            issue_str = ' '.join(issues[i:i+5])
-            num_str = ' '.join(str(n) for n in numbers[i:i+5])
-            print(f"  期号: {issue_str}")
-            print(f"  号码: {num_str}")
-            print()
+    if result['odd_positions']:
+        print(f"\n📍 单出现位置（第几期）:")
+        positions_str = []
+        for i, pos in enumerate(result['odd_positions']):
+            positions_str.append(str(pos))
+            if (i + 1) % 20 == 0:
+                print(f"    {' '.join(positions_str)}")
+                positions_str = []
+        if positions_str:
+            print(f"    {' '.join(positions_str)}")
     
     print("\n" + "-" * 70)
 
@@ -250,41 +290,43 @@ def print_comparison(results):
         return
     
     print("\n" + "=" * 70)
-    print("📊 三彩大单对比分析")
+    print("📊 三彩大小单双对比分析")
     print("=" * 70)
     
-    print(f"\n{'彩种':<12} {'回测期数':<10} {'大单次数':<10} {'开出率':<12} {'最长连开':<12} {'平均间隔':<12} {'最新期号':<12}")
+    print(f"\n{'彩种':<12} {'大次数':<10} {'大开出率':<12} {'大最长连开':<12} {'单次数':<10} {'单开出率':<12} {'单最长连开':<12}")
     print("-" * 85)
     
-    total_hits = 0
+    total_big = 0
+    total_odd = 0
     total_periods = 0
     
     for r in results:
         if r:
-            print(f"{r['lottery']:<12} {r['total_periods']:<10} {r['hit_count']:<10} {r['hit_rate']:.2f}%{'':<6} {r['max_consecutive']}期{'':<6} {r['avg_gap']:.1f}期{'':<4} {r['latest_issue']:<12}")
-            total_hits += r['hit_count']
+            print(f"{r['lottery']:<12} {r['big_count']:<10} {r['big_rate']:.2f}%{'':<6} {r['big_max_consecutive']}期{'':<6} {r['odd_count']:<10} {r['odd_rate']:.2f}%{'':<6} {r['odd_max_consecutive']}期")
+            total_big += r['big_count']
+            total_odd += r['odd_count']
             total_periods += r['total_periods']
     
     print("-" * 85)
     
     if total_periods > 0:
-        overall_rate = total_hits / total_periods * 100
+        big_overall = total_big / total_periods * 100
+        odd_overall = total_odd / total_periods * 100
+        
         print(f"\n📊 三彩合计:")
         print(f"  总期数: {total_periods}期")
-        print(f"  大单总次数: {total_hits}次")
-        print(f"  综合开出率: {overall_rate:.2f}%")
-        print(f"  理论概率: {len(BIG_ODD_GREEN)/49 * 100:.2f}%")
-        print(f"  偏差: {overall_rate - len(BIG_ODD_GREEN)/49 * 100:+.2f}%")
+        print(f"  大总次数: {total_big}次, 综合开出率: {big_overall:.2f}% (理论50.00%, 偏差{big_overall - 50.00:+.2f}%)")
+        print(f"  单总次数: {total_odd}次, 综合开出率: {odd_overall:.2f}% (理论50.00%, 偏差{odd_overall - 50.00:+.2f}%)")
         
-        # 显示最新一期情况
-        print(f"\n📅 最新数据汇总:")
+        print(f"\n📅 最新一期汇总:")
         for r in results:
-            status = "✅ 是大单" if r['recent_10_big'][0]['is_big'] else "❌ 不是大单"
-            print(f"  {r['lottery']}: {r['latest_issue']} 特码{r['latest_special']} {status}")
+            big_status = "✅ 大" if r['recent_10'][0]['is_big'] else "❌ 小"
+            odd_status = "✅ 单" if r['recent_10'][0]['is_odd'] else "❌ 双"
+            print(f"  {r['lottery']}: {r['latest_issue']} 特码{r['latest_special']} {big_status} {odd_status}")
 
 def main():
     print("=" * 70)
-    print("🎯 大单（绿大单）出现频率回测")
+    print("🎯 大小单双出现频率回测")
     print(f"   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
     
@@ -294,10 +336,10 @@ def main():
     for lottery_name in ["香港彩", "新澳门彩", "老澳门彩"]:
         rows, update_time = fetch_lottery_data(lottery_name, limit=100)
         if rows:
-            result = analyze_big_odd_green(rows, lottery_name, periods=100)
+            result = analyze_big_odd(rows, lottery_name, periods=100)
             if result:
                 result['update_time'] = update_time
-                print_analysis(result, show_detail=True)
+                print_analysis(result)
                 results.append(result)
     
     # 打印对比
@@ -309,27 +351,31 @@ def main():
         print("📋 结论")
         print("=" * 70)
         
-        total_rate = sum(r['hit_rate'] for r in results) / len(results)
-        total_hits = sum(r['hit_count'] for r in results)
+        total_big = sum(r['big_count'] for r in results)
+        total_odd = sum(r['odd_count'] for r in results)
         total_periods = sum(r['total_periods'] for r in results)
-        overall_rate = total_hits / total_periods * 100 if total_periods > 0 else 0
+        big_rate = total_big / total_periods * 100 if total_periods > 0 else 0
+        odd_rate = total_odd / total_periods * 100 if total_periods > 0 else 0
         
         print(f"""
-大单（绿大单）号码: {BIG_ODD_GREEN}
-理论开出概率: {len(BIG_ODD_GREEN)/49 * 100:.2f}%
-
 三彩综合统计:
   总回测期数: {total_periods}期
-  大单总次数: {total_hits}次
-  平均开出率: {total_rate:.2f}%
-  综合开出率: {overall_rate:.2f}%
-
-结论:
-  {'✅ 实际开出率高于理论值，大单出现频率较高' if overall_rate > len(BIG_ODD_GREEN)/49 * 100 else '⚠️ 实际开出率低于理论值，大单出现频率较低'}
   
-  如果每期投注大单:
-  预期每{100/total_rate:.0f}期出现{1:.0f}次
-  平均间隔约{100/total_rate:.1f}期
+  【大】
+  总次数: {total_big}次
+  综合开出率: {big_rate:.2f}%
+  理论概率: 50.00%
+  结论: {'✅ 大的出现频率高于理论值' if big_rate > 50 else '⚠️ 大的出现频率低于理论值'}
+  
+  【单】
+  总次数: {total_odd}次
+  综合开出率: {odd_rate:.2f}%
+  理论概率: 50.00%
+  结论: {'✅ 单的出现频率高于理论值' if odd_rate > 50 else '⚠️ 单的出现频率低于理论值'}
+
+建议:
+  {'📌 近期大号偏热，可关注大号' if big_rate > 50 else '📌 近期小号偏热，可关注小号'}
+  {'📌 近期单号偏热，可关注单号' if odd_rate > 50 else '📌 近期双号偏热，可关注双号'}
 """)
 
 if __name__ == "__main__":
