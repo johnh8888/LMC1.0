@@ -7,7 +7,6 @@
   - "大"(>=25，含49) 和 "单"(奇数，含49) 理论概率均为 25/49 ≈ 51.02%
   - 本脚本用 z 检验，判断近期(默认30期)实际出现率是否显著偏离理论值。
   - 只有 z >= 1.96（95%置信度，显著偏高）才建议"下注"，否则一律"观望"。
-  - 显著偏低(z <= -1.96)也不下注（没道理去押偏低的方向）。
   - 支持多窗口综合判断（30/50/100期）
   - 包含历史准确率回测
   - 每周固定投注方案
@@ -24,16 +23,15 @@ API_URL = "https://marksix6.net/index.php?api=1"
 
 # ============ 每周固定方案配置 ============
 WEEKLY_CONFIG = {
-    "per_bet_amount": 200,          # 每期基础投注额
-    "max_daily_bets": 3,            # 每天最多3期
-    "weekly_target": 2000,          # 每周目标盈利
-    "daily_target": 300,            # 每日目标盈利
-    "weekly_stop_loss": -2000,      # 每周止损线
-    "daily_stop_loss": -500,        # 每日止损线
-    "consecutive_loss_days": 3,     # 连续亏损天数限制
+    "per_bet_amount": 200,
+    "max_daily_bets": 3,
+    "weekly_target": 2000,
+    "daily_target": 300,
+    "weekly_stop_loss": -2000,
+    "daily_stop_loss": -500,
+    "consecutive_loss_days": 3,
 }
 
-# 三彩配置
 LOTTERIES = [
     {"key": "hk", "name": "香港彩", "label": "香港彩"},
     {"key": "xam", "name": "新澳门彩", "label": "新澳门彩"},
@@ -170,7 +168,6 @@ def fetch_lottery(lottery_name, limit=200):
         return []
 
 def z_test(hits, n, p0=THEORY_P):
-    """z检验"""
     if n == 0:
         return 0.0, 0.0
     p_hat = hits / n
@@ -217,7 +214,6 @@ def multi_window_decision(rows, windows=[30, 50, 100], z_threshold=1.96):
     if not results:
         return None
     
-    # 投票统计
     directions = ["大", "单", "小", "双"]
     votes = {d: 0 for d in directions}
     
@@ -326,7 +322,7 @@ def calculate_bet_amount(tracker, signal_strength):
     bet = round(bet, -1)
     return bet
 
-def print_full_analysis(lottery_name, rows, decision, backtest_results, tracker):
+def print_full_analysis(lottery_name, rows, decision, tracker):
     """完整分析打印"""
     print("\n" + "=" * 70)
     print(f"📊 {lottery_name} 综合分析")
@@ -365,14 +361,6 @@ def print_full_analysis(lottery_name, rows, decision, backtest_results, tracker)
                   f"{odd['z']:+.2f}     {'✅' if odd['action']=='下注' else '⏸️':<6} "
                   f"{small['z']:+.2f}     {even['z']:+.2f}")
     
-    # 历史回测
-    if backtest_results:
-        print(f"\n📈 历史回测 (50期窗口):")
-        for label in ["大", "单"]:
-            if label in backtest_results:
-                r = backtest_results[label]
-                print(f"  {label}: 触发{r['bets']}次 命中{r['hits']}次 命中率{r['hit_rate']:.1f}%")
-    
     # 每周方案建议
     print(f"\n💰 每周方案建议:")
     
@@ -408,7 +396,6 @@ def main():
     print(f"  状态: {tracker.status}")
     print(f"  建议: {tracker.get_recommendation()}")
     
-    # 如果状态不允许投注，提前退出
     if tracker.status in ["暂停_周止损", "暂停_日止损", "暂停_连亏", "完成_周目标", "完成_日目标", "暂停_日次数"]:
         print(f"\n⏸️ {tracker.get_recommendation()}")
         print("今天不再分析，休息！")
@@ -425,10 +412,10 @@ def main():
         decision = multi_window_decision(rows, windows=[30, 50, 100], z_threshold=1.96)
         
         # 历史回测
-        backtest_results = backtest_signal_accuracy(rows, window=50, z_threshold=1.96)
+        backtest_signal_accuracy(rows, window=50, z_threshold=1.96)
         
         # 打印完整分析
-        print_full_analysis(lot["label"], rows, decision, backtest_results, tracker)
+        print_full_analysis(lot["label"], rows, decision, tracker)
     
     # 每日汇总
     print("\n" + "=" * 70)
