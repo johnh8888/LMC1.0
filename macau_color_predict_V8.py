@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - 增强分析版
-新增：
-  1. 滑动窗口回测（不同时间段验证稳定性）
-  2. 单双预测（新增维度）
-  3. 预测置信度评估
-  4. 连续命中/失误追踪
+新澳门彩预测系统 - 增强分析版（生肖5选）
 """
 
 import re
@@ -20,7 +15,7 @@ CONFIG = {
     "history_limit": 50,
     "api_url": "https://marksix6.net/index.php?api=1",
     "bet_count": 2,
-    "zodiac_bet_count": 3,
+    "zodiac_bet_count": 5,  # 🔑 生肖推荐改为5个
     "cache_file": "newmacau_cache.json",
     "zodiac_year": 2026,
 
@@ -154,7 +149,7 @@ class SimplePredictor:
                 break
         return result
 
-    def predict_zodiac(self, count=3):
+    def predict_zodiac(self, count=5):
         zod_pred = self.freq("zodiac")
         full = {a: zod_pred.get(a, 0.0) for a in ZODIAC_ORDER}
         return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
@@ -242,11 +237,11 @@ class EnsemblePredictor:
             result[c] = round(f * self.w_freq + g * self.w_gap + t * self.w_trans, 2)
         return result
 
-    def predict(self, count=3):
+    def predict(self, count=5):
         s = self.score()
         return sorted(s.items(), key=lambda x: x[1], reverse=True)[:count]
     
-    def confidence(self, top_count=2):
+    def confidence(self, top_count=5):
         """计算预测置信度：前N名与后面的分数差距"""
         s = self.score()
         sorted_s = sorted(s.items(), key=lambda x: x[1], reverse=True)
@@ -254,16 +249,13 @@ class EnsemblePredictor:
             return 0.0
         top_avg = sum(x[1] for x in sorted_s[:top_count]) / top_count
         rest_avg = sum(x[1] for x in sorted_s[top_count:]) / (len(sorted_s) - top_count)
-        if rest_avg == 0:
-            return 100.0
+        if top_avg == 0:
+            return 0.0
         confidence = (top_avg - rest_avg) / top_avg * 100
         return round(max(0, min(100, confidence)), 1)
 
 # ========== 滑动窗口回测 ==========
 def sliding_window_backtest(all_rows, window_size=10, step=5, min_history=20):
-    """
-    滑动窗口回测：测试模型在不同时间段的稳定性
-    """
     if len(all_rows) < min_history + window_size:
         print("❌ 数据不足以进行滑动窗口回测")
         return []
@@ -282,7 +274,6 @@ def sliding_window_backtest(all_rows, window_size=10, step=5, min_history=20):
             if len(history) < min_history:
                 continue
             
-            # 综合版预测
             ensemble_hw = [x[0] for x in EnsemblePredictor(
                 history, HALFHALF_CATEGORIES, "halfhalf",
                 decay=CONFIG["recency_decay"],
@@ -326,21 +317,20 @@ def strict_backtest(all_rows, test_periods=10, min_history=20):
     
     test_set = all_rows[:test_periods]
     
-    print(f"\n{'='*80}")
-    print(f"📊 严格回测：最近{test_periods}期")
-    print(f"{'='*80}")
+    print(f"\n{'='*100}")
+    print(f"📊 严格回测：最近{test_periods}期（生肖{CONFIG['zodiac_bet_count']}选）")
+    print(f"{'='*100}")
     
-    header = (f"{'期号':<12} {'实际':<10} {'简单半波':<16} {'✓':<4} "
+    header = (f"{'期号':<12} {'实际':<12} {'简单半波':<16} {'✓':<4} "
               f"{'综合半波':<16} {'✓':<4} {'信':<5} "
-              f"{'简单生肖':<16} {'✓':<4} {'综合生肖':<16} {'✓':<4}")
+              f"{'简单生肖':<24} {'✓':<4} {'综合生肖':<24} {'✓':<4}")
     print(header)
-    print("-" * 110)
+    print("-" * 130)
     
     simple_hw_hits = 0
     ensemble_hw_hits = 0
     simple_zd_hits = 0
     ensemble_zd_hits = 0
-    odd_hits = 0
     
     for i, test_row in enumerate(test_set):
         history = all_rows[test_periods - i:]
@@ -372,12 +362,12 @@ def strict_backtest(all_rows, test_periods=10, min_history=20):
         ensemble_zd = [x[0] for x in ensemble_zd_pred.predict(CONFIG["zodiac_bet_count"])]
         
         # 置信度
-        confidence = ensemble_hw_pred.confidence(CONFIG["bet_count"])
+        hw_confidence = ensemble_hw_pred.confidence(CONFIG["bet_count"])
         
         # 实际结果
         actual_hw = test_row["halfhalf"]
         actual_zd = test_row["zodiac"]
-        actual_full = f"{actual_hw}({test_row['odd']})"
+        actual_full = f"{actual_hw} {actual_zd}"
         
         # 判断
         sh_hit = actual_hw in simple_hw
@@ -390,20 +380,30 @@ def strict_backtest(all_rows, test_periods=10, min_history=20):
         simple_zd_hits += sz_hit
         ensemble_zd_hits += ez_hit
         
-        print(f"{test_row['issue']:<12} {actual_full:<10} "
+        # 格式化生肖列表（5个分两行显示）
+        simple_zd_str = ','.join(simple_zd[:3]) + '\n' + ' ' * 80 + ','.join(simple_zd[3:])
+        ensemble_zd_str = ','.join(ensemble_zd[:3]) + '\n' + ' ' * 104 + ','.join(ensemble_zd[3:])
+        
+        print(f"{test_row['issue']:<12} {actual_full:<12} "
               f"{','.join(simple_hw):<16} {'✓' if sh_hit else '✗':<4} "
               f"{','.join(ensemble_hw):<16} {'✓' if eh_hit else '✗':<4} "
-              f"{confidence:>4.0f}% "
-              f"{','.join(simple_zd):<16} {'✓' if sz_hit else '✗':<4} "
-              f"{','.join(ensemble_zd):<16} {'✓' if ez_hit else '✗':<4}")
+              f"{hw_confidence:>4.0f}% "
+              f"{','.join(simple_zd):<24} {'✓' if sz_hit else '✗':<4} "
+              f"{','.join(ensemble_zd):<24} {'✓' if ez_hit else '✗':<4}")
     
     n = len(test_set)
-    print("-" * 110)
+    print("-" * 130)
+    
+    # 计算理论命中率
+    # 5/12 = 41.7% 是随机猜的期望命中率
+    random_baseline = CONFIG["zodiac_bet_count"] / 12 * 100
     
     print(f"\n📈 命中率统计（{n}期）：")
-    print(f"  {'类别':<10} {'简单版':<12} {'综合版':<12} {'差值':<10}")
-    print(f"  {'半波':<10} {simple_hw_hits/n*100:>6.1f}%     {ensemble_hw_hits/n*100:>6.1f}%     {('+' if ensemble_hw_hits > simple_hw_hits else '')}{ensemble_hw_hits - simple_hw_hits:>+d}期")
-    print(f"  {'生肖':<10} {simple_zd_hits/n*100:>6.1f}%     {ensemble_zd_hits/n*100:>6.1f}%     {('+' if ensemble_zd_hits > simple_zd_hits else '')}{ensemble_zd_hits - simple_zd_hits:>+d}期")
+    print(f"  {'类别':<10} {'简单版':<12} {'综合版':<12} {'随机期望':<12} {'差值':<10}")
+    print(f"  {'半波':<10} {simple_hw_hits/n*100:>6.1f}%     {ensemble_hw_hits/n*100:>6.1f}%     {'33.3%':<12} {('+' if ensemble_hw_hits > simple_hw_hits else '')}{ensemble_hw_hits - simple_hw_hits:>+d}期")
+    print(f"  {'生肖':<10} {simple_zd_hits/n*100:>6.1f}%     {ensemble_zd_hits/n*100:>6.1f}%     {random_baseline:.1f}%      {('+' if ensemble_zd_hits > simple_zd_hits else '')}{ensemble_zd_hits - simple_zd_hits:>+d}期")
+    
+    print(f"\n💡 说明：生肖{CONFIG['zodiac_bet_count']}选随机命中率={random_baseline:.1f}%")
     
     return {
         "simple_hw": simple_hw_hits/n,
@@ -415,7 +415,7 @@ def strict_backtest(all_rows, test_periods=10, min_history=20):
 # ========== 主函数 ==========
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - 增强分析版")
+    print(f"新澳门彩预测系统 - 增强分析版（生肖{CONFIG['zodiac_bet_count']}选）")
     print(f"生肖年份基准: {CONFIG['zodiac_year']}年")
     print("=" * 60)
     
@@ -434,11 +434,11 @@ def main():
     window_results = sliding_window_backtest(all_rows, 10, 5, CONFIG["min_history_for_predict"])
     
     if window_results:
-        print(f"\n{'窗口':<20} {'半波命中':<10} {'生肖命中':<10} {'平均命中':<10}")
-        print("-" * 50)
+        print(f"\n{'窗口':<20} {'半波命中':<10} {'生肖命中':<12} {'平均命中':<10}")
+        print("-" * 55)
         for wr in window_results:
             print(f"{wr['start_issue']}~{wr['end_issue']:<8} "
-                  f"{wr['hw_rate']*100:>6.1f}%    {wr['zd_rate']*100:>6.1f}%    {wr['avg_rate']*100:>6.1f}%")
+                  f"{wr['hw_rate']*100:>6.1f}%    {wr['zd_rate']*100:>6.1f}%     {wr['avg_rate']*100:>6.1f}%")
         
         hw_rates = [w['hw_rate'] for w in window_results]
         zd_rates = [w['zd_rate'] for w in window_results]
@@ -448,6 +448,7 @@ def main():
               f"范围={min(hw_rates)*100:.0f}%-{max(hw_rates)*100:.0f}%")
         print(f"  生肖命中率：均值={sum(zd_rates)/len(zd_rates)*100:.1f}%, "
               f"范围={min(zd_rates)*100:.0f}%-{max(zd_rates)*100:.0f}%")
+        print(f"  （生肖5选随机期望=41.7%）")
     
     # 最新预测
     print(f"\n{'='*60}")
@@ -493,12 +494,20 @@ def main():
     print(f"  大小：{simple.freq('size')}")
     print(f"  单双：{simple.freq('odd')}")
     
+    # 生肖完整排名
+    print(f"\n📊 生肖完整排名：")
+    all_zd_scores = ensemble_zd_pred.score()
+    zd_ranking = sorted(all_zd_scores.items(), key=lambda x: x[1], reverse=True)
+    for i, (zod, score) in enumerate(zd_ranking, 1):
+        marker = " ⭐" if i <= CONFIG["zodiac_bet_count"] else ""
+        print(f"  {i:>2}. {zod}: {score:>5.1f}分{marker}")
+    
     print(f"\n🎯 预测推荐：")
     print(f"\n  半波预测（置信度：{hw_confidence}%）：")
     print(f"    简单版：{', '.join(f'{x}({s:.1f})' for x, s in simple_hw)}")
     print(f"    综合版：{', '.join(f'{x}({s:.1f})' for x, s in ensemble_hw)}")
     
-    print(f"\n  生肖预测（置信度：{zd_confidence}%）：")
+    print(f"\n  生肖预测（{CONFIG['zodiac_bet_count']}选，置信度：{zd_confidence}%）：")
     print(f"    简单版：{', '.join(f'{x}({s:.1f})' for x, s in simple_zd)}")
     print(f"    综合版：{', '.join(f'{x}({s:.1f})' for x, s in ensemble_zd)}")
     
@@ -526,10 +535,13 @@ def main():
         
         print(f"\n⭐ 最终推荐：")
         print(f"  半波：{', '.join(f'{x}({s:.1f})' for x, s in final_hw)}")
-        print(f"  生肖：{', '.join(f'{x}({s:.1f})' for x, s in final_zd)}")
+        print(f"  生肖（{CONFIG['zodiac_bet_count']}选）：")
+        for i, (zod, score) in enumerate(final_zd, 1):
+            print(f"    {i}. {zod} ({score:.1f}分)")
         print(f"  单双：{ensemble_odd[0][0]}（参考）")
     
     print(f"\n⚠️ 免责声明：彩票开奖独立随机，预测仅供参考。")
+    print(f"  生肖{CONFIG['zodiac_bet_count']}选理论命中率={CONFIG['zodiac_bet_count']/12*100:.1f}%")
 
 if __name__ == "__main__":
     main()
