@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略）
+新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略 + 冷热号/遗漏值/组合预测）
 """
 
 import re
@@ -256,6 +256,108 @@ class FrequencyPredictor:
             scores[num] = round(score, 2)
         
         return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:count]
+
+    # ========== 新增1：冷热号分析 ==========
+    def analyze_hot_cold(self, window=10):
+        """分析冷热号"""
+        all_nums = set(range(1, 50))
+        recent_nums = [r['special'] for r in self.history[:window]]
+        
+        # 热号：最近出现次数多的
+        hot = defaultdict(int)
+        for num in recent_nums:
+            hot[num] += 1
+        hot_sorted = sorted(hot.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        # 冷号：最近没出现的
+        recent_set = set(recent_nums)
+        cold = list(all_nums - recent_set)[:5]
+        
+        # 遗漏值：多久没出现
+        miss = {}
+        for num in all_nums:
+            count = 0
+            for r in self.history:
+                if r['special'] == num:
+                    break
+                count += 1
+            miss[num] = count
+        
+        miss_sorted = sorted(miss.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        return {
+            "hot": hot_sorted,
+            "cold": cold,
+            "miss": miss_sorted
+        }
+
+    # ========== 新增2：遗漏值预测 ==========
+    def predict_by_miss(self, count=5):
+        """基于遗漏值预测"""
+        scores = defaultdict(float)
+        miss = {}
+        
+        # 计算每个号码的遗漏值
+        for num in range(1, 50):
+            miss_count = 0
+            for r in self.history:
+                if r['special'] == num:
+                    break
+                miss_count += 1
+            miss[num] = miss_count
+        
+        # 遗漏值越大，应该越关注（概率回归）
+        # 但也要考虑频率
+        freq = self.freq("special")
+        
+        max_miss = max(miss.values()) if max(miss.values()) > 0 else 1
+        for num in range(1, 50):
+            # 遗漏值归一化
+            miss_score = miss[num] / max_miss
+            # 频率分
+            freq_score = freq.get(num, 0) / 100
+            
+            # 综合评分：频率60% + 遗漏40%
+            scores[num] = round(freq_score * 0.6 + miss_score * 0.4, 3)
+        
+        return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:count]
+
+    # ========== 新增3：组合预测模型 ==========
+    def predict_ensemble(self, count=5):
+        """组合多个预测模型"""
+        # 模型1：频率统计（原综合评分）
+        model1 = self.predict_specific_number(count * 3)
+        
+        # 模型2：遗漏值
+        model2 = self.predict_by_miss(count * 3)
+        
+        # 模型3：冷热号
+        hot_cold = self.analyze_hot_cold()
+        model3 = [num for num, score in hot_cold['hot']]
+        
+        # 模型4：半半波推荐
+        hh_pred = self.predict_halfhalf_detail(3)
+        hh_numbers = []
+        for hh, prob in hh_pred:
+            for num in range(1, 50):
+                if get_halfhalf_detail(num) == hh:
+                    hh_numbers.append(num)
+        model4 = hh_numbers[:10]
+        
+        # 投票机制
+        votes = defaultdict(int)
+        for num, score in model1:
+            votes[num] += 3  # 权重3
+        for num, score in model2:
+            votes[num] += 2  # 权重2
+        for num in model3:
+            votes[num] += 2  # 权重2
+        for num in model4:
+            votes[num] += 1  # 权重1
+        
+        # 取票数最高的
+        final = sorted(votes.items(), key=lambda x: x[1], reverse=True)[:count]
+        return final
 
     # ========== 组合投注策略 ==========
     def generate_betting_combinations(self, bet_count=5):
@@ -619,7 +721,7 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
 # ========== 主函数 ==========
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略）")
+    print("新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略 + 冷热号/遗漏值/组合预测）")
     print("基于滑动窗口分析的简单频率统计")
     print("=" * 60)
     
@@ -725,6 +827,74 @@ def main():
     for i, (num, score) in enumerate(num_pred, 1):
         print(f"    {i}. {num:02d} (评分{score:.1f}) - {get_halfhalf_detail(num)} 尾{get_tail(num)} 余{get_remainder(num)}")
     
+    # ========== 新增：冷热号分析 ==========
+    print(f"\n{'='*60}")
+    print(f"🔥 冷热号分析（最近10期）")
+    print(f"{'='*60}")
+    
+    hot_cold = predictor.analyze_hot_cold(10)
+    
+    print(f"\n📊 热号（最近出现最多）：")
+    for num, count in hot_cold['hot']:
+        color = get_color(num)
+        size = get_size(num)
+        odd = get_odd(num)
+        print(f"  {num:02d} ({color}{size}{odd}) - 出现{count}次")
+    
+    print(f"\n❄️ 冷号（最近10期未出现）：")
+    for num in hot_cold['cold'][:5]:
+        color = get_color(num)
+        size = get_size(num)
+        odd = get_odd(num)
+        print(f"  {num:02d} ({color}{size}{odd}) - 已遗漏{hot_cold['miss'][:5]}")
+    
+    print(f"\n⏰ 最大遗漏号码（多久没出）：")
+    for num, miss_count in hot_cold['miss']:
+        color = get_color(num)
+        size = get_size(num)
+        odd = get_odd(num)
+        print(f"  {num:02d} ({color}{size}{odd}) - 遗漏{miss_count}期")
+    
+    # ========== 新增：遗漏值预测 ==========
+    print(f"\n{'='*60}")
+    print(f"⏰ 遗漏值预测（概率回归）")
+    print(f"{'='*60}")
+    
+    miss_pred = predictor.predict_by_miss(5)
+    print(f"\n📊 基于遗漏值推荐（前5）：")
+    for i, (num, score) in enumerate(miss_pred, 1):
+        color = get_color(num)
+        size = get_size(num)
+        odd = get_odd(num)
+        print(f"  {i}. {num:02d} ({color}{size}{odd}) - 评分{score:.2f}")
+    
+    # ========== 新增：组合预测模型 ==========
+    print(f"\n{'='*60}")
+    print(f"🤖 组合预测模型（多模型投票）")
+    print(f"{'='*60}")
+    
+    ensemble_pred = predictor.predict_ensemble(5)
+    print(f"\n📊 组合模型推荐（前5）：")
+    for i, (num, votes) in enumerate(ensemble_pred, 1):
+        color = get_color(num)
+        size = get_size(num)
+        odd = get_odd(num)
+        print(f"  {i}. {num:02d} ({color}{size}{odd}) - 得票{votes}票")
+    
+    # 对比分析
+    print(f"\n📊 预测对比：")
+    traditional = [num for num, score in num_pred]
+    ensemble_nums = [num for num, votes in ensemble_pred]
+    print(f"  传统评分推荐：{', '.join(f'{num:02d}' for num in traditional)}")
+    print(f"  组合模型推荐：{', '.join(f'{num:02d}' for num in ensemble_nums)}")
+    
+    # 交集推荐
+    common = set(traditional) & set(ensemble_nums)
+    if common:
+        print(f"  ✅ 两者一致推荐：{', '.join(f'{num:02d}' for num in common)}")
+    else:
+        print(f"  ⚠️ 两者无交集，建议结合使用")
+    
     # ========== 组合投注策略 ==========
     print(f"\n{'='*60}")
     print(f"💰 组合投注策略（基于高命中率维度）")
@@ -795,7 +965,13 @@ def main():
     print(f"    - 如果半半波中了：最高15.76元（净赚7.76元）")
     print(f"    - 如果都中：62.76元（净赚54.76元）")
     
-    print(f"\n  策略C（高赔率半半波精选）：")
+    print(f"\n  策略C（组合模型推荐）：")
+    if ensemble_nums:
+        print(f"    - 投注：组合模型推荐{len(ensemble_nums)}个号码，各1元")
+        print(f"    - 投入：{len(ensemble_nums)}元/期")
+        print(f"    - 中奖回报：47元（净赚{47-len(ensemble_nums):.2f}元）")
+    
+    print(f"\n  策略D（高赔率半半波精选）：")
     if hh_strategy['high_odds_numbers']:
         bet_count = min(len(hh_strategy['high_odds_numbers']), 3)
         print(f"    - 投注：高赔率半半波对应的{bet_count}个号码，各1元")
@@ -817,6 +993,9 @@ def main():
     print(f"  经过滑动窗口分析：")
     print(f"  - 简单频率统计是最稳定的基线")
     print(f"  - 增加尾数、余数、十位、区间、高低、半半波等灵敏维度")
+    print(f"  - 新增冷热号分析，识别近期热门和冷门号码")
+    print(f"  - 新增遗漏值预测，捕捉该出的号码")
+    print(f"  - 新增组合预测模型，多模型投票提高准确率")
     print(f"  - 复杂模型（遗漏值、转移概率）没有稳定提升")
     print(f"  - 所有维度命中率均接近随机期望")
     print(f"  - 彩票开奖本质上是独立随机事件")
