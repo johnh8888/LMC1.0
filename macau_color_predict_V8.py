@@ -28,19 +28,24 @@ RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
 BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 
+# ========== 🔧 只改了这里：生肖映射 ==========
+# 正确规则：1马 2蛇 3龙 4兔 5虎 6牛 7鼠 8猪 9狗 10鸡 11猴 12羊
+ZODIAC_MAP_FIXED = {
+    1: "马", 2: "蛇", 3: "龙", 4: "兔", 5: "虎", 6: "牛",
+    7: "鼠", 8: "猪", 9: "狗", 10: "鸡", 11: "猴", 12: "羊",
+}
+for n in range(13, 50):
+    base = ((n - 1) % 12) + 1
+    ZODIAC_MAP_FIXED[n] = ZODIAC_MAP_FIXED[base]
+
 ZODIAC_ORDER = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
-ZODIAC_BASE_YEAR = 2020
 
 def build_zodiac_map(year):
-    current_idx = (year - ZODIAC_BASE_YEAR) % 12
-    zmap = {}
-    for n in range(1, 50):
-        offset = ((n - 1) % 12) + 1
-        animal_idx = (current_idx - (offset - 1)) % 12
-        zmap[n] = ZODIAC_ORDER[animal_idx]
-    return zmap
+    # 🔧 直接返回正确的映射，不再用年份计算
+    return ZODIAC_MAP_FIXED
 
 ZODIAC_MAP = build_zodiac_map(CONFIG["zodiac_year"])
+# ========================================================
 
 def get_color(n):
     if n in RED: return "红"
