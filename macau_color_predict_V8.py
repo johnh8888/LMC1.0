@@ -199,7 +199,7 @@ class FrequencyPredictor:
     def predict_color(self):
         return sorted(self.freq("color").items(), key=lambda x: x[1], reverse=True)
 
-    # ========== 大小灵敏预测（修复） ==========
+    # ========== 大小灵敏预测（修复版） ==========
     def predict_size(self):
         """原版大小预测（保留）"""
         return sorted(self.freq("size").items(), key=lambda x: x[1], reverse=True)
@@ -346,8 +346,9 @@ class FrequencyPredictor:
         hl_pred = self.freq("highlow")
         return sorted(hl_pred.items(), key=lambda x: x[1], reverse=True)
 
+    # ========== 综合预测（使用原版评分公式，但大小用灵敏预测） ==========
     def predict_specific_number(self, count=5):
-        """预测具体号码（基于多维度综合评分）- 大小权重提升"""
+        """预测具体号码（基于多维度综合评分）"""
         scores = defaultdict(float)
         
         # 获取灵敏的大小预测
@@ -371,13 +372,13 @@ class FrequencyPredictor:
             color = get_color(num)
             odd = get_odd(num)
             
-            # 大小权重提升到25%（原10%）
-            score += size_pred.get(size, 0) * 0.25
-            score += tail_pred.get(tail, 0) * 0.20
+            # 使用原版权重（大小权重保持10%，而不是25%）
+            score += tail_pred.get(tail, 0) * 0.25
             score += rem_pred.get(rem, 0) * 0.15
+            score += size_pred.get(size, 0) * 0.10  # ← 保持原版权重
             score += tens_pred.get(tens, 0) * 0.10
-            score += sum(v for r, v in range_pred if r == range_name) * 0.10
-            score += color_pred.get(color, 0) * 0.10
+            score += sum(v for r, v in range_pred if r == range_name) * 0.15
+            score += color_pred.get(color, 0) * 0.15
             score += odd_pred.get(odd, 0) * 0.10
             
             scores[num] = round(score, 2)
@@ -977,7 +978,8 @@ def main():
         print(f"    {i}. {hh} ({s:.1f}%)")
     print(f"\n  综合推荐号码（前5）：")
     for i, (num, score) in enumerate(num_pred, 1):
-        print(f"    {i}. {num:02d} (评分{score:.1f}) - {get_halfhalf_detail(num)} 尾{get_tail(num)} 余{get_remainder(num)}")
+        size_match = "✅" if get_size(num) == size_result['prediction'] else ""
+        print(f"    {i}. {num:02d} (评分{score:.1f}) - {get_halfhalf_detail(num)} 尾{get_tail(num)} 余{get_remainder(num)} {size_match}")
     
     # ========== 冷热号分析 ==========
     print(f"\n{'='*60}")
@@ -1031,7 +1033,8 @@ def main():
         color = get_color(num)
         size = get_size(num)
         odd = get_odd(num)
-        print(f"  {i}. {num:02d} ({color}{size}{odd}) - 得票{votes}票")
+        size_match = "✅" if size == size_result['prediction'] else ""
+        print(f"  {i}. {num:02d} ({color}{size}{odd}) - 得票{votes}票 {size_match}")
     
     print(f"\n📊 预测对比：")
     traditional = [num for num, score in num_pred]
@@ -1074,7 +1077,6 @@ def main():
         rem = get_remainder(num)
         zod = get_zodiac(num)
         hh_detail = get_halfhalf_detail(num)
-        # 标记是否符合大小预测
         size_match = "✅" if size == size_result['prediction'] else "❌"
         print(f"  {i}. {num:02d} | {hh_detail} | 尾{tail} 余{rem} | 生肖{zod} | 大小{size_match}")
     
