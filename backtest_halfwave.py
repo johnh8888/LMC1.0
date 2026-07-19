@@ -32,7 +32,10 @@ import json
 import math
 import urllib.request
 from datetime import datetime, timedelta
-from scipy import stats as scipy_stats  # 如果没装，见下方 fallback
+try:
+    from scipy import stats as scipy_stats  # 有scipy就用精确计算
+except ImportError:
+    scipy_stats = None  # 没装也不影响运行，下面bonferroni_z_threshold会用查表fallback
 
 API_URL = "https://marksix6.net/index.php?api=1"
 
@@ -58,15 +61,32 @@ def bonferroni_z_threshold(alpha=0.05, n_tests=None):
         n_tests = len(LOTTERIES) * len(WINDOWS) * len(DIRECTIONS)
     corrected_alpha = alpha / n_tests
     # 双侧检验的临界值
-    try:
-        z_crit = abs(scipy_stats.norm.ppf(corrected_alpha / 2))
-    except Exception:
-        # 没装 scipy 的 fallback：用近似公式（Beasley-Springer-Moro 或查表）
-        # 这里给几个常用值的手工查表，避免强依赖 scipy
-        table = {0.05: 1.96, 0.01: 2.576, 0.001: 3.29, 0.0001: 3.89}
-        # 找最接近的
-        closest = min(table.keys(), key=lambda k: abs(k - corrected_alpha))
-        z_crit = table[closest]
+    z_crit = None
+    if scipy_stats is not None:
+        try:
+            z_crit = abs(scipy_stats.norm.ppf(corrected_alpha / 2))
+        except Exception:
+            z_crit = None
+
+    if z_crit is None:
+        # 没装 scipy 的 fallback：用查表 + 线性插值，避免强依赖 scipy
+        # (alpha, z临界值) 常用对照表，按alpha从大到小排列
+        table = [
+            (0.10, 1.645), (0.05, 1.96), (0.01, 2.576),
+            (0.005, 2.807), (0.001, 3.291), (0.0005, 3.481),
+            (0.0001, 3.891), (0.00005, 4.056), (0.00001, 4.417),
+        ]
+        if corrected_alpha >= table[0][0]:
+            z_crit = table[0][1]
+        elif corrected_alpha <= table[-1][0]:
+            z_crit = table[-1][1]
+        else:
+            for (a1, z1), (a2, z2) in zip(table, table[1:]):
+                if a2 <= corrected_alpha <= a1:
+                    # 在对数尺度上线性插值，比线性插值更接近真实曲线
+                    frac = (math.log(corrected_alpha) - math.log(a1)) / (math.log(a2) - math.log(a1))
+                    z_crit = z1 + frac * (z2 - z1)
+                    break
     return z_crit, corrected_alpha, n_tests
 
 
