@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - 诚实版（增强灵敏度）
+新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注策略）
 """
 
 import re
@@ -244,6 +244,74 @@ class FrequencyPredictor:
         
         return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:count]
 
+    # ========== 组合投注策略（新增） ==========
+    def generate_betting_combinations(self, bet_count=5):
+        """生成组合投注方案"""
+        # 获取各维度预测
+        tail_pred = [int(x[0]) for x in self.predict_tail(3)]
+        rem_pred = [int(x[0]) for x in self.predict_remainder(3)]
+        zod_pred = [x[0] for x in self.predict_zodiac(5)]
+        color_pred = self.predict_color()[0][0]
+        size_pred = self.predict_size()[0][0]
+        odd_pred = self.predict_odd()[0][0]
+        
+        # 方案1：尾数+余数双维度筛选（核心策略）
+        combo1 = []
+        for tail in tail_pred:
+            for rem in rem_pred:
+                for num in range(1, 50):
+                    if get_tail(num) == tail and get_remainder(num) == rem:
+                        combo1.append(num)
+        combo1 = list(set(combo1))
+        
+        # 方案2：尾数+生肖筛选
+        combo2 = []
+        for tail in tail_pred:
+            for zod in zod_pred:
+                for num in range(1, 50):
+                    if get_tail(num) == tail and get_zodiac(num) == zod:
+                        combo2.append(num)
+        combo2 = list(set(combo2))
+        
+        # 方案3：余数+生肖筛选
+        combo3 = []
+        for rem in rem_pred:
+            for zod in zod_pred:
+                for num in range(1, 50):
+                    if get_remainder(num) == rem and get_zodiac(num) == zod:
+                        combo3.append(num)
+        combo3 = list(set(combo3))
+        
+        # 方案4：尾数+颜色筛选
+        combo4 = []
+        for tail in tail_pred:
+            for num in range(1, 50):
+                if get_tail(num) == tail and get_color(num) == color_pred:
+                    combo4.append(num)
+        combo4 = list(set(combo4))
+        
+        # 方案5：综合评分最高（原predict_specific_number结果）
+        combo5 = [num for num, score in self.predict_specific_number(bet_count)]
+        
+        # 综合所有方案，取交集并排序
+        all_combos = combo1 + combo2 + combo3 + combo4 + combo5
+        combo_count = defaultdict(int)
+        for num in all_combos:
+            combo_count[num] += 1
+        
+        # 按出现次数排序，取前bet_count个
+        final_combo = sorted(combo_count.items(), key=lambda x: x[1], reverse=True)[:bet_count]
+        final_numbers = [num for num, count in final_combo]
+        
+        return {
+            "tail_remainder": combo1[:10],  # 尾数+余数
+            "tail_zodiac": combo2[:10],     # 尾数+生肖
+            "remainder_zodiac": combo3[:10], # 余数+生肖
+            "tail_color": combo4[:10],       # 尾数+颜色
+            "top_score": combo5,             # 综合评分
+            "final_recommendation": final_numbers  # 最终推荐
+        }
+
 # ========== 滑动窗口回测（修复版） ==========
 def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
     """滑动窗口分析：每个窗口内，每期只用该期之前的min_history期预测"""
@@ -425,7 +493,7 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
 # ========== 主函数 ==========
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - 诚实版（增强灵敏度）")
+    print("新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注策略）")
     print("基于滑动窗口分析的简单频率统计")
     print("=" * 60)
     
@@ -520,6 +588,61 @@ def main():
     for i, (num, score) in enumerate(num_pred, 1):
         print(f"    {i}. {num:02d} (评分{score:.1f}) - {get_color(num)}{get_size(num)} {get_odd(num)} 尾{get_tail(num)} 余{get_remainder(num)}")
     
+    # ========== 新增：组合投注策略 ==========
+    print(f"\n{'='*60}")
+    print(f"💰 组合投注策略（基于高命中率维度）")
+    print(f"{'='*60}")
+    
+    combos = predictor.generate_betting_combinations(5)
+    
+    print(f"\n📌 策略说明：")
+    print(f"  - 核心维度：尾数（命中率{tail_rates[-1]*100:.0f}%）、余数（命中率{rem_rates[-1]*100:.0f}%）")
+    print(f"  - 辅助维度：生肖（命中率{zd_rates[-1]*100:.0f}%）、颜色（命中率{color_rates[-1]*100:.0f}%）")
+    print(f"  - 赔率：特码 1:47，单双/大小 1:0.95")
+    
+    print(f"\n🎯 各方案候选号码：")
+    print(f"  方案1（尾数+余数）: {', '.join(f'{x:02d}' for x in combos['tail_remainder'][:8])}")
+    print(f"  方案2（尾数+生肖）: {', '.join(f'{x:02d}' for x in combos['tail_zodiac'][:8])}")
+    print(f"  方案3（余数+生肖）: {', '.join(f'{x:02d}' for x in combos['remainder_zodiac'][:8])}")
+    print(f"  方案4（尾数+颜色）: {', '.join(f'{x:02d}' for x in combos['tail_color'][:8])}")
+    print(f"  方案5（综合评分）: {', '.join(f'{x:02d}' for x in combos['top_score'])}")
+    
+    print(f"\n⭐ 最终推荐投注组合（前5个）：")
+    for i, num in enumerate(combos['final_recommendation'], 1):
+        color = get_color(num)
+        size = get_size(num)
+        odd = get_odd(num)
+        tail = get_tail(num)
+        rem = get_remainder(num)
+        zod = get_zodiac(num)
+        print(f"  {i}. {num:02d} | {color}{size} {odd} | 尾{tail} 余{rem} | 生肖{zod}")
+    
+    # 投注策略建议
+    print(f"\n📊 投注策略建议：")
+    print(f"  策略A（稳健型）：")
+    print(f"    - 投注：最终推荐5个号码，每个1元")
+    print(f"    - 投入：5元/期")
+    print(f"    - 预期命中率：{len(combos['final_recommendation'])/49*100:.1f}%")
+    print(f"    - 中奖回报：47元（净赚42元）")
+    
+    print(f"\n  策略B（精准型）：")
+    print(f"    - 投注：最终推荐前3个号码，每个2元")
+    print(f"    - 投入：6元/期")
+    print(f"    - 预期命中率：{len(combos['final_recommendation'][:3])/49*100:.1f}%")
+    print(f"    - 中奖回报：94元（净赚88元）")
+    
+    print(f"\n  策略C（保险型 - 配合单双大小）：")
+    print(f"    - 投注：最终推荐5个号码（5元）+ 单（1元）+ 小（1元）")
+    print(f"    - 投入：7元/期")
+    print(f"    - 如果特码中了：47+0.95+0.95=48.9元（净赚41.9元）")
+    print(f"    - 如果特码没中但单双大小中了：1.9元（亏损5.1元）")
+    
+    print(f"\n⚠️ 风险提示：")
+    print(f"  - 所有策略的期望值仍为负（庄家有优势）")
+    print(f"  - 建议每期投入不超过总资金的5%")
+    print(f"  - 设置止损线，亏损达到预算即停止")
+    print(f"  - 切勿借钱或使用倍投法")
+    
     print(f"\n{'='*60}")
     print(f"📋 诚实总结：")
     print(f"{'='*60}")
@@ -529,6 +652,7 @@ def main():
     print(f"  - 复杂模型（遗漏值、转移概率）没有稳定提升")
     print(f"  - 所有维度命中率均接近随机期望")
     print(f"  - 彩票开奖本质上是独立随机事件")
+    print(f"  - 组合投注能提高中奖概率，但不改变期望值")
     print(f"\n⚠️ 建议：理性投注，量力而行，切勿迷信任何预测。")
 
 if __name__ == "__main__":
