@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略 + 冷热号/遗漏值/组合预测）
+新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略 + 冷热号/遗漏值/组合预测 + 大小灵敏预测）
 """
 
 import re
@@ -156,6 +156,16 @@ class FrequencyPredictor:
         total = sum(c.values()) or 1
         return {k: round(v / total * 100, 2) for k, v in c.items()}
 
+    def freq_with_weight(self, key, decay=0.9):
+        """加权频率统计：最近数据权重更高"""
+        c = defaultdict(float)
+        total_weight = 0
+        for i, r in enumerate(self.history):
+            weight = decay ** i  # i=0最近，权重1；i=1上期，权重0.9
+            c[r[key]] += weight
+            total_weight += weight
+        return {k: round(v / total_weight * 100, 2) for k, v in c.items()}
+
     def predict_halfhalf(self, count=2):
         color_pred = self.freq("color")
         size_pred = self.freq("size")
@@ -189,8 +199,121 @@ class FrequencyPredictor:
     def predict_color(self):
         return sorted(self.freq("color").items(), key=lambda x: x[1], reverse=True)
 
+    # ========== 大小灵敏预测（修复） ==========
     def predict_size(self):
+        """原版大小预测（保留）"""
         return sorted(self.freq("size").items(), key=lambda x: x[1], reverse=True)
+
+    def predict_size_sensitive(self):
+        """灵敏的大小预测 - 多窗口"""
+        windows = {
+            "3期": self.history[:3],
+            "5期": self.history[:5],
+            "10期": self.history[:10],
+            "全部": self.history
+        }
+        
+        results = {}
+        for name, history in windows.items():
+            if len(history) < 2:
+                continue
+            pred = FrequencyPredictor(history)
+            size_freq = pred.freq("size")
+            results[name] = size_freq
+        
+        return results
+
+    def predict_size_weighted(self):
+        """加权大小预测：近期权重更高"""
+        if len(self.history) < 2:
+            return {"大": 50, "小": 50}
+        
+        weights = [0.35, 0.25, 0.20, 0.12, 0.08]  # 最近5期权重递减
+        
+        size_scores = {"大": 0.0, "小": 0.0}
+        for i, r in enumerate(self.history[:5]):
+            if i >= len(weights):
+                break
+            size_scores[r["size"]] += weights[i]
+        
+        # 加入全部数据作为参考（权重低）
+        all_freq = self.freq("size")
+        size_scores["大"] += all_freq.get("大", 0) / 100 * 0.1
+        size_scores["小"] += all_freq.get("小", 0) / 100 * 0.1
+        
+        # 归一化到百分比
+        total = size_scores["大"] + size_scores["小"]
+        if total > 0:
+            size_scores["大"] = round(size_scores["大"] / total * 100, 2)
+            size_scores["小"] = round(size_scores["小"] / total * 100, 2)
+        
+        return size_scores
+
+    def detect_size_trend(self):
+        """检测大小趋势变化"""
+        if len(self.history) < 10:
+            return {"signal": "数据不足"}
+        
+        # 最近5期
+        recent = [r["size"] for r in self.history[:5]]
+        # 前5期
+        older = [r["size"] for r in self.history[5:10]]
+        
+        recent_big = recent.count("大") / len(recent) * 100
+        older_big = older.count("大") / len(older) * 100
+        
+        # 连号检测（连续出大或小）
+        streak = 1
+        for i in range(1, len(self.history)):
+            if self.history[i]["size"] == self.history[i-1]["size"]:
+                streak += 1
+            else:
+                break
+        
+        change = recent_big - older_big
+        
+        result = {
+            "最近5期大号比例": f"{recent_big:.0f}%",
+            "前5期大号比例": f"{older_big:.0f}%",
+            "变化": f"{change:+.0f}%",
+            "当前连号": f"连续{streak}期{self.history[0]['size']}",
+            "signal": "🔥 大号升温" if change > 15 else "❄️ 大号降温" if change < -15 else "➡️ 平稳"
+        }
+        
+        return result
+
+    def get_size_prediction(self):
+        """综合大小预测"""
+        # 1. 加权预测（近期）
+        weighted = self.predict_size_weighted()
+        
+        # 2. 趋势检测
+        trend = self.detect_size_trend()
+        
+        # 3. 多窗口验证
+        multi = self.predict_size_sensitive()
+        
+        # 4. 综合判断
+        pred = max(weighted.items(), key=lambda x: x[1])[0] if weighted else "小"
+        confidence = max(weighted.values()) if weighted else 50
+        
+        # 如果趋势信号强烈，跟随趋势
+        if "signal" in trend and "大号升温" in trend["signal"]:
+            if weighted.get("大", 0) > weighted.get("小", 0):
+                pred = "大"
+                confidence = max(weighted.values())
+        elif "signal" in trend and "大号降温" in trend["signal"]:
+            if weighted.get("小", 0) > weighted.get("大", 0):
+                pred = "小"
+                confidence = max(weighted.values())
+        
+        return {
+            "prediction": pred,
+            "confidence": confidence,
+            "weighted": weighted,
+            "trend": trend,
+            "multi_window": multi
+        }
 
     # ========== 新增灵敏预测 ==========
     def predict_tail(self, count=3):
@@ -224,8 +347,12 @@ class FrequencyPredictor:
         return sorted(hl_pred.items(), key=lambda x: x[1], reverse=True)
 
     def predict_specific_number(self, count=5):
-        """预测具体号码（基于多维度综合评分）"""
+        """预测具体号码（基于多维度综合评分）- 大小权重提升"""
         scores = defaultdict(float)
+        
+        # 获取灵敏的大小预测
+        size_sensitive = self.get_size_prediction()
+        size_pred = size_sensitive["weighted"]
         
         tail_pred = {int(k): v for k, v in self.predict_tail(5)}
         rem_pred = {int(k): v for k, v in self.predict_remainder(5)}
@@ -233,31 +360,31 @@ class FrequencyPredictor:
         range_pred = self.predict_range(3)
         color_pred = {k: v for k, v in self.predict_color()}
         odd_pred = {k: v for k, v in self.predict_odd()}
-        size_pred = {k: v for k, v in self.predict_size()}
         
         for num in range(1, 50):
             score = 0
+            size = get_size(num)
             tail = get_tail(num)
             rem = get_remainder(num)
             tens = get_tens(num)
             range_name = get_number_range(num)
             color = get_color(num)
             odd = get_odd(num)
-            size = get_size(num)
             
-            score += tail_pred.get(tail, 0) * 0.25
+            # 大小权重提升到25%（原10%）
+            score += size_pred.get(size, 0) * 0.25
+            score += tail_pred.get(tail, 0) * 0.20
             score += rem_pred.get(rem, 0) * 0.15
             score += tens_pred.get(tens, 0) * 0.10
-            score += sum(v for r, v in range_pred if r == range_name) * 0.15
-            score += color_pred.get(color, 0) * 0.15
+            score += sum(v for r, v in range_pred if r == range_name) * 0.10
+            score += color_pred.get(color, 0) * 0.10
             score += odd_pred.get(odd, 0) * 0.10
-            score += size_pred.get(size, 0) * 0.10
             
             scores[num] = round(score, 2)
         
         return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:count]
 
-    # ========== 新增1：冷热号分析 ==========
+    # ========== 冷热号分析 ==========
     def analyze_hot_cold(self, window=10):
         """分析冷热号"""
         all_nums = set(range(1, 50))
@@ -291,7 +418,7 @@ class FrequencyPredictor:
             "miss": miss_sorted
         }
 
-    # ========== 新增2：遗漏值预测 ==========
+    # ========== 遗漏值预测 ==========
     def predict_by_miss(self, count=5):
         """基于遗漏值预测"""
         scores = defaultdict(float)
@@ -322,7 +449,7 @@ class FrequencyPredictor:
         
         return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:count]
 
-    # ========== 新增3：组合预测模型 ==========
+    # ========== 组合预测模型 ==========
     def predict_ensemble(self, count=5):
         """组合多个预测模型"""
         # 模型1：频率统计（原综合评分）
@@ -366,7 +493,7 @@ class FrequencyPredictor:
         rem_pred = [int(x[0]) for x in self.predict_remainder(3)]
         zod_pred = [x[0] for x in self.predict_zodiac(5)]
         color_pred = self.predict_color()[0][0]
-        size_pred = self.predict_size()[0][0]
+        size_pred = self.get_size_prediction()["prediction"]
         odd_pred = self.predict_odd()[0][0]
         
         combo1 = []
@@ -561,7 +688,7 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
             zd_pred = [x[0] for x in predictor.predict_zodiac(CONFIG["zodiac_bet_count"])]
             odd_pred = predictor.predict_odd()[0][0] if predictor.predict_odd() else ""
             color_pred = predictor.predict_color()[0][0] if predictor.predict_color() else ""
-            size_pred = predictor.predict_size()[0][0] if predictor.predict_size() else ""
+            size_pred = predictor.get_size_prediction()["prediction"]
             tail_pred = [int(x[0]) for x in predictor.predict_tail(3)]
             rem_pred = [int(x[0]) for x in predictor.predict_remainder(3)]
             tens_pred = [int(x[0]) for x in predictor.predict_tens(2)]
@@ -644,7 +771,7 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
         zd_pred = [x[0] for x in predictor.predict_zodiac(CONFIG["zodiac_bet_count"])]
         odd_pred = predictor.predict_odd()[0][0]
         color_pred = predictor.predict_color()[0][0]
-        size_pred = predictor.predict_size()[0][0]
+        size_pred = predictor.get_size_prediction()["prediction"]
         tail_pred = [int(x[0]) for x in predictor.predict_tail(3)]
         rem_pred = [int(x[0]) for x in predictor.predict_remainder(3)]
         tens_pred = [int(x[0]) for x in predictor.predict_tens(2)]
@@ -721,7 +848,7 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
 # ========== 主函数 ==========
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略 + 冷热号/遗漏值/组合预测）")
+    print("新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略 + 冷热号/遗漏值/组合预测 + 大小灵敏预测）")
     print("基于滑动窗口分析的简单频率统计")
     print("=" * 60)
     
@@ -794,11 +921,36 @@ def main():
     print(f"  十位：{dict(sorted(tens_freq.items(), key=lambda x: x[1], reverse=True))}")
     print(f"  半半波：{dict(sorted(hh_detail_freq.items(), key=lambda x: x[1], reverse=True))}")
     
+    # ========== 大小灵敏预测展示 ==========
+    print(f"\n{'='*60}")
+    print(f"📏 大小灵敏预测（修复版）")
+    print(f"{'='*60}")
+    
+    size_result = predictor.get_size_prediction()
+    
+    print(f"\n📊 加权预测（近期权重高）：")
+    print(f"  大：{size_result['weighted'].get('大', 0):.1f}%")
+    print(f"  小：{size_result['weighted'].get('小', 0):.1f}%")
+    
+    print(f"\n📊 趋势检测：")
+    trend = size_result['trend']
+    if "signal" in trend:
+        print(f"  最近5期大号比例：{trend.get('最近5期大号比例', 'N/A')}")
+        print(f"  前5期大号比例：{trend.get('前5期大号比例', 'N/A')}")
+        print(f"  变化：{trend.get('变化', 'N/A')}")
+        print(f"  当前连号：{trend.get('当前连号', 'N/A')}")
+        print(f"  信号：{trend.get('signal', 'N/A')}")
+    
+    print(f"\n📊 多窗口对比：")
+    for name, freq in size_result['multi_window'].items():
+        print(f"  {name}：大{freq.get('大', 0):.1f}% / 小{freq.get('小', 0):.1f}%")
+    
+    print(f"\n⭐ 最终大小预测：**{size_result['prediction']}** (置信度{size_result['confidence']:.1f}%)")
+    
     hw_pred = predictor.predict_halfhalf(CONFIG["bet_count"])
     zd_pred = predictor.predict_zodiac(CONFIG["zodiac_bet_count"])
     odd_pred = predictor.predict_odd()
     color_pred = predictor.predict_color()
-    size_pred = predictor.predict_size()
     tail_pred = predictor.predict_tail(3)
     rem_pred = predictor.predict_remainder(3)
     tens_pred = predictor.predict_tens(2)
@@ -814,7 +966,7 @@ def main():
         print(f"    {i}. {z} ({s:.1f}%)")
     print(f"  单双：{odd_pred[0][0]} ({odd_pred[0][1]:.1f}%)")
     print(f"  颜色：{color_pred[0][0]} ({color_pred[0][1]:.1f}%)")
-    print(f"  大小：{size_pred[0][0]} ({size_pred[0][1]:.1f}%)")
+    print(f"  大小：{size_result['prediction']} ({size_result['confidence']:.1f}%) ← 灵敏预测")
     print(f"  尾数：{', '.join(f'{x}({s:.1f}%)' for x, s in tail_pred)}")
     print(f"  余数：{', '.join(f'{x}({s:.1f}%)' for x, s in rem_pred)}")
     print(f"  十位：{', '.join(f'{x}({s:.1f}%)' for x, s in tens_pred)}")
@@ -827,7 +979,7 @@ def main():
     for i, (num, score) in enumerate(num_pred, 1):
         print(f"    {i}. {num:02d} (评分{score:.1f}) - {get_halfhalf_detail(num)} 尾{get_tail(num)} 余{get_remainder(num)}")
     
-    # ========== 新增：冷热号分析 ==========
+    # ========== 冷热号分析 ==========
     print(f"\n{'='*60}")
     print(f"🔥 冷热号分析（最近10期）")
     print(f"{'='*60}")
@@ -846,7 +998,7 @@ def main():
         color = get_color(num)
         size = get_size(num)
         odd = get_odd(num)
-        print(f"  {num:02d} ({color}{size}{odd}) - 已遗漏{hot_cold['miss'][:5]}")
+        print(f"  {num:02d} ({color}{size}{odd})")
     
     print(f"\n⏰ 最大遗漏号码（多久没出）：")
     for num, miss_count in hot_cold['miss']:
@@ -855,7 +1007,7 @@ def main():
         odd = get_odd(num)
         print(f"  {num:02d} ({color}{size}{odd}) - 遗漏{miss_count}期")
     
-    # ========== 新增：遗漏值预测 ==========
+    # ========== 遗漏值预测 ==========
     print(f"\n{'='*60}")
     print(f"⏰ 遗漏值预测（概率回归）")
     print(f"{'='*60}")
@@ -868,7 +1020,7 @@ def main():
         odd = get_odd(num)
         print(f"  {i}. {num:02d} ({color}{size}{odd}) - 评分{score:.2f}")
     
-    # ========== 新增：组合预测模型 ==========
+    # ========== 组合预测模型 ==========
     print(f"\n{'='*60}")
     print(f"🤖 组合预测模型（多模型投票）")
     print(f"{'='*60}")
@@ -881,14 +1033,12 @@ def main():
         odd = get_odd(num)
         print(f"  {i}. {num:02d} ({color}{size}{odd}) - 得票{votes}票")
     
-    # 对比分析
     print(f"\n📊 预测对比：")
     traditional = [num for num, score in num_pred]
     ensemble_nums = [num for num, votes in ensemble_pred]
     print(f"  传统评分推荐：{', '.join(f'{num:02d}' for num in traditional)}")
     print(f"  组合模型推荐：{', '.join(f'{num:02d}' for num in ensemble_nums)}")
     
-    # 交集推荐
     common = set(traditional) & set(ensemble_nums)
     if common:
         print(f"  ✅ 两者一致推荐：{', '.join(f'{num:02d}' for num in common)}")
@@ -905,6 +1055,7 @@ def main():
     print(f"\n📌 策略说明：")
     print(f"  - 核心维度：尾数（命中率{tail_rates[-1]*100:.0f}%）、余数（命中率{rem_rates[-1]*100:.0f}%）")
     print(f"  - 辅助维度：生肖（命中率{zd_rates[-1]*100:.0f}%）、颜色（命中率{color_rates[-1]*100:.0f}%）")
+    print(f"  - 大小预测：{size_result['prediction']}（置信度{size_result['confidence']:.1f}%）← 灵敏预测")
     print(f"  - 赔率：特码 1:47，半半波最高 1:15.76")
     
     print(f"\n🎯 各方案候选号码：")
@@ -923,7 +1074,9 @@ def main():
         rem = get_remainder(num)
         zod = get_zodiac(num)
         hh_detail = get_halfhalf_detail(num)
-        print(f"  {i}. {num:02d} | {hh_detail} | 尾{tail} 余{rem} | 生肖{zod}")
+        # 标记是否符合大小预测
+        size_match = "✅" if size == size_result['prediction'] else "❌"
+        print(f"  {i}. {num:02d} | {hh_detail} | 尾{tail} 余{rem} | 生肖{zod} | 大小{size_match}")
     
     # ========== 半半波策略 ==========
     print(f"\n{'='*60}")
@@ -993,6 +1146,7 @@ def main():
     print(f"  经过滑动窗口分析：")
     print(f"  - 简单频率统计是最稳定的基线")
     print(f"  - 增加尾数、余数、十位、区间、高低、半半波等灵敏维度")
+    print(f"  - ✅ 大小预测已修复为灵敏预测（多窗口+加权+趋势检测）")
     print(f"  - 新增冷热号分析，识别近期热门和冷门号码")
     print(f"  - 新增遗漏值预测，捕捉该出的号码")
     print(f"  - 新增组合预测模型，多模型投票提高准确率")
