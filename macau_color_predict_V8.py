@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略 + 敏感度分析）
+新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略）
 """
 
 import re
@@ -156,16 +156,6 @@ class FrequencyPredictor:
         total = sum(c.values()) or 1
         return {k: round(v / total * 100, 2) for k, v in c.items()}
 
-    def freq_with_weight(self, key, decay=0.9):
-        """加权频率统计：最近数据权重更高（新增）"""
-        c = defaultdict(float)
-        total_weight = 0
-        for i, r in enumerate(self.history):
-            weight = decay ** i  # i=0最近，权重1；i=1上期，权重0.9
-            c[r[key]] += weight
-            total_weight += weight
-        return {k: round(v / total_weight * 100, 2) for k, v in c.items()}
-
     def predict_halfhalf(self, count=2):
         color_pred = self.freq("color")
         size_pred = self.freq("size")
@@ -266,116 +256,6 @@ class FrequencyPredictor:
             scores[num] = round(score, 2)
         
         return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:count]
-
-    # ========== 敏感度增强预测（新增） ==========
-    def predict_with_sensitivity(self, count=5):
-        """敏感度增强预测：多窗口加权"""
-        scores = defaultdict(float)
-        
-        # 不同时间窗口
-        windows = {
-            "all": self.history,
-            "recent_10": self.history[:10],
-            "recent_5": self.history[:5],
-            "recent_3": self.history[:3]
-        }
-        
-        # 权重：越近权重越高
-        weights = {
-            "all": 0.20,
-            "recent_10": 0.25,
-            "recent_5": 0.30,
-            "recent_3": 0.25
-        }
-        
-        for num in range(1, 50):
-            score = 0
-            hh = get_halfhalf_detail(num)
-            tail = get_tail(num)
-            rem = get_remainder(num)
-            
-            for name, history in windows.items():
-                if len(history) < 3: 
-                    continue
-                pred = FrequencyPredictor(history)
-                
-                # 半半波频率
-                hh_freq = pred.freq("halfhalf_detail").get(hh, 0)
-                score += hh_freq * weights[name] * 0.4
-                
-                # 尾数频率
-                tail_freq = pred.freq("tail").get(tail, 0)
-                score += tail_freq * weights[name] * 0.3
-                
-                # 余数频率
-                rem_freq = pred.freq("remainder").get(rem, 0)
-                score += rem_freq * weights[name] * 0.3
-            
-            scores[num] = round(score, 2)
-        
-        return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:count]
-
-    def detect_hot_trend(self, key="halfhalf_detail", threshold=10):
-        """检测热门趋势（新增）"""
-        if len(self.history) < 10:
-            return {}
-        
-        recent = self.history[:5]
-        older = self.history[5:10]
-        
-        recent_freq = FrequencyPredictor(recent).freq(key)
-        older_freq = FrequencyPredictor(older).freq(key)
-        
-        hot = {}
-        for k, v in recent_freq.items():
-            old = older_freq.get(k, 0)
-            change = v - old
-            if change > threshold:
-                hot[k] = {
-                    "recent": v,
-                    "older": old,
-                    "change": change,
-                    "trend": "↑ 上升"
-                }
-            elif change < -threshold:
-                hot[k] = {
-                    "recent": v,
-                    "older": old,
-                    "change": change,
-                    "trend": "↓ 下降"
-                }
-        
-        return hot
-
-    def multi_window_predict(self, windows=[3, 5, 10], count=5):
-        """多窗口预测取交集（新增）"""
-        predictions = []
-        for window in windows:
-            if len(self.history) < window:
-                continue
-            history = self.history[:window]
-            pred = FrequencyPredictor(history)
-            pred_nums = pred.predict_specific_number(count)
-            predictions.append([num for num, score in pred_nums])
-        
-        if not predictions:
-            return []
-        
-        # 取交集
-        common = set(predictions[0])
-        for pred in predictions[1:]:
-            common = common.intersection(set(pred))
-        
-        # 如果交集为空，返回所有窗口中出现次数最多的
-        if not common:
-            all_nums = []
-            for pred in predictions:
-                all_nums.extend(pred)
-            from collections import Counter
-            counter = Counter(all_nums)
-            return [num for num, count in counter.most_common(count)]
-        
-        return list(common)[:count]
 
     # ========== 组合投注策略 ==========
     def generate_betting_combinations(self, bet_count=5):
@@ -739,7 +619,7 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
 # ========== 主函数 ==========
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略 + 敏感度分析）")
+    print("新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略）")
     print("基于滑动窗口分析的简单频率统计")
     print("=" * 60)
     
@@ -845,61 +725,6 @@ def main():
     for i, (num, score) in enumerate(num_pred, 1):
         print(f"    {i}. {num:02d} (评分{score:.1f}) - {get_halfhalf_detail(num)} 尾{get_tail(num)} 余{get_remainder(num)}")
     
-    # ========== 敏感度分析（新增） ==========
-    print(f"\n{'='*60}")
-    print(f"🔥 敏感度分析（捕捉最新趋势）")
-    print(f"{'='*60}")
-    
-    # 敏感度预测
-    sensitive_pred = predictor.predict_with_sensitivity(5)
-    print(f"\n📊 敏感度增强预测（多窗口加权：近3期30%、近5期30%、近10期25%、全部20%）：")
-    for i, (num, score) in enumerate(sensitive_pred, 1):
-        hh = get_halfhalf_detail(num)
-        print(f"  {i}. {num:02d} (评分{score:.1f}) - {hh} 尾{get_tail(num)} 余{get_remainder(num)}")
-    
-    # 多窗口交集预测
-    multi_pred = predictor.multi_window_predict(windows=[3, 5, 10], count=5)
-    print(f"\n📊 多窗口交集预测（3期∩5期∩10期）：")
-    if multi_pred:
-        for i, num in enumerate(multi_pred, 1):
-            hh = get_halfhalf_detail(num)
-            print(f"  {i}. {num:02d} - {hh} 尾{get_tail(num)} 余{get_remainder(num)}")
-    else:
-        print(f"  交集为空，说明各窗口预测不一致，建议观望")
-    
-    # 热门趋势检测
-    print(f"\n📊 热门趋势检测（最近5期 vs 前5期）：")
-    hot_trend = predictor.detect_hot_trend("halfhalf_detail", threshold=8)
-    if hot_trend:
-        print(f"  🔥 显著上升的趋势（↑>8%）：")
-        for k, v in hot_trend.items():
-            if v["trend"] == "↑ 上升":
-                print(f"    {k}: {v['older']:.0f}% → {v['recent']:.0f}% (↑{v['change']:.0f}%)")
-        print(f"  ❄️ 显著下降的趋势（↓>8%）：")
-        for k, v in hot_trend.items():
-            if v["trend"] == "↓ 下降":
-                print(f"    {k}: {v['older']:.0f}% → {v['recent']:.0f}% (↓{abs(v['change']):.0f}%)")
-    else:
-        print(f"  未检测到显著趋势（变化<8%），市场相对平稳")
-    
-    # 对比分析
-    print(f"\n📊 预测对比：")
-    print(f"  传统评分推荐：{', '.join(f'{num:02d}' for num, score in num_pred)}")
-    print(f"  敏感度推荐：{', '.join(f'{num:02d}' for num, score in sensitive_pred)}")
-    print(f"  交集推荐：{', '.join(f'{num:02d}' for num in multi_pred) if multi_pred else '无'}")
-    
-    # 建议
-    print(f"\n💡 建议：")
-    if multi_pred:
-        print(f"  ✅ 多窗口预测一致，建议重点关注：{', '.join(f'{num:02d}' for num in multi_pred)}")
-    else:
-        print(f"  ⚠️ 各窗口预测不一致，建议分散投注或观望")
-    
-    if hot_trend:
-        rising = [k for k, v in hot_trend.items() if v["trend"] == "↑ 上升"]
-        if rising:
-            print(f"  🔥 关注上升趋势的半半波：{', '.join(rising)}")
-    
     # ========== 组合投注策略 ==========
     print(f"\n{'='*60}")
     print(f"💰 组合投注策略（基于高命中率维度）")
@@ -992,7 +817,6 @@ def main():
     print(f"  经过滑动窗口分析：")
     print(f"  - 简单频率统计是最稳定的基线")
     print(f"  - 增加尾数、余数、十位、区间、高低、半半波等灵敏维度")
-    print(f"  - 敏感度分析能捕捉最新趋势，提高预测时效性")
     print(f"  - 复杂模型（遗漏值、转移概率）没有稳定提升")
     print(f"  - 所有维度命中率均接近随机期望")
     print(f"  - 彩票开奖本质上是独立随机事件")
