@@ -1,62 +1,52 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - v2（修复缓存bug + 加入显著性检验 + 随机基准对比）
+新澳门彩预测系统 - 综合预测版
+在原有"简单频率"预测基础上，新增：
+  1. 近期加权频率（recency-weighted frequency）—— 越近的期数权重越高
+  2. 遗漏值分析（gap analysis）—— 距上次出现的期数
+  3. 状态转移概率（一阶马尔可夫）—— 上一期结果 -> 下一期结果 的历史概率
+三者加权融合成"综合版"预测，并与原"简单版"在回测中对比命中率。
 
-相对上一版的三处改动：
-
-1. 【修复缓存bug】原版只要缓存文件存在就永远用缓存，不管数据是否过期，
-   导致每次运行看到的都是第一次运行时的旧数据。
-   这版改成：优先尝试联网拉取最新数据；只有联网失败时才退回缓存
-   （并明确提示"这是缓存数据，可能不是最新"）。
-
-2. 【加入显著性检验】原版 select_best() 无论数据是不是纯噪音，都会
-   强制输出"推荐半波""推荐生肖"，看起来像有把握的预测。
-   这版给每个类别（颜色/大小/单双/半波/生肖）都做 z-test，
-   只有统计上显著偏离真实理论概率的类别才会被标记为"推荐"，
-   其余一律显示"观望"。并且用 Bonferroni 校正多重比较
-   （半波实际是颜色×大小×单双的组合，共12种，不是6种；
-   一共测试 颜色3+大小2+单双2+半波12+生肖12=31 个类别，
-   比逐一单独判断要严格）。
-
-3. 【随机基准对比】原版回测报告命中率时没说清楚"瞎猜"能到多少。
-   半波在Top2推荐下，纯随机瞎猜命中率基准是 2/12≈16.7%（半波是颜色×大小×单双
-   的组合，共12种，不是6种）；生肖在Top3推荐下，纯随机基准是 3/12=25%。
-   这版把这两个基准显式打印出来，方便你一眼看出推荐是否比瞎猜强。
-
-⚠️ 依然要提醒：如果开奖是真随机独立事件，这些检验大概率会显示
-"从未显著"或"显著但不稳定"，这是诚实的结果，不是脚本没做好。
+⚠️ 说明：遗漏值回补是经验性假设，并非统计学定律（各期开奖理论上独立）。
+   这里的"综合版"目的是给你一个可回测、可调参的框架，而非保证提升胜率。
+   真正是否有效，以下方回测的命中率对比为准。
 """
 
 import re
 import json
-import math
 import urllib.request
 import os
 from collections import defaultdict
 from datetime import datetime
 
-try:
-    from scipy import stats as scipy_stats
-except ImportError:
-    scipy_stats = None
-
 CONFIG = {
-    "history_limit": 200,      # 从30提高到200：小样本下显著性检验几乎不可能有意义
-    "backtest_window": 60,     # 滚动回测用的窗口长度
+    "history_limit": 30,
     "api_url": "https://marksix6.net/index.php?api=1",
     "bet_count": 2,
+    "zodiac_bet_count": 3,
+    "bet_per_note": 50,
     "cache_file": "newmacau_cache.json",
-    "cache_max_age_hours": 6,  # 缓存超过这个时长，即使联网失败也会提示数据可能过旧
     "zodiac_year": 2026,
+
+    # ---- 综合版参数（可自行调参，配合下方回测对比效果）----
+    "recency_decay": 0.90,   # 时间衰减系数：越接近1，各期权重越平均；越小，越偏重最近几期
+    "weight_freq": 0.45,     # 近期加权频率 权重
+    "weight_gap": 0.25,      # 遗漏值      权重
+    "weight_trans": 0.30,    # 状态转移概率 权重
+    "backtest_periods": 20,  # 回测期数（原版为10，调大以获得更可靠的统计）
 }
 
+# 波色定义
 RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
 BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 
+# 生肖顺序（鼠年为基准，2020年 = 鼠年）
 ZODIAC_ORDER = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
 ZODIAC_BASE_YEAR = 2020
+
+HALFHALF_CATEGORIES = [c + s for c in ["红", "蓝", "绿"] for s in ["大", "小"]]
 
 def build_zodiac_map(year):
     current_idx = (year - ZODIAC_BASE_YEAR) % 12
@@ -86,77 +76,21 @@ def get_halfhalf(n):
 def get_zodiac(n):
     return ZODIAC_MAP.get(n, "?")
 
-
-# ============ 真实理论概率（不是假设的均匀分布，是按1-49实际统计出来的） ============
-# 例如红/蓝/绿的号码数并不是各1/3（17红/16蓝/16绿），大小也不是各1/2（25大/24小）。
-# 用真实值做基准，比赛前假设"均匀分布"更准确。
-
-def build_theory_probs():
-    all_nums = list(range(1, 50))
-    def dist(func):
-        c = defaultdict(int)
-        for n in all_nums:
-            c[func(n)] += 1
-        return {k: v / 49 for k, v in c.items()}
-
-    return {
-        "color": dist(get_color),
-        "size": dist(get_size),
-        "odd": dist(get_odd),
-        "halfhalf": dist(get_halfhalf),
-        "zodiac": dist(get_zodiac),
-    }
-
-THEORY = build_theory_probs()
-
-# 随机瞎猜基准（用于回测报告里明确对比）
-RANDOM_BASELINE = {
-    "halfwave_top2": 2 / len(THEORY["halfhalf"]),  # Top2推荐下瞎猜命中率
-    "zodiac_top3": 3 / len(THEORY["zodiac"]),        # Top3推荐下瞎猜命中率
-}
-
-
 def parse_numbers(text):
     nums = re.findall(r"\d+", text)
     return [int(x) for x in nums if 1 <= int(x) <= 49]
 
-
-def fetch_new_macau(limit):
-    """
-    修复版：优先联网拉最新数据；只有联网失败时才退回缓存，
-    并明确告知用户这是缓存数据（可能不是最新一期）。
-    """
-    fresh_rows = _fetch_from_network(limit)
-    if fresh_rows:
-        try:
-            with open(CONFIG["cache_file"], "w", encoding="utf-8") as f:
-                json.dump({
-                    "fetched_at": datetime.now().isoformat(),
-                    "rows": fresh_rows,
-                }, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"⚠️ 缓存写入失败（不影响本次结果）: {e}")
-        return fresh_rows, "live"
-
-    # 联网失败，尝试用缓存
+def fetch_new_macau(limit=30):
     if os.path.exists(CONFIG["cache_file"]):
         try:
             with open(CONFIG["cache_file"], "r", encoding="utf-8") as f:
                 cached = json.load(f)
-            fetched_at = datetime.fromisoformat(cached["fetched_at"])
-            age_hours = (datetime.now() - fetched_at).total_seconds() / 3600
-            print(f"⚠️ 联网获取失败，改用本地缓存（缓存时间: {cached['fetched_at']}，"
-                  f"已过去约{age_hours:.1f}小时，可能不是最新一期！）")
-            return cached["rows"][:limit], "cache"
-        except Exception as e:
-            print(f"❌ 缓存读取也失败: {e}")
-            return [], "none"
+                print("✅ 使用缓存数据")
+                return cached[:limit]
+        except:
+            pass
 
-    print("❌ 联网失败且无本地缓存，本次无法获取数据")
-    return [], "none"
-
-
-def _fetch_from_network(limit):
+    print("正在获取最新数据...")
     try:
         req = urllib.request.Request(CONFIG["api_url"], headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=15) as response:
@@ -167,12 +101,10 @@ def _fetch_from_network(limit):
             if item.get("name", "").strip() == "新澳门彩":
                 for line in item.get("history", []):
                     nums = parse_numbers(line)
-                    if len(nums) < 7:
-                        continue
+                    if len(nums) < 7: continue
                     special = nums[-1]
                     m = re.search(r"(20\d{5,8})", line)
-                    if not m:
-                        continue
+                    if not m: continue
                     raw = m.group(1)
                     issue = raw[:4] + "/" + str(int(raw[4:])).zfill(3)
                     rows.append({
@@ -188,213 +120,237 @@ def _fetch_from_network(limit):
 
         rows = list({r["issue"]: r for r in rows}.values())
         rows.sort(key=lambda x: x["issue"], reverse=True)
+        with open(CONFIG["cache_file"], "w", encoding="utf-8") as f:
+            json.dump(rows, f, ensure_ascii=False, indent=2)
         return rows[:limit]
     except Exception as e:
-        print(f"📡 联网获取失败: {e}")
+        print(f"❌ 获取失败: {e}")
         return []
 
+# ============================================================
+# 简单版：基础频率统计（原版逻辑，保留作为对照基线）
+# ============================================================
 
-# ============ 显著性检验（复用z-test思路，理论概率用真实分布） ============
+class SimplePredictor:
+    def __init__(self, rows):
+        self.rows = rows[:30]
 
-def z_test(hits, n, p0):
-    if n == 0 or p0 <= 0 or p0 >= 1:
-        return 0.0, 0.0
-    p_hat = hits / n
-    se = math.sqrt(p0 * (1 - p0) / n)
-    z = (p_hat - p0) / se if se > 0 else 0.0
-    return z, p_hat
+    def freq(self, key):
+        c = defaultdict(int)
+        for r in self.rows:
+            c[r[key]] += 1
+        total = sum(c.values()) or 1
+        return {k: round(v / total * 100, 2) for k, v in c.items()}
 
+class DynamicHalfwaveSelector:
+    def __init__(self, color_pred, size_pred):
+        self.color_pred = color_pred
+        self.size_pred = size_pred
 
-def bonferroni_z_threshold(alpha, n_tests):
-    corrected_alpha = alpha / n_tests
-    z_crit = None
-    if scipy_stats is not None:
-        try:
-            z_crit = abs(scipy_stats.norm.ppf(corrected_alpha / 2))
-        except Exception:
-            z_crit = None
-    if z_crit is None:
-        table = [
-            (0.10, 1.645), (0.05, 1.96), (0.01, 2.576),
-            (0.005, 2.807), (0.001, 3.291), (0.0005, 3.481),
-            (0.0001, 3.891), (0.00005, 4.056), (0.00001, 4.417),
-        ]
-        if corrected_alpha >= table[0][0]:
-            z_crit = table[0][1]
-        elif corrected_alpha <= table[-1][0]:
-            z_crit = table[-1][1]
-        else:
-            for (a1, z1), (a2, z2) in zip(table, table[1:]):
-                if a2 <= corrected_alpha <= a1:
-                    frac = (math.log(corrected_alpha) - math.log(a1)) / (math.log(a2) - math.log(a1))
-                    z_crit = z1 + frac * (z2 - z1)
-                    break
-    return z_crit, corrected_alpha
+    def select_best(self, count=2):
+        scores = {}
+        for c in ["红", "蓝", "绿"]:
+            for s in ["大", "小"]:
+                scores[c + s] = self.color_pred.get(c, 33.3) * 0.5 + self.size_pred.get(s, 50) * 0.5
+        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        result, used = [], set()
+        for hw, score in sorted_scores:
+            color = hw[0]
+            if color not in used:
+                result.append((hw, score))
+                used.add(color)
+            if len(result) >= count:
+                break
+        return result[:count]
 
+class SimpleZodiacSelector:
+    def __init__(self, zodiac_pred):
+        self.zodiac_pred = zodiac_pred
 
-# 一共测试的类别数：颜色3 + 大小2 + 单双2 + 半波6 + 生肖12 = 25
-N_TOTAL_TESTS = sum(len(THEORY[k]) for k in ["color", "size", "odd", "halfhalf", "zodiac"])
+    def select_best(self, count=3):
+        full = {a: self.zodiac_pred.get(a, 0.0) for a in ZODIAC_ORDER}
+        return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
 
+# ============================================================
+# 综合版：近期加权频率 + 遗漏值 + 状态转移 的融合预测器
+# ============================================================
 
-def test_all_categories(rows, key, window, z_threshold):
-    """对某个维度（如'size'）下的每个类别做z-test，返回每个类别的结果"""
-    if len(rows) < window:
+def recency_weighted_freq(rows, key, decay=0.9):
+    """rows[0] 为最近一期；越靠前权重越高"""
+    scores = defaultdict(float)
+    total_weight = 0.0
+    for i, r in enumerate(rows):
+        w = decay ** i
+        scores[r[key]] += w
+        total_weight += w
+    if total_weight == 0:
         return {}
-    recent = rows[-window:]
-    n = len(recent)
-    counts = defaultdict(int)
-    for r in recent:
-        counts[r[key]] += 1
+    return {k: round(v / total_weight * 100, 2) for k, v in scores.items()}
 
-    results = {}
-    for category, p0 in THEORY[key].items():
-        hits = counts.get(category, 0)
-        z, p_hat = z_test(hits, n, p0)
-        results[category] = {
-            "z": z, "p_hat": p_hat, "p0": p0, "hits": hits, "n": n,
-            "significant": z >= z_threshold,
-        }
-    return results
+def gap_map(rows, key, categories):
+    """每个类别距上次出现的期数（0=上一期刚出现，值越大遗漏越久）"""
+    gaps = {}
+    for cat in categories:
+        gap = len(rows)  # 从未出现，取样本长度
+        for i, r in enumerate(rows):
+            if r[key] == cat:
+                gap = i
+                break
+        gaps[cat] = gap
+    return gaps
 
+def gap_score(gaps):
+    """遗漏值越大分数越高（回补倾向，经验假设）"""
+    total = sum(gaps.values()) or 1
+    return {k: round(v / total * 100, 2) for k, v in gaps.items()}
 
-# ============ 样本外滚动回测 + 稳定性检查（沿用之前A股/彩票脚本的思路） ============
+def transition_matrix(rows, key):
+    """一阶马尔可夫转移表：较旧一期的值 -> 较新一期的值"""
+    trans = defaultdict(lambda: defaultdict(int))
+    for i in range(len(rows) - 1):
+        prev_val = rows[i + 1][key]
+        next_val = rows[i][key]
+        trans[prev_val][next_val] += 1
+    return trans
 
-def rolling_backtest_category(rows, key, category, window, z_threshold):
-    """
-    逐期滚动：用第i期之前的window期数据判断该类别是否'显著'，
-    如果显著就记录第i期实际是否命中该类别。这是真正的样本外检验。
-    """
-    events = []
-    p0 = THEORY[key][category]
-    if len(rows) < window + 1:
-        return events
+def transition_predict(trans, last_value, categories):
+    row = trans.get(last_value, {})
+    total = sum(row.values())
+    if total == 0:
+        n = len(categories) or 1
+        return {c: round(100 / n, 2) for c in categories}
+    return {c: round(row.get(c, 0) / total * 100, 2) for c in categories}
 
-    for i in range(window, len(rows)):
-        history = rows[:i]
-        actual = rows[i]
-        recent = history[-window:]
-        n = len(recent)
-        hits = sum(1 for r in recent if r[key] == category)
-        z, _ = z_test(hits, n, p0)
-        if z >= z_threshold:
-            events.append((i, actual[key] == category))
-    return events
+class EnsemblePredictor:
+    """结合近期加权频率 + 遗漏值 + 状态转移概率 的综合评分器（适用于任意分类字段）"""
+    def __init__(self, rows, categories, key,
+                 decay=None, w_freq=None, w_gap=None, w_trans=None):
+        self.rows = rows
+        self.categories = categories
+        self.key = key
+        self.decay = decay if decay is not None else CONFIG["recency_decay"]
+        self.w_freq = w_freq if w_freq is not None else CONFIG["weight_freq"]
+        self.w_gap = w_gap if w_gap is not None else CONFIG["weight_gap"]
+        self.w_trans = w_trans if w_trans is not None else CONFIG["weight_trans"]
 
+    def score(self):
+        if not self.rows:
+            n = len(self.categories) or 1
+            return {c: round(100 / n, 2) for c in self.categories}
 
-def stability_check(events, n_splits=3):
-    if not events:
-        return {"total": 0, "verdict": "从未触发"}
-    total = len(events)
-    seg_size = max(1, total // n_splits)
-    segments = []
-    for i in range(0, total, seg_size):
-        chunk = events[i:i + seg_size]
-        if not chunk:
-            continue
-        hits = sum(1 for _, h in chunk if h)
-        segments.append({"n": len(chunk), "hits": hits, "acc": hits / len(chunk) * 100})
+        freq = recency_weighted_freq(self.rows, self.key, self.decay)
+        gaps = gap_map(self.rows, self.key, self.categories)
+        gscore = gap_score(gaps)
+        trans = transition_matrix(self.rows, self.key)
+        last_value = self.rows[0][self.key]
+        tpred = transition_predict(trans, last_value, self.categories)
 
-    if len(segments) < 2:
-        verdict = "样本段数不足"
-    else:
-        spread = max(s["acc"] for s in segments) - min(s["acc"] for s in segments)
-        if spread > 20:
-            verdict = f"⚠️ 不稳定（各段相差{spread:.1f}个百分点）"
-        elif spread > 10:
-            verdict = f"📊 中等波动（各段相差{spread:.1f}个百分点）"
-        else:
-            verdict = f"✅ 相对稳定（各段相差仅{spread:.1f}个百分点）"
+        result = {}
+        for c in self.categories:
+            f = freq.get(c, 0.0)
+            g = gscore.get(c, 0.0)
+            t = tpred.get(c, 0.0)
+            result[c] = round(f * self.w_freq + g * self.w_gap + t * self.w_trans, 2)
+        return result
 
-    overall_hits = sum(1 for _, h in events if h)
-    return {
-        "total": total,
-        "overall_acc": overall_hits / total * 100,
-        "segments": segments,
-        "verdict": verdict,
-    }
+    def select_best(self, count=3):
+        s = self.score()
+        return sorted(s.items(), key=lambda x: x[1], reverse=True)[:count]
 
+# ============================================================
+# 回测：简单版 vs 综合版
+# ============================================================
 
-def run_backtest_report(rows, z_threshold):
-    print(f"\n{'='*90}")
-    print(f"📈 样本外回测 + 稳定性检查（窗口={CONFIG['backtest_window']}期，"
-          f"z阈值={z_threshold:.2f}，共{len(rows)}期数据）")
-    print("=" * 90)
-
-    for key, label in [("size", "大小"), ("odd", "单双"), ("color", "颜色")]:
-        print(f"\n【{label}】")
-        for category in THEORY[key]:
-            events = rolling_backtest_category(rows, key, category, CONFIG["backtest_window"], z_threshold)
-            report = stability_check(events)
-            if report["total"] == 0:
-                print(f"  {category}: 历史从未触发显著信号")
-                continue
-            print(f"  {category}: 触发{report['total']}次，命中率{report['overall_acc']:.1f}% "
-                  f"(理论基准{THEORY[key][category]*100:.1f}%) → {report['verdict']}")
-
-
-# ============ 主流程 ============
-
-def main():
-    z_crit, corrected_alpha = bonferroni_z_threshold(alpha=0.05, n_tests=N_TOTAL_TESTS)
-
-    print("=" * 90)
-    print("新澳门彩预测系统 v2（缓存修复 + 显著性检验 + 随机基准对比）")
-    print(f"生肖年份基准: {CONFIG['zodiac_year']}年")
-    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 90)
-    print(f"\n📐 本次共测试 {N_TOTAL_TESTS} 个类别（颜色3+大小2+单双2+半波12+生肖12）")
-    print(f"   Bonferroni校正后 z阈值 = {z_crit:.2f}（原始1.96 → 校正后更严格，减少假阳性）")
-
-    rows, source = fetch_new_macau(CONFIG["history_limit"])
-    if len(rows) < CONFIG["backtest_window"] + 10:
-        print(f"❌ 数据不足{CONFIG['backtest_window']+10}期，无法做有意义的显著性回测")
+def run_backtest(rows, periods):
+    total = min(periods, len(rows) - 1)
+    if total <= 0:
+        print("❌ 数据不足以回测")
         return
 
-    if source == "cache":
-        print("\n⚠️ 注意：以下分析基于缓存数据，不是本次联网拉取的最新数据！")
+    print(f"\n📊 详细回测（简单版 vs 综合版，共{total}期）")
+    print("=" * 118)
+    header = (f"{'期号':<12} {'实际':<8} {'实际生肖':<6} "
+              f"{'简单半波':<14}{'✓':<3} {'综合半波':<14}{'✓':<3} "
+              f"{'简单生肖':<16}{'✓':<3} {'综合生肖':<16}{'✓':<3}")
+    print(header)
+    print("-" * 118)
 
-    # 按时间正序排（rows目前是倒序：最新在前），下面统一用正序处理
-    rows_sorted = sorted(rows, key=lambda x: x["issue"])
+    hw_simple_hits = hw_ens_hits = zd_simple_hits = zd_ens_hits = 0
 
-    run_backtest_report(rows_sorted, z_crit)
+    for i in range(total):
+        history = rows[i + 1:]
+        actual = rows[i]
 
-    # 当前状态：用最近window期数据，判断当前哪些类别显著
-    print(f"\n{'='*90}")
-    print(f"🎯 当前显著性判断（最近{CONFIG['backtest_window']}期，仅显示统计显著的类别）")
-    print("=" * 90)
+        sp = SimplePredictor(history)
+        color_pred, size_pred, zod_pred = sp.freq("color"), sp.freq("size"), sp.freq("zodiac")
 
-    any_significant = False
-    for key, label in [("size", "大小"), ("odd", "单双"), ("color", "颜色"),
-                        ("halfhalf", "半波"), ("zodiac", "生肖")]:
-        results = test_all_categories(rows_sorted, key, CONFIG["backtest_window"], z_crit)
-        sig_categories = [(cat, r) for cat, r in results.items() if r["significant"]]
-        print(f"\n【{label}】")
-        if not sig_categories:
-            print("  ⏸️ 观望：没有类别达到统计显著水平")
-        else:
-            any_significant = True
-            for cat, r in sorted(sig_categories, key=lambda x: x[1]["z"], reverse=True):
-                print(f"  ✅ {cat}: z={r['z']:+.2f}（实际{r['p_hat']*100:.1f}% vs "
-                      f"理论{r['p0']*100:.1f}%，样本{r['n']}期）")
+        # 简单版
+        hw_simple = [b[0] for b in DynamicHalfwaveSelector(color_pred, size_pred).select_best(2)]
+        zd_simple = [b[0] for b in SimpleZodiacSelector(zod_pred).select_best(3)]
 
-    print(f"\n{'='*90}")
-    print("📋 随机瞎猜基准对比（用于判断推荐是否真的比瞎猜强）")
-    print("=" * 90)
-    print(f"  半波Top2推荐：瞎猜命中率基准 ≈ {RANDOM_BASELINE['halfwave_top2']*100:.1f}%")
-    print(f"  生肖Top3推荐：瞎猜命中率基准 ≈ {RANDOM_BASELINE['zodiac_top3']*100:.1f}%")
-    print("  （回测报告里的命中率如果和这两个基准接近，说明推荐≈瞎猜，没有实际价值）")
+        # 综合版
+        hw_ens = [b[0] for b in EnsemblePredictor(history, HALFHALF_CATEGORIES, "halfhalf").select_best(2)]
+        zd_ens = [b[0] for b in EnsemblePredictor(history, ZODIAC_ORDER, "zodiac").select_best(3)]
 
-    print(f"\n{'='*90}")
-    print("📋 结论")
-    print("=" * 90)
-    if not any_significant:
-        print("本次没有任何类别达到统计显著水平（含Bonferroni校正）。\n"
-              "诚实的结论是：目前没有证据支持buy大/小/单/双/半波/生肖中任何一个方向，\n"
-              "所有类别都应视为观望，而不是强行选一个'看起来概率高'的类别下注。")
-    else:
-        print("上面标✅的类别在当前窗口统计显著，但请务必看前面的『稳定性检查』结果——\n"
-              "如果对应类别的回测结果是⚠️不稳定，说明这个显著性很可能只是历史巧合，\n"
-              "不建议据此下注。")
+        hw_actual = actual["color"] + actual["size"]
+        hw_s_hit = hw_actual in hw_simple
+        hw_e_hit = hw_actual in hw_ens
+        zd_s_hit = actual["zodiac"] in zd_simple
+        zd_e_hit = actual["zodiac"] in zd_ens
+
+        hw_simple_hits += hw_s_hit
+        hw_ens_hits += hw_e_hit
+        zd_simple_hits += zd_s_hit
+        zd_ens_hits += zd_e_hit
+
+        print(f"{actual['issue']:<12} {actual['halfhalf']:<8} {actual['zodiac']:<6} "
+              f"{','.join(hw_simple):<14}{'✓' if hw_s_hit else '✗':<3} "
+              f"{','.join(hw_ens):<14}{'✓' if hw_e_hit else '✗':<3} "
+              f"{','.join(zd_simple):<16}{'✓' if zd_s_hit else '✗':<3} "
+              f"{','.join(zd_ens):<16}{'✓' if zd_e_hit else '✗':<3}")
+
+    print("-" * 118)
+    print(f"半波命中率  简单版: {hw_simple_hits}/{total} = {hw_simple_hits/total*100:.1f}%   "
+          f"综合版: {hw_ens_hits}/{total} = {hw_ens_hits/total*100:.1f}%")
+    print(f"生肖命中率  简单版: {zd_simple_hits}/{total} = {zd_simple_hits/total*100:.1f}%   "
+          f"综合版: {zd_ens_hits}/{total} = {zd_ens_hits/total*100:.1f}%")
+    print("\n💡 请以上方命中率对比为准来决定采用简单版还是综合版；")
+    print("   也可以调整 CONFIG 中的 recency_decay / weight_freq / weight_gap / weight_trans 后重新回测。")
+
+def main():
+    print("=" * 60)
+    print("新澳门彩预测系统 - 综合预测版")
+    print(f"生肖年份基准: {CONFIG['zodiac_year']}年")
+    print("=" * 60)
+
+    rows = fetch_new_macau(CONFIG["history_limit"])
+    if len(rows) < 10:
+        print("❌ 数据不足")
+        return
+
+    run_backtest(rows, CONFIG["backtest_periods"])
+
+    # ---- 当前预测 ----
+    sp = SimplePredictor(rows)
+    color_pred, size_pred, odd_pred, zod_pred = sp.freq("color"), sp.freq("size"), sp.freq("odd"), sp.freq("zodiac")
+
+    print("\n🎯 当前最新预测（近30期基础统计）")
+    print("颜色:", dict(sorted(color_pred.items(), key=lambda x: x[1], reverse=True)))
+    print("大小:", size_pred)
+    print("单双:", odd_pred)
+
+    hw_simple = DynamicHalfwaveSelector(color_pred, size_pred).select_best(CONFIG["bet_count"])
+    hw_ens = EnsemblePredictor(rows, HALFHALF_CATEGORIES, "halfhalf").select_best(CONFIG["bet_count"])
+    zd_simple = SimpleZodiacSelector(zod_pred).select_best(CONFIG["zodiac_bet_count"])
+    zd_ens = EnsemblePredictor(rows, ZODIAC_ORDER, "zodiac").select_best(CONFIG["zodiac_bet_count"])
+
+    print("\n💡 半波推荐")
+    print("  简单版:", ", ".join(f"{hw}({s:.1f})" for hw, s in hw_simple))
+    print("  综合版:", ", ".join(f"{hw}({s:.1f})" for hw, s in hw_ens))
+
+    print("\n💡 生肖推荐")
+    print("  简单版:", ", ".join(f"{z}({s:.1f})" for z, s in zd_simple))
+    print("  综合版:", ", ".join(f"{z}({s:.1f})" for z, s in zd_ens))
 
 if __name__ == "__main__":
     main()
