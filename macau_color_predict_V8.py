@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - 诚实版（最近3期预测）
+新澳门彩预测系统 - 诚实版
 """
 
 import re
@@ -19,7 +19,7 @@ CONFIG = {
     "cache_file": "newmacau_cache.json",
     "zodiac_year": 2026,
     "test_periods": 10,
-    "min_history": 3,  # 🔧 改为最近3期预测
+    "min_history": 5,  # 🔧 每期只用最近5期预测
 }
 
 RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
@@ -147,8 +147,8 @@ class FrequencyPredictor:
     def predict_size(self):
         return sorted(self.freq("size").items(), key=lambda x: x[1], reverse=True)
 
-# ========== 滑动窗口回测（基于最近3期） ==========
-def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=3):
+# ========== 滑动窗口回测（修复版） ==========
+def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
     """滑动窗口分析：每个窗口内，每期只用该期之前的min_history期预测"""
     if len(all_rows) < min_history + window_size:
         return []
@@ -162,7 +162,7 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=3):
         valid = 0
         
         for i, test_row in enumerate(test_set):
-            # 🔧 取测试期之后的min_history期作为历史
+            # 🔧 修复：取测试期之后的min_history期作为历史
             hist_start = start + window_size - i
             history = all_rows[hist_start:hist_start + min_history]
             
@@ -203,8 +203,8 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=3):
     
     return results
 
-# ========== 主回测（基于最近3期） ==========
-def honest_backtest(all_rows, test_periods=10, min_history=3):
+# ========== 主回测（修复版） ==========
+def honest_backtest(all_rows, test_periods=10, min_history=5):
     """诚实回测：每期只用该期之前min_history期预测"""
     if len(all_rows) < min_history + test_periods:
         print(f"❌ 数据不足")
@@ -221,7 +221,7 @@ def honest_backtest(all_rows, test_periods=10, min_history=3):
     hw_hits = zd_hits = odd_hits = color_hits = size_hits = 0
     
     for i, test_row in enumerate(test_set):
-        # 🔧 取测试期之后固定min_history期
+        # 🔧 修复：取测试期之后固定min_history期
         hist_start = test_periods - i
         history = all_rows[hist_start:hist_start + min_history]
         
@@ -282,7 +282,7 @@ def honest_backtest(all_rows, test_periods=10, min_history=3):
 # ========== 主函数 ==========
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - 诚实版（最近3期预测）")
+    print("新澳门彩预测系统 - 诚实版")
     print("基于滑动窗口分析的简单频率统计")
     print("=" * 60)
     
@@ -322,20 +322,17 @@ def main():
     
     # 最新预测
     print(f"\n{'='*60}")
-    print(f"🎯 最新预测（基于最近{CONFIG['min_history']}期简单频率统计）")
+    print(f"🎯 最新预测（基于全部{len(all_rows)}期简单频率统计）")
     print(f"{'='*60}")
     
-    # 取最近3期作为预测依据
-    recent_history = all_rows[:CONFIG["min_history"]]
-    predictor = FrequencyPredictor(recent_history)
+    predictor = FrequencyPredictor(all_rows)
     
-    print(f"\n📊 数据分布（最近{CONFIG['min_history']}期）：")
+    print(f"\n📊 数据分布（近{min(30, len(all_rows))}期）：")
     color_freq = predictor.freq("color")
     size_freq = predictor.freq("size")
     odd_freq = predictor.freq("odd")
     zodiac_freq = predictor.freq("zodiac")
     
-    print(f"  最近{CONFIG['min_history']}期号码：", [r['special'] for r in recent_history])
     print(f"  颜色：{dict(sorted(color_freq.items(), key=lambda x: x[1], reverse=True))}")
     print(f"  大小：{size_freq}")
     print(f"  单双：{odd_freq}")
@@ -358,9 +355,9 @@ def main():
     print(f"\n{'='*60}")
     print(f"📋 诚实总结：")
     print(f"{'='*60}")
-    print(f"  基于最近{CONFIG['min_history']}期预测：")
+    print(f"  经过滑动窗口分析：")
     print(f"  - 简单频率统计是最稳定的基线")
-    print(f"  - 样本量越小，波动性越大")
+    print(f"  - 复杂模型（遗漏值、转移概率）没有稳定提升")
     print(f"  - 所有维度命中率均接近随机期望")
     print(f"  - 彩票开奖本质上是独立随机事件")
     print(f"\n⚠️ 建议：理性投注，量力而行，切勿迷信任何预测。")
