@@ -2,8 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 新澳门彩预测系统 - 诚实版
-基于滑动窗口分析，发现简单频率统计已是最可靠的基线。
-放弃复杂模型，回归简单。
 """
 
 import re
@@ -21,21 +19,20 @@ CONFIG = {
     "cache_file": "newmacau_cache.json",
     "zodiac_year": 2026,
     "test_periods": 10,
-    "min_history": 5,  # 🔧 从20改为5，让预测更灵敏
+    "min_history": 5,  # 🔧 每期只用最近5期预测
 }
 
 RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
 BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 
-# 🔧 正确生肖映射：1马 2蛇 3龙 4兔 5虎 6牛 7鼠 8猪 9狗 10鸡 11猴 12羊
+# 🔧 正确生肖映射
 ZODIAC_MAP_FIXED = {
     1: "马", 2: "蛇", 3: "龙", 4: "兔", 5: "虎", 6: "牛",
     7: "鼠", 8: "猪", 9: "狗", 10: "鸡", 11: "猴", 12: "羊",
 }
 for n in range(13, 50):
-    base = ((n - 1) % 12) + 1
-    ZODIAC_MAP_FIXED[n] = ZODIAC_MAP_FIXED[base]
+    ZODIAC_MAP_FIXED[n] = ZODIAC_MAP_FIXED[((n - 1) % 12) + 1]
 
 ZODIAC_ORDER = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
 
@@ -113,9 +110,7 @@ def fetch_new_macau(limit=50):
         print(f"❌ 获取失败: {e}")
         return []
 
-# ========== 简单频率预测器（唯一可靠基线） ==========
 class FrequencyPredictor:
-    """简单频率统计 - 滑动窗口证明这是最稳定的基线"""
     def __init__(self, history):
         self.history = history
 
@@ -127,7 +122,6 @@ class FrequencyPredictor:
         return {k: round(v / total * 100, 2) for k, v in c.items()}
 
     def predict_halfhalf(self, count=2):
-        """半波预测：颜色+大小"""
         color_pred = self.freq("color")
         size_pred = self.freq("size")
         scores = {}
@@ -135,31 +129,27 @@ class FrequencyPredictor:
             for s in ["大", "小"]:
                 scores[c + s] = color_pred.get(c, 0) * 0.5 + size_pred.get(s, 0) * 0.5
         sorted_items = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        # 🔧 去掉颜色不重复限制，纯按分数取前count个
+        # 🔧 纯按分数取前count个
         return sorted_items[:count]
 
     def predict_zodiac(self, count=5):
-        """生肖预测"""
         zod_pred = self.freq("zodiac")
         full = {a: zod_pred.get(a, 0.0) for a in ZODIAC_ORDER}
         return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
 
     def predict_odd(self):
-        """单双预测"""
         odd_pred = self.freq("odd")
         return sorted(odd_pred.items(), key=lambda x: x[1], reverse=True)
 
     def predict_color(self):
-        """纯颜色预测"""
         return sorted(self.freq("color").items(), key=lambda x: x[1], reverse=True)
 
     def predict_size(self):
-        """纯大小预测"""
         return sorted(self.freq("size").items(), key=lambda x: x[1], reverse=True)
 
-# ========== 滑动窗口回测 ==========
-def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=20):
-    """滑动窗口分析：找出真实命中率范围"""
+# ========== 滑动窗口回测（修复版） ==========
+def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
+    """滑动窗口分析：每个窗口内，每期只用该期之前的min_history期预测"""
     if len(all_rows) < min_history + window_size:
         return []
     
@@ -168,28 +158,25 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=20):
     while start + window_size + min_history <= len(all_rows):
         test_set = all_rows[start:start + window_size]
         
-        hw_hits = 0
-        zd_hits = 0
-        odd_hits = 0
-        color_hits = 0
-        size_hits = 0
+        hw_hits = zd_hits = odd_hits = color_hits = size_hits = 0
         valid = 0
         
         for i, test_row in enumerate(test_set):
-            history = all_rows[start + window_size - i:]
+            # 🔧 修复：取测试期之后的min_history期作为历史
+            hist_start = start + window_size - i
+            history = all_rows[hist_start:hist_start + min_history]
+            
             if len(history) < min_history:
                 continue
             
             predictor = FrequencyPredictor(history)
             
-            # 预测
             hw_pred = [x[0] for x in predictor.predict_halfhalf(CONFIG["bet_count"])]
             zd_pred = [x[0] for x in predictor.predict_zodiac(CONFIG["zodiac_bet_count"])]
             odd_pred = predictor.predict_odd()[0][0] if predictor.predict_odd() else ""
             color_pred = predictor.predict_color()[0][0] if predictor.predict_color() else ""
             size_pred = predictor.predict_size()[0][0] if predictor.predict_size() else ""
             
-            # 判断
             if test_row["halfhalf"] in hw_pred:
                 hw_hits += 1
             if test_row["zodiac"] in zd_pred:
@@ -216,9 +203,9 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=20):
     
     return results
 
-# ========== 主回测 ==========
-def honest_backtest(all_rows, test_periods=10, min_history=20):
-    """诚实回测：展示所有维度的真实表现"""
+# ========== 主回测（修复版） ==========
+def honest_backtest(all_rows, test_periods=10, min_history=5):
+    """诚实回测：每期只用该期之前min_history期预测"""
     if len(all_rows) < min_history + test_periods:
         print(f"❌ 数据不足")
         return None
@@ -226,16 +213,17 @@ def honest_backtest(all_rows, test_periods=10, min_history=20):
     test_set = all_rows[:test_periods]
     
     print(f"\n{'='*90}")
-    print(f"📊 最近{test_periods}期回测（只用历史数据，不含未来信息）")
+    print(f"📊 最近{test_periods}期回测（每期只用前{min_history}期预测）")
     print(f"{'='*90}")
-    
     print(f"{'期号':<12} {'实际':<14} {'半波预测':<16} {'✓':<4} {'生肖预测':<28} {'✓':<4} {'单双':<6} {'颜色':<6} {'大小':<6}")
     print("-" * 100)
     
     hw_hits = zd_hits = odd_hits = color_hits = size_hits = 0
     
     for i, test_row in enumerate(test_set):
-        history = all_rows[test_periods - i:]
+        # 🔧 修复：取测试期之后固定min_history期
+        hist_start = test_periods - i
+        history = all_rows[hist_start:hist_start + min_history]
         
         if len(history) < min_history:
             continue
@@ -269,7 +257,6 @@ def honest_backtest(all_rows, test_periods=10, min_history=20):
     n = len(test_set)
     print("-" * 100)
     
-    # 理论随机期望
     print(f"\n📈 命中率统计（{n}期）vs 随机期望：")
     print(f"  {'维度':<10} {'实际命中':<12} {'随机期望':<12} {'评价':<15}")
     print(f"  {'-'*50}")
@@ -317,7 +304,6 @@ def main():
             print(f"{wr['window']:<22} {wr['hw_rate']*100:>5.1f}%  {wr['zd_rate']*100:>5.1f}%  "
                   f"{wr['odd_rate']*100:>5.1f}%  {wr['color_rate']*100:>5.1f}%  {wr['size_rate']*100:>5.1f}%")
         
-        # 汇总统计
         hw_rates = [w['hw_rate'] for w in window_results]
         zd_rates = [w['zd_rate'] for w in window_results]
         odd_rates = [w['odd_rate'] for w in window_results]
@@ -366,7 +352,6 @@ def main():
     print(f"  颜色：{color_pred[0][0]} ({color_pred[0][1]:.1f}%)")
     print(f"  大小：{size_pred[0][0]} ({size_pred[0][1]:.1f}%)")
     
-    # 诚实总结
     print(f"\n{'='*60}")
     print(f"📋 诚实总结：")
     print(f"{'='*60}")
