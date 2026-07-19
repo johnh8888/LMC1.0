@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - 诚实版
+新澳门彩预测系统 - 诚实版（增强灵敏度）
 """
 
 import re
@@ -58,6 +58,31 @@ def get_halfhalf(n):
 def get_zodiac(n):
     return ZODIAC_MAP.get(n, "?")
 
+def get_tail(n):
+    """获取尾数（0-9）"""
+    return n % 10
+
+def get_remainder(n):
+    """获取除以7的余数（0-6）"""
+    return n % 7
+
+def get_tens(n):
+    """获取十位数（0-4）"""
+    return n // 10
+
+def get_number_range(n):
+    """获取号码区间"""
+    if 1 <= n <= 9: return "1-9"
+    if 10 <= n <= 19: return "10-19"
+    if 20 <= n <= 29: return "20-29"
+    if 30 <= n <= 39: return "30-39"
+    if 40 <= n <= 49: return "40-49"
+    return ""
+
+def get_highlow(n):
+    """高/低（1-24为低，25-49为高）"""
+    return "高" if n >= 25 else "低"
+
 def parse_numbers(text):
     nums = re.findall(r"\d+", text)
     return [int(x) for x in nums if 1 <= int(x) <= 49]
@@ -98,6 +123,11 @@ def fetch_new_macau(limit=50):
                         "odd": get_odd(special),
                         "halfhalf": get_halfhalf(special),
                         "zodiac": get_zodiac(special),
+                        "tail": get_tail(special),
+                        "remainder": get_remainder(special),
+                        "tens": get_tens(special),
+                        "range": get_number_range(special),
+                        "highlow": get_highlow(special),
                     })
                 break
 
@@ -147,6 +177,73 @@ class FrequencyPredictor:
     def predict_size(self):
         return sorted(self.freq("size").items(), key=lambda x: x[1], reverse=True)
 
+    # ========== 新增灵敏预测 ==========
+    def predict_tail(self, count=3):
+        """预测尾数（0-9），更灵敏"""
+        tail_pred = self.freq("tail")
+        full = {str(i): tail_pred.get(i, 0.0) for i in range(10)}
+        return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
+
+    def predict_remainder(self, count=3):
+        """预测除以7的余数（0-6），更灵敏"""
+        rem_pred = self.freq("remainder")
+        full = {str(i): rem_pred.get(i, 0.0) for i in range(7)}
+        return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
+
+    def predict_tens(self, count=2):
+        """预测十位数（0-4）"""
+        tens_pred = self.freq("tens")
+        full = {str(i): tens_pred.get(i, 0.0) for i in range(5)}
+        return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
+
+    def predict_range(self, count=2):
+        """预测号码区间"""
+        range_pred = self.freq("range")
+        ranges = ["1-9", "10-19", "20-29", "30-39", "40-49"]
+        full = {r: range_pred.get(r, 0.0) for r in ranges}
+        return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
+
+    def predict_highlow(self):
+        """预测高低"""
+        hl_pred = self.freq("highlow")
+        return sorted(hl_pred.items(), key=lambda x: x[1], reverse=True)
+
+    def predict_specific_number(self, count=5):
+        """预测具体号码（基于多维度综合评分）"""
+        scores = defaultdict(float)
+        
+        # 获取各维度预测
+        tail_pred = {int(k): v for k, v in self.predict_tail(5)}
+        rem_pred = {int(k): v for k, v in self.predict_remainder(5)}
+        tens_pred = {int(k): v for k, v in self.predict_tens(3)}
+        range_pred = self.predict_range(3)
+        color_pred = {k: v for k, v in self.predict_color()}
+        odd_pred = {k: v for k, v in self.predict_odd()}
+        size_pred = {k: v for k, v in self.predict_size()}
+        
+        for num in range(1, 50):
+            score = 0
+            tail = get_tail(num)
+            rem = get_remainder(num)
+            tens = get_tens(num)
+            range_name = get_number_range(num)
+            color = get_color(num)
+            odd = get_odd(num)
+            size = get_size(num)
+            
+            # 加权综合评分
+            score += tail_pred.get(tail, 0) * 0.25
+            score += rem_pred.get(rem, 0) * 0.15
+            score += tens_pred.get(tens, 0) * 0.10
+            score += sum(v for r, v in range_pred if r == range_name) * 0.15
+            score += color_pred.get(color, 0) * 0.15
+            score += odd_pred.get(odd, 0) * 0.10
+            score += size_pred.get(size, 0) * 0.10
+            
+            scores[num] = round(score, 2)
+        
+        return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:count]
+
 # ========== 滑动窗口回测（修复版） ==========
 def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
     """滑动窗口分析：每个窗口内，每期只用该期之前的min_history期预测"""
@@ -159,6 +256,7 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
         test_set = all_rows[start:start + window_size]
         
         hw_hits = zd_hits = odd_hits = color_hits = size_hits = 0
+        tail_hits = rem_hits = tens_hits = range_hits = hl_hits = 0
         valid = 0
         
         for i, test_row in enumerate(test_set):
@@ -176,6 +274,11 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
             odd_pred = predictor.predict_odd()[0][0] if predictor.predict_odd() else ""
             color_pred = predictor.predict_color()[0][0] if predictor.predict_color() else ""
             size_pred = predictor.predict_size()[0][0] if predictor.predict_size() else ""
+            tail_pred = [int(x[0]) for x in predictor.predict_tail(3)]
+            rem_pred = [int(x[0]) for x in predictor.predict_remainder(3)]
+            tens_pred = [int(x[0]) for x in predictor.predict_tens(2)]
+            range_pred = [x[0] for x in predictor.predict_range(2)]
+            hl_pred = predictor.predict_highlow()[0][0] if predictor.predict_highlow() else ""
             
             if test_row["halfhalf"] in hw_pred:
                 hw_hits += 1
@@ -187,6 +290,16 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
                 color_hits += 1
             if test_row["size"] == size_pred:
                 size_hits += 1
+            if test_row["tail"] in tail_pred:
+                tail_hits += 1
+            if test_row["remainder"] in rem_pred:
+                rem_hits += 1
+            if test_row["tens"] in tens_pred:
+                tens_hits += 1
+            if test_row["range"] in range_pred:
+                range_hits += 1
+            if test_row["highlow"] == hl_pred:
+                hl_hits += 1
             valid += 1
         
         if valid > 0:
@@ -197,6 +310,11 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
                 "odd_rate": odd_hits / valid,
                 "color_rate": color_hits / valid,
                 "size_rate": size_hits / valid,
+                "tail_rate": tail_hits / valid,
+                "rem_rate": rem_hits / valid,
+                "tens_rate": tens_hits / valid,
+                "range_rate": range_hits / valid,
+                "hl_rate": hl_hits / valid,
             })
         
         start += step
@@ -212,13 +330,14 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
     
     test_set = all_rows[:test_periods]
     
-    print(f"\n{'='*90}")
+    print(f"\n{'='*120}")
     print(f"📊 最近{test_periods}期回测（每期只用前{min_history}期预测）")
-    print(f"{'='*90}")
-    print(f"{'期号':<12} {'实际':<14} {'半波预测':<16} {'✓':<4} {'生肖预测':<28} {'✓':<4} {'单双':<6} {'颜色':<6} {'大小':<6}")
-    print("-" * 100)
+    print(f"{'='*120}")
+    print(f"{'期号':<12} {'实际':<10} {'半波':<8} {'生肖':<8} {'单双':<6} {'颜色':<6} {'大小':<6} {'尾数':<8} {'余数':<8} {'十位':<6} {'区间':<8} {'高低':<6}")
+    print("-" * 120)
     
     hw_hits = zd_hits = odd_hits = color_hits = size_hits = 0
+    tail_hits = rem_hits = tens_hits = range_hits = hl_hits = 0
     
     for i, test_row in enumerate(test_set):
         # 🔧 修复：取测试期之后固定min_history期
@@ -234,32 +353,48 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
         odd_pred = predictor.predict_odd()[0][0]
         color_pred = predictor.predict_color()[0][0]
         size_pred = predictor.predict_size()[0][0]
+        tail_pred = [int(x[0]) for x in predictor.predict_tail(3)]
+        rem_pred = [int(x[0]) for x in predictor.predict_remainder(3)]
+        tens_pred = [int(x[0]) for x in predictor.predict_tens(2)]
+        range_pred = [x[0] for x in predictor.predict_range(2)]
+        hl_pred = predictor.predict_highlow()[0][0]
         
-        actual_full = f"{test_row['halfhalf']}({test_row['odd']})"
+        actual = f"{test_row['special']:02d}"
         
         hw_hit = test_row["halfhalf"] in hw_pred
         zd_hit = test_row["zodiac"] in zd_pred
         odd_hit = test_row["odd"] == odd_pred
         color_hit = test_row["color"] == color_pred
         size_hit = test_row["size"] == size_pred
+        tail_hit = test_row["tail"] in tail_pred
+        rem_hit = test_row["remainder"] in rem_pred
+        tens_hit = test_row["tens"] in tens_pred
+        range_hit = test_row["range"] in range_pred
+        hl_hit = test_row["highlow"] == hl_pred
         
         hw_hits += hw_hit
         zd_hits += zd_hit
         odd_hits += odd_hit
         color_hits += color_hit
         size_hits += size_hit
+        tail_hits += tail_hit
+        rem_hits += rem_hit
+        tens_hits += tens_hit
+        range_hits += range_hit
+        hl_hits += hl_hit
         
-        print(f"{test_row['issue']:<12} {actual_full:<14} "
-              f"{','.join(hw_pred):<16} {'✓' if hw_hit else '✗':<4} "
-              f"{','.join(zd_pred):<28} {'✓' if zd_hit else '✗':<4} "
-              f"{odd_pred:<6} {color_pred:<6} {size_pred:<6}")
+        print(f"{test_row['issue']:<12} {actual:<10} "
+              f"{','.join(hw_pred):<8} {','.join(zd_pred):<8} "
+              f"{odd_pred:<6} {color_pred:<6} {size_pred:<6} "
+              f"{','.join(map(str, tail_pred)):<8} {','.join(map(str, rem_pred)):<8} "
+              f"{','.join(map(str, tens_pred)):<6} {','.join(range_pred):<8} {hl_pred:<6}")
     
     n = len(test_set)
-    print("-" * 100)
+    print("-" * 120)
     
     print(f"\n📈 命中率统计（{n}期）vs 随机期望：")
-    print(f"  {'维度':<10} {'实际命中':<12} {'随机期望':<12} {'评价':<15}")
-    print(f"  {'-'*50}")
+    print(f"  {'维度':<12} {'实际命中':<12} {'随机期望':<12} {'评价':<15}")
+    print(f"  {'-'*55}")
     
     metrics = [
         ("半波(2选)", hw_hits/n, 2/6, "6种半波选2"),
@@ -267,22 +402,30 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
         ("单双(1选)", odd_hits/n, 1/2, "2选1"),
         ("颜色(1选)", color_hits/n, 1/3, "3选1"),
         ("大小(1选)", size_hits/n, 1/2, "2选1"),
+        ("尾数(3选)", tail_hits/n, 3/10, "10个尾数选3"),
+        ("余数(3选)", rem_hits/n, 3/7, "7个余数选3"),
+        ("十位(2选)", tens_hits/n, 2/5, "5个十位选2"),
+        ("区间(2选)", range_hits/n, 2/5, "5个区间选2"),
+        ("高低(1选)", hl_hits/n, 1/2, "2选1"),
     ]
     
     for name, actual, expected, note in metrics:
         diff = actual - expected
         emoji = "✅" if diff > 0.05 else ("⚠️" if diff > -0.05 else "❌")
-        print(f"  {name:<10} {actual*100:>6.1f}%     {expected*100:>6.1f}%     {emoji} {diff*100:+.1f}% ({note})")
+        print(f"  {name:<12} {actual*100:>6.1f}%     {expected*100:>6.1f}%     {emoji} {diff*100:+.1f}% ({note})")
     
     return {
         "hw": hw_hits/n, "zd": zd_hits/n, "odd": odd_hits/n,
-        "color": color_hits/n, "size": size_hits/n
+        "color": color_hits/n, "size": size_hits/n,
+        "tail": tail_hits/n, "rem": rem_hits/n,
+        "tens": tens_hits/n, "range": range_hits/n,
+        "hl": hl_hits/n
     }
 
 # ========== 主函数 ==========
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - 诚实版")
+    print("新澳门彩预测系统 - 诚实版（增强灵敏度）")
     print("基于滑动窗口分析的简单频率统计")
     print("=" * 60)
     
@@ -298,17 +441,20 @@ def main():
     window_results = sliding_window_analysis(all_rows, 10, 5, CONFIG["min_history"])
     
     if window_results:
-        print(f"\n{'窗口':<22} {'半波':<8} {'生肖':<8} {'单双':<8} {'颜色':<8} {'大小':<8}")
-        print("-" * 65)
+        print(f"\n{'窗口':<22} {'半波':<8} {'生肖':<8} {'单双':<8} {'颜色':<8} {'大小':<8} {'尾数':<8} {'余数':<8}")
+        print("-" * 80)
         for wr in window_results:
             print(f"{wr['window']:<22} {wr['hw_rate']*100:>5.1f}%  {wr['zd_rate']*100:>5.1f}%  "
-                  f"{wr['odd_rate']*100:>5.1f}%  {wr['color_rate']*100:>5.1f}%  {wr['size_rate']*100:>5.1f}%")
+                  f"{wr['odd_rate']*100:>5.1f}%  {wr['color_rate']*100:>5.1f}%  {wr['size_rate']*100:>5.1f}%  "
+                  f"{wr['tail_rate']*100:>5.1f}%  {wr['rem_rate']*100:>5.1f}%")
         
         hw_rates = [w['hw_rate'] for w in window_results]
         zd_rates = [w['zd_rate'] for w in window_results]
         odd_rates = [w['odd_rate'] for w in window_results]
         color_rates = [w['color_rate'] for w in window_results]
         size_rates = [w['size_rate'] for w in window_results]
+        tail_rates = [w['tail_rate'] for w in window_results]
+        rem_rates = [w['rem_rate'] for w in window_results]
         
         print(f"\n📊 各维度统计（均值/范围）：")
         print(f"  半波：{sum(hw_rates)/len(hw_rates)*100:.1f}% ({min(hw_rates)*100:.0f}%-{max(hw_rates)*100:.0f}%) [随机33.3%]")
@@ -316,6 +462,8 @@ def main():
         print(f"  单双：{sum(odd_rates)/len(odd_rates)*100:.1f}% ({min(odd_rates)*100:.0f}%-{max(odd_rates)*100:.0f}%) [随机50%]")
         print(f"  颜色：{sum(color_rates)/len(color_rates)*100:.1f}% ({min(color_rates)*100:.0f}%-{max(color_rates)*100:.0f}%) [随机33.3%]")
         print(f"  大小：{sum(size_rates)/len(size_rates)*100:.1f}% ({min(size_rates)*100:.0f}%-{max(size_rates)*100:.0f}%) [随机50%]")
+        print(f"  尾数：{sum(tail_rates)/len(tail_rates)*100:.1f}% ({min(tail_rates)*100:.0f}%-{max(tail_rates)*100:.0f}%) [随机30%]")
+        print(f"  余数：{sum(rem_rates)/len(rem_rates)*100:.1f}% ({min(rem_rates)*100:.0f}%-{max(rem_rates)*100:.0f}%) [随机42.9%]")
     
     # 最近10期回测
     results = honest_backtest(all_rows, CONFIG["test_periods"], CONFIG["min_history"])
@@ -332,16 +480,28 @@ def main():
     size_freq = predictor.freq("size")
     odd_freq = predictor.freq("odd")
     zodiac_freq = predictor.freq("zodiac")
+    tail_freq = predictor.freq("tail")
+    rem_freq = predictor.freq("remainder")
+    tens_freq = predictor.freq("tens")
     
     print(f"  颜色：{dict(sorted(color_freq.items(), key=lambda x: x[1], reverse=True))}")
     print(f"  大小：{size_freq}")
     print(f"  单双：{odd_freq}")
+    print(f"  尾数：{dict(sorted(tail_freq.items(), key=lambda x: x[1], reverse=True))}")
+    print(f"  余数：{dict(sorted(rem_freq.items(), key=lambda x: x[1], reverse=True))}")
+    print(f"  十位：{dict(sorted(tens_freq.items(), key=lambda x: x[1], reverse=True))}")
     
     hw_pred = predictor.predict_halfhalf(CONFIG["bet_count"])
     zd_pred = predictor.predict_zodiac(CONFIG["zodiac_bet_count"])
     odd_pred = predictor.predict_odd()
     color_pred = predictor.predict_color()
     size_pred = predictor.predict_size()
+    tail_pred = predictor.predict_tail(3)
+    rem_pred = predictor.predict_remainder(3)
+    tens_pred = predictor.predict_tens(2)
+    range_pred = predictor.predict_range(2)
+    hl_pred = predictor.predict_highlow()
+    num_pred = predictor.predict_specific_number(5)
     
     print(f"\n⭐ 预测推荐：")
     print(f"  半波：{', '.join(f'{x}({s:.1f}%)' for x, s in hw_pred)}")
@@ -351,12 +511,21 @@ def main():
     print(f"  单双：{odd_pred[0][0]} ({odd_pred[0][1]:.1f}%)")
     print(f"  颜色：{color_pred[0][0]} ({color_pred[0][1]:.1f}%)")
     print(f"  大小：{size_pred[0][0]} ({size_pred[0][1]:.1f}%)")
+    print(f"  尾数：{', '.join(f'{x}({s:.1f}%)' for x, s in tail_pred)}")
+    print(f"  余数：{', '.join(f'{x}({s:.1f}%)' for x, s in rem_pred)}")
+    print(f"  十位：{', '.join(f'{x}({s:.1f}%)' for x, s in tens_pred)}")
+    print(f"  区间：{', '.join(f'{x}({s:.1f}%)' for x, s in range_pred)}")
+    print(f"  高低：{hl_pred[0][0]} ({hl_pred[0][1]:.1f}%)")
+    print(f"\n  综合推荐号码（前5）：")
+    for i, (num, score) in enumerate(num_pred, 1):
+        print(f"    {i}. {num:02d} (评分{score:.1f}) - {get_color(num)}{get_size(num)} {get_odd(num)} 尾{get_tail(num)} 余{get_remainder(num)}")
     
     print(f"\n{'='*60}")
     print(f"📋 诚实总结：")
     print(f"{'='*60}")
     print(f"  经过滑动窗口分析：")
     print(f"  - 简单频率统计是最稳定的基线")
+    print(f"  - 增加尾数、余数、十位、区间、高低等灵敏维度")
     print(f"  - 复杂模型（遗漏值、转移概率）没有稳定提升")
     print(f"  - 所有维度命中率均接近随机期望")
     print(f"  - 彩票开奖本质上是独立随机事件")
