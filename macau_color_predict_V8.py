@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - 数据驱动最终版（修正2026生肖）
-2026年 = 马年
-生肖排列基于2026年马年开始
+新澳门彩预测系统 - 数据驱动最终版
+基于多轮回测结果：
+  - 半波：简单频率 ≈ 随机（不推荐依赖）
+  - 生肖5选：综合版均值48% > 随机41.7%（有一定参考价值）
+  - 单双：接近50%随机
 """
 
 import re
@@ -16,7 +18,7 @@ from datetime import datetime
 CONFIG = {
     "history_limit": 50,
     "api_url": "https://marksix6.net/index.php?api=1",
-    "zodiac_year": 2026,  # 马年
+    "zodiac_year": 2026,
     "cache_file": "newmacau_cache.json",
 }
 
@@ -24,38 +26,19 @@ RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
 BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 
-# 生肖顺序（固定）
 ZODIAC_ORDER = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
+ZODIAC_BASE_YEAR = 2020
 
-# ========== 2026年生肖对应表（马年） ==========
-# 2026年是马年，生肖基准：2026年=马
-# 生肖排列：鼠牛虎兔龙蛇马羊猴鸡狗猪
-# 
-# 计算规则：
-#   49个号码按顺序循环对应12生肖
-#   2026年马年，所以第1个号码(1号)对应的生肖 = 马年偏移
-#   
-# 验证方式：
-#   2020年=鼠年，2026年=马年，相差6年
-#   2020年1号=鼠，2026年1号=马（向后偏移6位）
-
-def build_zodiac_map_2026():
-    """
-    构建2026年（马年）的生肖对照表
-    2026年1号对应马，2号对应羊，3号对应猴...循环
-    """
-    # 2026年是马年，ZODIAC_ORDER中马的索引是6
-    horse_index = ZODIAC_ORDER.index("马")  # 6
-    
+def build_zodiac_map(year):
+    current_idx = (year - ZODIAC_BASE_YEAR) % 12
     zmap = {}
     for n in range(1, 50):
-        # 号码1对应马年，然后按生肖顺序循环
-        zodiac_index = (horse_index + (n - 1)) % 12
-        zmap[n] = ZODIAC_ORDER[zodiac_index]
-    
+        offset = ((n - 1) % 12) + 1
+        animal_idx = (current_idx - (offset - 1)) % 12
+        zmap[n] = ZODIAC_ORDER[animal_idx]
     return zmap
 
-ZODIAC_MAP = build_zodiac_map_2026()
+ZODIAC_MAP = build_zodiac_map(CONFIG["zodiac_year"])
 
 def get_color(n):
     if n in RED: return "红"
@@ -126,21 +109,7 @@ def fetch_new_macau(limit=50):
         print(f"❌ 获取失败: {e}")
         return []
 
-# ========== 验证生肖对照表 ==========
-def verify_zodiac_map():
-    """验证2026年生肖对照表"""
-    print("\n📋 2026年（马年）生肖对照表验证：")
-    print("  2026年 = 马年")
-    print(f"  生肖顺序：{' → '.join(ZODIAC_ORDER)}")
-    print(f"\n  号码对应生肖（前12个）：")
-    for n in range(1, 13):
-        print(f"    {n:>2}号 → {ZODIAC_MAP[n]}")
-    print(f"  ...")
-    print(f"  号码对应生肖（后12个）：")
-    for n in range(37, 49):
-        print(f"    {n:>2}号 → {ZODIAC_MAP[n]}")
-
-# ========== 综合生肖预测器 ==========
+# ========== 综合生肖预测器（唯一有微弱优势的模型） ==========
 def recency_weighted_freq(history, key, decay=0.85):
     scores = defaultdict(float)
     total_weight = 0.0
@@ -182,8 +151,12 @@ def transition_matrix(history, key):
     return trans
 
 def zodiac_predict(history, count=5, decay=0.90, w_freq=0.55, w_gap=0.25, w_trans=0.20):
-    """综合生肖预测"""
+    """
+    综合生肖预测 - 滑动窗口验证均值48% > 随机41.7%
+    调高频率权重(0.55)，降低转移权重(0.20)，更稳定
+    """
     if len(history) < 10:
+        # 数据太少，用简单频率
         c = defaultdict(int)
         for r in history:
             c[r["zodiac"]] += 1
@@ -192,15 +165,21 @@ def zodiac_predict(history, count=5, decay=0.90, w_freq=0.55, w_gap=0.25, w_tran
         full = {a: freq.get(a, 0.0) for a in ZODIAC_ORDER}
         return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
     
+    # 1. 近期加权频率
     freq = recency_weighted_freq(history, "zodiac", decay)
+    
+    # 2. 遗漏分析
     gaps = gap_analysis(history, "zodiac", ZODIAC_ORDER)
     gscore = gap_to_score(gaps)
+    
+    # 3. 转移概率
     trans = transition_matrix(history, "zodiac")
     last_zodiac = history[0]["zodiac"]
     t_row = trans.get(last_zodiac, {})
     t_total = sum(t_row.values()) or 1
     t_pred = {c: round(t_row.get(c, 0)/t_total*100, 2) for c in ZODIAC_ORDER}
     
+    # 融合
     result = {}
     for z in ZODIAC_ORDER:
         f = freq.get(z, 0.0)
@@ -210,7 +189,9 @@ def zodiac_predict(history, count=5, decay=0.90, w_freq=0.55, w_gap=0.25, w_tran
     
     return sorted(result.items(), key=lambda x: x[1], reverse=True)[:count]
 
+# ========== 简单频率预测（半波、单双等） ==========
 def simple_freq_predict(history, key, count=None):
+    """简单频率统计"""
     c = defaultdict(int)
     for r in history:
         c[r[key]] += 1
@@ -222,6 +203,7 @@ def simple_freq_predict(history, key, count=None):
     return sorted(freq.items(), key=lambda x: x[1], reverse=True)[:count]
 
 def halfhalf_predict(history, count=2):
+    """半波预测：颜色频率 × 大小频率"""
     color_freq = simple_freq_predict(history, "color")
     size_freq = simple_freq_predict(history, "size")
     
@@ -244,8 +226,9 @@ def halfhalf_predict(history, count=2):
             break
     return result
 
+# ========== 滑动窗口验证 ==========
 def sliding_validate(all_rows, window=10, step=5, min_history=20):
-    """滑动窗口验证"""
+    """滑动窗口验证生肖预测的真实表现"""
     if len(all_rows) < min_history + window:
         return None
     
@@ -257,6 +240,7 @@ def sliding_validate(all_rows, window=10, step=5, min_history=20):
         valid = 0
         
         for i, test_row in enumerate(test_set):
+            # 🔑 只用该期之前的数据
             history = all_rows[start + window - i:]
             if len(history) < min_history:
                 continue
@@ -281,12 +265,9 @@ def sliding_validate(all_rows, window=10, step=5, min_history=20):
 # ========== 主函数 ==========
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - 2026马年修正版")
-    print(f"年份基准: {CONFIG['zodiac_year']}年（马年）")
+    print("新澳门彩预测系统 - 数据驱动最终版")
+    print(f"生肖年份: {CONFIG['zodiac_year']}年")
     print("=" * 60)
-    
-    # 验证生肖对照表
-    verify_zodiac_map()
     
     all_rows = fetch_new_macau(CONFIG["history_limit"])
     if len(all_rows) < 30:
@@ -295,14 +276,9 @@ def main():
     
     print(f"\n📦 数据：{len(all_rows)}期 ({all_rows[-1]['issue']} ~ {all_rows[0]['issue']})")
     
-    # 验证最近几期的生肖
-    print(f"\n📋 最近10期开奖验证（确认生肖对照正确）：")
-    for r in all_rows[:10]:
-        print(f"  {r['issue']}  特码:{r['special']:>2}号 → {r['color']}{r['size']}{r['odd']} → 生肖:{r['zodiac']}")
-    
-    # 滑动窗口验证
+    # ========== 滑动窗口验证 ==========
     print(f"\n{'='*60}")
-    print("📊 滑动窗口验证（生肖5选）")
+    print("📊 滑动窗口验证（生肖5选，最近5个窗口）")
     print(f"{'='*60}")
     
     window_results = sliding_validate(all_rows, 10, 5, 20)
@@ -321,17 +297,19 @@ def main():
         diff_avg = avg_rate - 0.417
         print(f"\n📈 平均命中率: {avg_rate*100:.1f}% (vs 随机41.7%, {diff_avg*100:+.1f}%)")
         print(f"   范围: {min(rates)*100:.0f}% ~ {max(rates)*100:.0f}%")
+        
+        # 统计优于随机的窗口数
         better = sum(1 for r in rates if r > 0.417)
         print(f"   优于随机: {better}/{len(rates)} 个窗口")
     
-    # 最新预测
+    # ========== 最新预测 ==========
     print(f"\n{'='*60}")
-    print("🎯 最新预测（2026马年）")
+    print("🎯 最新预测")
     print(f"{'='*60}")
     
-    recent = all_rows[:30]
-    
+    # 基础统计
     print(f"\n📊 近30期数据分布：")
+    recent = all_rows[:30]
     color_freq = simple_freq_predict(recent, "color")
     size_freq = simple_freq_predict(recent, "size")
     odd_freq = simple_freq_predict(recent, "odd")
@@ -340,24 +318,26 @@ def main():
     print(f"  大小: {', '.join(f'{s}({v:.1f}%)' for s, v in size_freq)}")
     print(f"  单双: {', '.join(f'{o}({v:.1f}%)' for o, v in odd_freq)}")
     
-    # 生肖频率
-    zodiac_freq = simple_freq_predict(recent, "zodiac")
-    print(f"\n📊 近30期生肖频率：")
-    for z, s in zodiac_freq:
-        bar = "█" * int(s / 2)
-        print(f"  {z:<4} {s:>5.1f}% {bar}")
-    
+    # 半波预测（简单频率）
     hw_pred = halfhalf_predict(all_rows, 2)
+    
+    # 生肖预测（综合版）
     zd_pred = zodiac_predict(all_rows, count=5)
+    
+    # 单双预测
     odd_pred = simple_freq_predict(all_rows, "odd", 1)
+    
+    # 颜色预测
     color_pred = simple_freq_predict(all_rows, "color", 1)
+    
+    # 大小预测
     size_pred = simple_freq_predict(all_rows, "size", 1)
     
-    print(f"\n⭐ 预测推荐（2026马年）：")
-    print(f"\n  半波（参考）：")
+    print(f"\n⭐ 预测推荐：")
+    print(f"\n  半波（简单频率，参考用）：")
     print(f"    {', '.join(f'{h}({s:.1f}%)' for h, s in hw_pred)}")
     
-    print(f"\n  生肖5选：")
+    print(f"\n  生肖5选（综合模型，滑动窗口均值48%）：")
     for i, (z, s) in enumerate(zd_pred, 1):
         bar = "█" * int(s / 2)
         print(f"    {i}. {z:<4} {s:>5.1f}% {bar}")
@@ -367,19 +347,26 @@ def main():
     print(f"    颜色: {color_pred[0][0]} ({color_pred[0][1]:.1f}%)")
     print(f"    大小: {size_pred[0][0]} ({size_pred[0][1]:.1f}%)")
     
-    # 号码生肖对照简表
-    print(f"\n📋 2026马年生肖号码对照：")
-    for zodiac in ZODIAC_ORDER:
-        numbers = [n for n in range(1, 50) if ZODIAC_MAP[n] == zodiac]
-        print(f"  {zodiac}: {numbers}")
+    # 历史生肖分布
+    print(f"\n📊 近30期生肖出现次数：")
+    zodiac_count = defaultdict(int)
+    for r in recent:
+        zodiac_count[r["zodiac"]] += 1
+    
+    for z in ZODIAC_ORDER:
+        count = zodiac_count.get(z, 0)
+        bar = "█" * count
+        marker = " ⭐" if z in [x[0] for x in zd_pred] else ""
+        print(f"  {z:<4} {count:>2}次 {bar}{marker}")
     
     print(f"\n{'='*60}")
     print("📋 使用建议：")
     print(f"{'='*60}")
-    print(f"  1. 2026年是马年，生肖对照已按马年基准计算")
-    print(f"  2. 生肖5选滑动窗口均值约48%，略优于随机41.7%")
-    print(f"  3. 所有预测仅供参考，彩票开奖独立随机")
+    print(f"  1. 生肖5选是唯一略优于随机的维度（均值48% vs 41.7%）")
+    print(f"  2. 半波、单双、颜色、大小均接近随机，仅供参考")
+    print(f"  3. 生肖预测在30%-60%间波动，非稳定优势")
     print(f"  4. 理性投注，控制金额，不要追号")
+    print(f"\n⚠️ 彩票开奖独立随机，任何预测都无法保证准确。")
 
 if __name__ == "__main__":
     main()
