@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - 自适应窗口版
-3个不同窗口（5期/10期/15期）各自预测，根据近期命中率自动选择最佳窗口
+新澳门彩预测系统 - 固定5期窗口版
+每期用最近5期频率预测下一期
 """
 
 import re
@@ -18,8 +18,8 @@ CONFIG = {
     "bet_count": 2,
     "zodiac_bet_count": 5,
     "cache_file": "newmacau_cache.json",
-    "test_periods": 20,        # 回测期数
-    "validate_periods": 10,    # 用最近N期验证哪个窗口最好
+    "test_periods": 20,
+    "window_size": 5,           # 固定5期窗口
 }
 
 RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
@@ -145,90 +145,30 @@ class FrequencyPredictor:
         return sorted(self.freq("size").items(), key=lambda x: x[1], reverse=True)
 
 
-# ========== 自适应窗口选择器 ==========
-def evaluate_window(rows, window_size, validate_periods):
-    """用最近validate_periods期验证某个窗口大小的命中率"""
-    if len(rows) < window_size + validate_periods:
-        return 0, 0
+# ========== 固定5期回测 ==========
+def backtest_5window(all_rows, test_periods=20):
+    """逐期回测：每期用前5期预测"""
+    window = CONFIG["window_size"]
     
-    hw_hits = 0
-    zd_hits = 0
-    
-    for i in range(validate_periods):
-        hist_start = validate_periods - i
-        history = rows[hist_start:hist_start + window_size]
-        
-        if len(history) < window_size:
-            continue
-        
-        predictor = FrequencyPredictor(history)
-        hw_pred = [x[0] for x in predictor.predict_halfhalf(CONFIG["bet_count"])]
-        zd_pred = [x[0] for x in predictor.predict_zodiac(CONFIG["zodiac_bet_count"])]
-        
-        actual = rows[i]
-        if actual["halfhalf"] in hw_pred:
-            hw_hits += 1
-        if actual["zodiac"] in zd_pred:
-            zd_hits += 1
-    
-    n = min(validate_periods, len(rows) - window_size)
-    return hw_hits / n if n > 0 else 0, zd_hits / n if n > 0 else 0
-
-
-def auto_select_window(rows, validate_periods=10):
-    """自动选择最佳窗口大小"""
-    windows = [5, 10, 15]
-    
-    print(f"\n{'='*60}")
-    print(f"🔍 自适应窗口选择（验证最近{validate_periods}期）")
-    print(f"{'='*60}")
-    print(f"\n{'窗口':<10} {'半波命中':<12} {'生肖命中':<12} {'综合得分':<12}")
-    print("-" * 50)
-    
-    best_window = None
-    best_score = -1
-    
-    for w in windows:
-        hw_rate, zd_rate = evaluate_window(rows, w, validate_periods)
-        score = hw_rate * 0.5 + zd_rate * 0.5  # 综合得分
-        
-        if score > best_score:
-            best_score = score
-            best_window = w
-        
-        print(f"  {w}期{'':<6} {hw_rate*100:>5.1f}%      {zd_rate*100:>5.1f}%      {score*100:>5.1f}%")
-    
-    print(f"\n✅ 最佳窗口：{best_window}期（综合得分{best_score*100:.1f}%）")
-    return best_window
-
-
-# ========== 回测（使用自动选择的窗口） ==========
-def adaptive_backtest(all_rows, test_periods=20, validate_periods=10):
-    """自适应回测：先用验证期选窗口，再用选中的窗口预测测试期"""
-    if len(all_rows) < validate_periods + test_periods:
+    if len(all_rows) < window + test_periods:
         print(f"❌ 数据不足")
         return None
     
-    # 分割数据：验证期 + 测试期
-    validate_set = all_rows[:validate_periods]
-    test_set = all_rows[validate_periods:validate_periods + test_periods]
-    
-    # 自动选择最佳窗口
-    best_window = auto_select_window(all_rows, validate_periods)
+    test_set = all_rows[:test_periods]
     
     print(f"\n{'='*90}")
-    print(f"📊 回测：最近{test_periods}期（使用{best_window}期窗口预测）")
+    print(f"📊 逐期回测：最近{test_periods}期（每期用前{window}期预测）")
     print(f"{'='*90}")
-    print(f"{'期号':<12} {'实际':<14} {'半波预测':<16} {'✓':<4} {'生肖预测':<28} {'✓':<4} {'单双':<6} {'颜色':<6} {'大小':<6}")
-    print("-" * 100)
+    print(f"{'期号':<12} {'实际':<16} {'半波预测':<16} {'✓':<4} {'生肖预测':<28} {'✓':<4} {'单双':<6} {'颜色':<6} {'大小':<6}")
+    print("-" * 105)
     
     hw_hits = zd_hits = odd_hits = color_hits = size_hits = 0
     
     for i, test_row in enumerate(test_set):
-        hist_start = validate_periods + test_periods - i
-        history = all_rows[hist_start:hist_start + best_window]
+        hist_start = test_periods - i
+        history = all_rows[hist_start:hist_start + window]
         
-        if len(history) < best_window:
+        if len(history) < window:
             continue
         
         predictor = FrequencyPredictor(history)
@@ -252,14 +192,14 @@ def adaptive_backtest(all_rows, test_periods=20, validate_periods=10):
         color_hits += color_hit
         size_hits += size_hit
         
-        print(f"{test_row['issue']:<12} {actual_full:<14} "
+        print(f"{test_row['issue']:<12} {actual_full:<16} "
               f"{','.join(hw_pred):<16} {'✓' if hw_hit else '✗':<4} "
               f"{','.join(zd_pred):<28} {'✓' if zd_hit else '✗':<4} "
               f"{odd_pred:<6} {color_pred:<6} {size_pred:<6}")
     
     n = len(test_set)
-    print("-" * 100)
-    print(f"\n📈 命中率（{n}期，窗口={best_window}）vs 随机：")
+    print("-" * 105)
+    print(f"\n📈 命中率（{n}期，固定{window}期窗口）：")
     print(f"  {'维度':<10} {'实际':<10} {'随机':<10} {'差值':<10}")
     print(f"  {'-'*42}")
     for name, actual, expected in [
@@ -273,37 +213,37 @@ def adaptive_backtest(all_rows, test_periods=20, validate_periods=10):
         flag = "✅" if diff > 0.05 else ("⚠️" if diff > -0.05 else "❌")
         print(f"  {name:<10} {actual*100:>5.1f}%   {expected*100:>5.1f}%   {flag} {diff*100:+.1f}%")
     
-    return {"hw": hw_hits/n, "zd": zd_hits/n, "odd": odd_hits/n, "color": color_hits/n, "size": size_hits/n, "window": best_window}
+    return {"hw": hw_hits/n, "zd": zd_hits/n, "odd": odd_hits/n, "color": color_hits/n, "size": size_hits/n}
 
 
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - 自适应窗口版")
-    print("自动从5/10/15期中选最佳窗口")
+    print(f"新澳门彩预测系统 - 固定{CONFIG['window_size']}期窗口版")
     print("=" * 60)
     
     all_rows = fetch_new_macau(CONFIG["history_limit"])
     
-    # 自适应回测
-    results = adaptive_backtest(all_rows, CONFIG["test_periods"], CONFIG["validate_periods"])
+    # 回测
+    results = backtest_5window(all_rows, CONFIG["test_periods"])
     
-    # 最新预测
+    # 最新预测（用最近5期）
     print(f"\n{'='*60}")
-    print(f"🎯 最新预测")
+    print(f"🎯 最新预测（近{CONFIG['window_size']}期）")
     print(f"{'='*60}")
     
-    best_window = results["window"] if results else 10
-    
-    # 用最佳窗口预测
-    history = all_rows[:best_window]
+    history = all_rows[:CONFIG["window_size"]]
     predictor = FrequencyPredictor(history)
     
-    print(f"\n📊 使用窗口：最近{best_window}期")
+    print(f"\n📊 近{CONFIG['window_size']}期数据：")
+    for r in history:
+        print(f"  {r['issue']} {r['special']:>2}号 {r['halfhalf']}({r['odd']}) {r['zodiac']}")
+    
+    print(f"\n📊 频率分布：")
     for name, key in [("颜色", "color"), ("大小", "size"), ("单双", "odd")]:
         f = predictor.freq(key)
         print(f"  {name}: {dict(sorted(f.items(), key=lambda x: x[1], reverse=True))}")
     
-    print(f"\n📊 生肖频率：")
+    print(f"\n📊 生肖：")
     for z, s in predictor.predict_zodiac(12):
         bar = "█" * int(s)
         print(f"  {z:<4} {s:>5.1f}% {bar}")
