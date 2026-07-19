@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - 增强分析版（生肖5选）
+新澳门彩预测系统 - 2026马年修正版（正确生肖排列）
+生肖排列规则：1马2蛇3龙4兔5虎6牛7鼠8猪9狗10鸡11猴12羊
 """
 
 import re
@@ -14,41 +15,32 @@ from datetime import datetime
 CONFIG = {
     "history_limit": 50,
     "api_url": "https://marksix6.net/index.php?api=1",
-    "bet_count": 2,
-    "zodiac_bet_count": 5,  # 🔑 生肖推荐改为5个
-    "cache_file": "newmacau_cache.json",
     "zodiac_year": 2026,
-
-    # 基础参数
-    "recency_decay": 0.85,
-    "weight_freq": 0.50,
-    "weight_gap": 0.15,
-    "weight_trans": 0.35,
-    
-    # 回测配置
-    "test_periods": 10,
-    "min_history_for_predict": 20,
+    "cache_file": "newmacau_cache.json",
 }
 
 RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
 BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 
-ZODIAC_ORDER = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
-ZODIAC_BASE_YEAR = 2020
-HALFHALF_CATEGORIES = [c + s for c in ["红", "蓝", "绿"] for s in ["大", "小"]]
-ODD_CATEGORIES = ["单", "双"]
+# 标准生肖顺序（正序）
+ZODIAC_ORDER_STANDARD = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
 
-def build_zodiac_map(year):
-    current_idx = (year - ZODIAC_BASE_YEAR) % 12
-    zmap = {}
-    for n in range(1, 50):
-        offset = ((n - 1) % 12) + 1
-        animal_idx = (current_idx - (offset - 1)) % 12
-        zmap[n] = ZODIAC_ORDER[animal_idx]
-    return zmap
+# ========== 2026年马年生肖对照表（正确版） ==========
+# 规则：1马 2蛇 3龙 4兔 5虎 6牛 7鼠 8猪 9狗 10鸡 11猴 12羊
+# 这是逆序排列（马蛇龙兔虎牛鼠猪狗鸡猴羊）
+ZODIAC_MAP_2026 = {
+    1: "马", 2: "蛇", 3: "龙", 4: "兔", 5: "虎", 6: "牛",
+    7: "鼠", 8: "猪", 9: "狗", 10: "鸡", 11: "猴", 12: "羊",
+}
 
-ZODIAC_MAP = build_zodiac_map(CONFIG["zodiac_year"])
+# 自动生成13-49的对应关系
+for n in range(13, 50):
+    base = ((n - 1) % 12) + 1
+    ZODIAC_MAP_2026[n] = ZODIAC_MAP_2026[base]
+
+# 用到的12生肖（2026年的顺序）
+ZODIAC_ORDER = [ZODIAC_MAP_2026[i] for i in range(1, 13)]
 
 def get_color(n):
     if n in RED: return "红"
@@ -65,7 +57,7 @@ def get_halfhalf(n):
     return get_color(n) + get_size(n)
 
 def get_zodiac(n):
-    return ZODIAC_MAP.get(n, "?")
+    return ZODIAC_MAP_2026.get(n, "?")
 
 def parse_numbers(text):
     nums = re.findall(r"\d+", text)
@@ -119,45 +111,26 @@ def fetch_new_macau(limit=50):
         print(f"❌ 获取失败: {e}")
         return []
 
-# ========== 预测器 ==========
-class SimplePredictor:
-    def __init__(self, history):
-        self.history = history
-
-    def freq(self, key):
-        c = defaultdict(int)
-        for r in self.history:
-            c[r[key]] += 1
-        total = sum(c.values()) or 1
-        return {k: round(v / total * 100, 2) for k, v in c.items()}
-
-    def predict_halfhalf(self, count=2):
-        color_pred = self.freq("color")
-        size_pred = self.freq("size")
-        scores = {}
-        for c in ["红", "蓝", "绿"]:
-            for s in ["大", "小"]:
-                scores[c + s] = color_pred.get(c, 0) * 0.5 + size_pred.get(s, 0) * 0.5
-        sorted_items = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        result, used_colors = [], set()
-        for hw, score in sorted_items:
-            color = hw[0]
-            if color not in used_colors:
-                result.append((hw, score))
-                used_colors.add(color)
-            if len(result) >= count:
-                break
-        return result
-
-    def predict_zodiac(self, count=5):
-        zod_pred = self.freq("zodiac")
-        full = {a: zod_pred.get(a, 0.0) for a in ZODIAC_ORDER}
-        return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
+# ========== 验证 ==========
+def verify_zodiac_map():
+    """验证2026年生肖对照表"""
+    print("\n📋 2026年（马年）生肖对照表：")
+    print("  规则：1马 2蛇 3龙 4兔 5虎 6牛 7鼠 8猪 9狗 10鸡 11猴 12羊")
+    print(f"\n  完整号码对照：")
     
-    def predict_odd(self):
-        odd_pred = self.freq("odd")
-        return sorted(odd_pred.items(), key=lambda x: x[1], reverse=True)
+    for start in [1, 13, 25, 37]:
+        end = min(start + 11, 49)
+        row_str = "  "
+        for n in range(start, end + 1):
+            row_str += f"{n:>2}→{ZODIAC_MAP_2026[n]:<4}"
+        print(row_str)
+    
+    print(f"\n  生肖号码归类：")
+    for z in ZODIAC_ORDER:
+        numbers = [n for n in range(1, 50) if ZODIAC_MAP_2026[n] == z]
+        print(f"    {z}: {numbers}")
 
+# ========== 综合生肖预测器 ==========
 def recency_weighted_freq(history, key, decay=0.85):
     scores = defaultdict(float)
     total_weight = 0.0
@@ -190,358 +163,203 @@ def gap_to_score(gaps):
         scores[cat] = round(normalized ** 0.5 * 100, 2)
     return scores
 
-def transition_analysis(history, key):
+def transition_matrix(history, key):
     trans = defaultdict(lambda: defaultdict(int))
     for i in range(len(history) - 1):
-        prev_val = history[i + 1][key]
-        next_val = history[i][key]
-        trans[prev_val][next_val] += 1
+        prev = history[i + 1][key]
+        curr = history[i][key]
+        trans[prev][curr] += 1
     return trans
 
-def transition_predict(trans, last_value, categories):
-    row = trans.get(last_value, {})
-    total = sum(row.values())
-    if total == 0:
-        n = len(categories)
-        return {c: round(100/n, 2) for c in categories}
-    return {c: round(row.get(c, 0) / total * 100, 2) for c in categories}
-
-class EnsemblePredictor:
-    def __init__(self, history, categories, key,
-                 decay=0.85, w_freq=0.50, w_gap=0.15, w_trans=0.35):
-        self.history = history
-        self.categories = categories
-        self.key = key
-        self.decay = decay
-        self.w_freq = w_freq
-        self.w_gap = w_gap
-        self.w_trans = w_trans
-
-    def score(self):
-        if len(self.history) < 5:
-            n = len(self.categories)
-            return {c: round(100/n, 2) for c in self.categories}
-
-        freq = recency_weighted_freq(self.history, self.key, self.decay)
-        gaps = gap_analysis(self.history, self.key, self.categories)
-        gscore = gap_to_score(gaps)
-        trans = transition_analysis(self.history, self.key)
-        last_value = self.history[0][self.key]
-        tpred = transition_predict(trans, last_value, self.categories)
-
-        result = {}
-        for c in self.categories:
-            f = freq.get(c, 0.0)
-            g = gscore.get(c, 0.0)
-            t = tpred.get(c, 0.0)
-            result[c] = round(f * self.w_freq + g * self.w_gap + t * self.w_trans, 2)
-        return result
-
-    def predict(self, count=5):
-        s = self.score()
-        return sorted(s.items(), key=lambda x: x[1], reverse=True)[:count]
+def zodiac_predict(history, count=5, decay=0.90, w_freq=0.55, w_gap=0.25, w_trans=0.20):
+    """综合生肖预测"""
+    if len(history) < 10:
+        c = defaultdict(int)
+        for r in history:
+            c[r["zodiac"]] += 1
+        total = sum(c.values()) or 1
+        freq = {k: round(v/total*100, 2) for k, v in c.items()}
+        full = {a: freq.get(a, 0.0) for a in ZODIAC_ORDER}
+        return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
     
-    def confidence(self, top_count=5):
-        """计算预测置信度：前N名与后面的分数差距"""
-        s = self.score()
-        sorted_s = sorted(s.items(), key=lambda x: x[1], reverse=True)
-        if len(sorted_s) <= top_count:
-            return 0.0
-        top_avg = sum(x[1] for x in sorted_s[:top_count]) / top_count
-        rest_avg = sum(x[1] for x in sorted_s[top_count:]) / (len(sorted_s) - top_count)
-        if top_avg == 0:
-            return 0.0
-        confidence = (top_avg - rest_avg) / top_avg * 100
-        return round(max(0, min(100, confidence)), 1)
+    freq = recency_weighted_freq(history, "zodiac", decay)
+    gaps = gap_analysis(history, "zodiac", ZODIAC_ORDER)
+    gscore = gap_to_score(gaps)
+    trans = transition_matrix(history, "zodiac")
+    last_zodiac = history[0]["zodiac"]
+    t_row = trans.get(last_zodiac, {})
+    t_total = sum(t_row.values()) or 1
+    t_pred = {c: round(t_row.get(c, 0)/t_total*100, 2) for c in ZODIAC_ORDER}
+    
+    result = {}
+    for z in ZODIAC_ORDER:
+        f = freq.get(z, 0.0)
+        g = gscore.get(z, 0.0)
+        t = t_pred.get(z, 0.0)
+        result[z] = round(f * w_freq + g * w_gap + t * w_trans, 2)
+    
+    return sorted(result.items(), key=lambda x: x[1], reverse=True)[:count]
 
-# ========== 滑动窗口回测 ==========
-def sliding_window_backtest(all_rows, window_size=10, step=5, min_history=20):
-    if len(all_rows) < min_history + window_size:
-        print("❌ 数据不足以进行滑动窗口回测")
-        return []
+def simple_freq_predict(history, key, count=None):
+    c = defaultdict(int)
+    for r in history:
+        c[r[key]] += 1
+    total = sum(c.values()) or 1
+    freq = {k: round(v/total*100, 2) for k, v in c.items()}
+    
+    if count is None:
+        return sorted(freq.items(), key=lambda x: x[1], reverse=True)
+    return sorted(freq.items(), key=lambda x: x[1], reverse=True)[:count]
+
+def halfhalf_predict(history, count=2):
+    color_freq = simple_freq_predict(history, "color")
+    size_freq = simple_freq_predict(history, "size")
+    
+    color_dict = dict(color_freq)
+    size_dict = dict(size_freq)
+    
+    scores = {}
+    for c in ["红", "蓝", "绿"]:
+        for s in ["大", "小"]:
+            scores[c+s] = color_dict.get(c, 0) * 0.5 + size_dict.get(s, 0) * 0.5
+    
+    sorted_items = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    result, used_colors = [], set()
+    for hw, score in sorted_items:
+        color = hw[0]
+        if color not in used_colors:
+            result.append((hw, score))
+            used_colors.add(color)
+        if len(result) >= count:
+            break
+    return result
+
+def sliding_validate(all_rows, window=10, step=5, min_history=20):
+    """滑动窗口验证"""
+    if len(all_rows) < min_history + window:
+        return None
     
     results = []
     start = 0
-    while start + window_size + min_history <= len(all_rows):
-        test_set = all_rows[start:start + window_size]
-        
-        hw_hits = 0
-        zd_hits = 0
+    while start + window + min_history <= len(all_rows):
+        test_set = all_rows[start:start + window]
+        hits = 0
         valid = 0
         
         for i, test_row in enumerate(test_set):
-            history = all_rows[start + i + 1:start + i + 1 + min_history]
+            history = all_rows[start + window - i:]
             if len(history) < min_history:
                 continue
             
-            ensemble_hw = [x[0] for x in EnsemblePredictor(
-                history, HALFHALF_CATEGORIES, "halfhalf",
-                decay=CONFIG["recency_decay"],
-                w_freq=CONFIG["weight_freq"],
-                w_gap=CONFIG["weight_gap"],
-                w_trans=CONFIG["weight_trans"]
-            ).predict(CONFIG["bet_count"])]
-            
-            ensemble_zd = [x[0] for x in EnsemblePredictor(
-                history, ZODIAC_ORDER, "zodiac",
-                decay=CONFIG["recency_decay"],
-                w_freq=CONFIG["weight_freq"],
-                w_gap=CONFIG["weight_gap"],
-                w_trans=CONFIG["weight_trans"]
-            ).predict(CONFIG["zodiac_bet_count"])]
-            
-            if test_row["halfhalf"] in ensemble_hw:
-                hw_hits += 1
-            if test_row["zodiac"] in ensemble_zd:
-                zd_hits += 1
+            pred = [z for z, s in zodiac_predict(history, count=5)]
+            if test_row["zodiac"] in pred:
+                hits += 1
             valid += 1
         
         if valid > 0:
             results.append({
-                "start_issue": test_set[-1]["issue"],
-                "end_issue": test_set[0]["issue"],
-                "hw_rate": hw_hits / valid,
-                "zd_rate": zd_hits / valid,
-                "avg_rate": (hw_hits + zd_hits) / (2 * valid),
+                "window": f"{test_set[-1]['issue']}~{test_set[0]['issue']}",
+                "rate": hits / valid,
+                "hits": hits,
+                "total": valid
             })
         
         start += step
     
     return results
 
-# ========== 主回测 ==========
-def strict_backtest(all_rows, test_periods=10, min_history=20):
-    if len(all_rows) < min_history + test_periods:
-        print(f"❌ 数据不足")
-        return None
-    
-    test_set = all_rows[:test_periods]
-    
-    print(f"\n{'='*100}")
-    print(f"📊 严格回测：最近{test_periods}期（生肖{CONFIG['zodiac_bet_count']}选）")
-    print(f"{'='*100}")
-    
-    header = (f"{'期号':<12} {'实际':<12} {'简单半波':<16} {'✓':<4} "
-              f"{'综合半波':<16} {'✓':<4} {'信':<5} "
-              f"{'简单生肖':<24} {'✓':<4} {'综合生肖':<24} {'✓':<4}")
-    print(header)
-    print("-" * 130)
-    
-    simple_hw_hits = 0
-    ensemble_hw_hits = 0
-    simple_zd_hits = 0
-    ensemble_zd_hits = 0
-    
-    for i, test_row in enumerate(test_set):
-        history = all_rows[test_periods - i:]
-        
-        if len(history) < min_history:
-            continue
-        
-        # 预测
-        simple = SimplePredictor(history)
-        simple_hw = [x[0] for x in simple.predict_halfhalf(CONFIG["bet_count"])]
-        simple_zd = [x[0] for x in simple.predict_zodiac(CONFIG["zodiac_bet_count"])]
-        
-        ensemble_hw_pred = EnsemblePredictor(
-            history, HALFHALF_CATEGORIES, "halfhalf",
-            decay=CONFIG["recency_decay"],
-            w_freq=CONFIG["weight_freq"],
-            w_gap=CONFIG["weight_gap"],
-            w_trans=CONFIG["weight_trans"]
-        )
-        ensemble_zd_pred = EnsemblePredictor(
-            history, ZODIAC_ORDER, "zodiac",
-            decay=CONFIG["recency_decay"],
-            w_freq=CONFIG["weight_freq"],
-            w_gap=CONFIG["weight_gap"],
-            w_trans=CONFIG["weight_trans"]
-        )
-        
-        ensemble_hw = [x[0] for x in ensemble_hw_pred.predict(CONFIG["bet_count"])]
-        ensemble_zd = [x[0] for x in ensemble_zd_pred.predict(CONFIG["zodiac_bet_count"])]
-        
-        # 置信度
-        hw_confidence = ensemble_hw_pred.confidence(CONFIG["bet_count"])
-        
-        # 实际结果
-        actual_hw = test_row["halfhalf"]
-        actual_zd = test_row["zodiac"]
-        actual_full = f"{actual_hw} {actual_zd}"
-        
-        # 判断
-        sh_hit = actual_hw in simple_hw
-        eh_hit = actual_hw in ensemble_hw
-        sz_hit = actual_zd in simple_zd
-        ez_hit = actual_zd in ensemble_zd
-        
-        simple_hw_hits += sh_hit
-        ensemble_hw_hits += eh_hit
-        simple_zd_hits += sz_hit
-        ensemble_zd_hits += ez_hit
-        
-        # 格式化生肖列表（5个分两行显示）
-        simple_zd_str = ','.join(simple_zd[:3]) + '\n' + ' ' * 80 + ','.join(simple_zd[3:])
-        ensemble_zd_str = ','.join(ensemble_zd[:3]) + '\n' + ' ' * 104 + ','.join(ensemble_zd[3:])
-        
-        print(f"{test_row['issue']:<12} {actual_full:<12} "
-              f"{','.join(simple_hw):<16} {'✓' if sh_hit else '✗':<4} "
-              f"{','.join(ensemble_hw):<16} {'✓' if eh_hit else '✗':<4} "
-              f"{hw_confidence:>4.0f}% "
-              f"{','.join(simple_zd):<24} {'✓' if sz_hit else '✗':<4} "
-              f"{','.join(ensemble_zd):<24} {'✓' if ez_hit else '✗':<4}")
-    
-    n = len(test_set)
-    print("-" * 130)
-    
-    # 计算理论命中率
-    # 5/12 = 41.7% 是随机猜的期望命中率
-    random_baseline = CONFIG["zodiac_bet_count"] / 12 * 100
-    
-    print(f"\n📈 命中率统计（{n}期）：")
-    print(f"  {'类别':<10} {'简单版':<12} {'综合版':<12} {'随机期望':<12} {'差值':<10}")
-    print(f"  {'半波':<10} {simple_hw_hits/n*100:>6.1f}%     {ensemble_hw_hits/n*100:>6.1f}%     {'33.3%':<12} {('+' if ensemble_hw_hits > simple_hw_hits else '')}{ensemble_hw_hits - simple_hw_hits:>+d}期")
-    print(f"  {'生肖':<10} {simple_zd_hits/n*100:>6.1f}%     {ensemble_zd_hits/n*100:>6.1f}%     {random_baseline:.1f}%      {('+' if ensemble_zd_hits > simple_zd_hits else '')}{ensemble_zd_hits - simple_zd_hits:>+d}期")
-    
-    print(f"\n💡 说明：生肖{CONFIG['zodiac_bet_count']}选随机命中率={random_baseline:.1f}%")
-    
-    return {
-        "simple_hw": simple_hw_hits/n,
-        "ensemble_hw": ensemble_hw_hits/n,
-        "simple_zd": simple_zd_hits/n,
-        "ensemble_zd": ensemble_zd_hits/n,
-    }
-
 # ========== 主函数 ==========
 def main():
     print("=" * 60)
-    print(f"新澳门彩预测系统 - 增强分析版（生肖{CONFIG['zodiac_bet_count']}选）")
-    print(f"生肖年份基准: {CONFIG['zodiac_year']}年")
+    print("新澳门彩预测系统 - 2026马年（正确生肖排列）")
     print("=" * 60)
+    print("生肖规则：1马2蛇3龙4兔5虎6牛7鼠8猪9狗10鸡11猴12羊")
+    
+    # 验证
+    verify_zodiac_map()
     
     all_rows = fetch_new_macau(CONFIG["history_limit"])
-    if len(all_rows) < CONFIG["min_history_for_predict"] + CONFIG["test_periods"]:
-        print(f"❌ 数据不足")
+    if len(all_rows) < 30:
+        print("❌ 数据不足")
         return
     
-    # 严格回测
-    results = strict_backtest(all_rows, CONFIG["test_periods"], CONFIG["min_history_for_predict"])
+    print(f"\n📦 历史数据：{len(all_rows)}期")
+    print(f"  范围：{all_rows[-1]['issue']} ~ {all_rows[0]['issue']}")
     
-    # 滑动窗口回测
+    # 验证最近开奖
+    print(f"\n📋 最近10期开奖验证：")
+    print(f"  {'期号':<12} {'特码':<6} {'波色':<8} {'生肖':<6}")
+    print(f"  {'-'*35}")
+    for r in all_rows[:10]:
+        print(f"  {r['issue']:<12} {r['special']:>2}号   {r['halfhalf']:<8} {r['zodiac']:<6}")
+    
+    # 滑动窗口
     print(f"\n{'='*60}")
-    print(f"📊 滑动窗口回测（稳定性检验）")
+    print("📊 滑动窗口验证（生肖5选）")
     print(f"{'='*60}")
-    window_results = sliding_window_backtest(all_rows, 10, 5, CONFIG["min_history_for_predict"])
+    
+    window_results = sliding_validate(all_rows, 10, 5, 20)
     
     if window_results:
-        print(f"\n{'窗口':<20} {'半波命中':<10} {'生肖命中':<12} {'平均命中':<10}")
-        print("-" * 55)
+        print(f"\n  {'窗口':<22} {'命中':<8} {'命中率':<8} {'vs随机41.7%':<15}")
+        print(f"  {'-'*55}")
+        rates = []
         for wr in window_results:
-            print(f"{wr['start_issue']}~{wr['end_issue']:<8} "
-                  f"{wr['hw_rate']*100:>6.1f}%    {wr['zd_rate']*100:>6.1f}%     {wr['avg_rate']*100:>6.1f}%")
+            diff = wr['rate'] - 0.417
+            flag = "✅" if diff > 0.05 else ("⚠️" if diff > -0.05 else "❌")
+            print(f"  {wr['window']:<22} {wr['hits']}/{wr['total']:<5} {wr['rate']*100:>5.1f}%   {flag} ({diff*100:+.1f}%)")
+            rates.append(wr['rate'])
         
-        hw_rates = [w['hw_rate'] for w in window_results]
-        zd_rates = [w['zd_rate'] for w in window_results]
-        
-        print(f"\n📊 稳定性分析：")
-        print(f"  半波命中率：均值={sum(hw_rates)/len(hw_rates)*100:.1f}%, "
-              f"范围={min(hw_rates)*100:.0f}%-{max(hw_rates)*100:.0f}%")
-        print(f"  生肖命中率：均值={sum(zd_rates)/len(zd_rates)*100:.1f}%, "
-              f"范围={min(zd_rates)*100:.0f}%-{max(zd_rates)*100:.0f}%")
-        print(f"  （生肖5选随机期望=41.7%）")
+        avg_rate = sum(rates) / len(rates)
+        diff_avg = avg_rate - 0.417
+        print(f"\n  📈 均值: {avg_rate*100:.1f}% (vs 41.7%, {diff_avg*100:+.1f}%)")
+        print(f"  📊 范围: {min(rates)*100:.0f}%~{max(rates)*100:.0f}%")
+        print(f"  ✅ 优于随机: {sum(1 for r in rates if r > 0.417)}/{len(rates)} 窗口")
     
     # 最新预测
     print(f"\n{'='*60}")
-    print(f"🎯 最新预测（基于全部{len(all_rows)}期）")
+    print("🎯 最新预测")
     print(f"{'='*60}")
     
-    simple = SimplePredictor(all_rows)
-    simple_hw = simple.predict_halfhalf(CONFIG["bet_count"])
-    simple_zd = simple.predict_zodiac(CONFIG["zodiac_bet_count"])
-    simple_odd = simple.predict_odd()
+    recent = all_rows[:30]
     
-    ensemble_hw_pred = EnsemblePredictor(
-        all_rows, HALFHALF_CATEGORIES, "halfhalf",
-        decay=CONFIG["recency_decay"],
-        w_freq=CONFIG["weight_freq"],
-        w_gap=CONFIG["weight_gap"],
-        w_trans=CONFIG["weight_trans"]
-    )
-    ensemble_zd_pred = EnsemblePredictor(
-        all_rows, ZODIAC_ORDER, "zodiac",
-        decay=CONFIG["recency_decay"],
-        w_freq=CONFIG["weight_freq"],
-        w_gap=CONFIG["weight_gap"],
-        w_trans=CONFIG["weight_trans"]
-    )
-    ensemble_odd_pred = EnsemblePredictor(
-        all_rows, ODD_CATEGORIES, "odd",
-        decay=CONFIG["recency_decay"],
-        w_freq=CONFIG["weight_freq"],
-        w_gap=CONFIG["weight_gap"],
-        w_trans=CONFIG["weight_trans"]
-    )
+    print(f"\n📊 近30期统计：")
+    color_freq = simple_freq_predict(recent, "color")
+    size_freq = simple_freq_predict(recent, "size")
+    odd_freq = simple_freq_predict(recent, "odd")
     
-    ensemble_hw = ensemble_hw_pred.predict(CONFIG["bet_count"])
-    ensemble_zd = ensemble_zd_pred.predict(CONFIG["zodiac_bet_count"])
-    ensemble_odd = ensemble_odd_pred.predict(1)
+    print(f"  颜色：{', '.join(f'{c}({s:.1f}%)' for c, s in color_freq)}")
+    print(f"  大小：{', '.join(f'{s}({v:.1f}%)' for s, v in size_freq)}")
+    print(f"  单双：{', '.join(f'{o}({v:.1f}%)' for o, v in odd_freq)}")
     
-    hw_confidence = ensemble_hw_pred.confidence(CONFIG["bet_count"])
-    zd_confidence = ensemble_zd_pred.confidence(CONFIG["zodiac_bet_count"])
+    # 生肖频率
+    zodiac_freq = simple_freq_predict(recent, "zodiac")
+    print(f"\n📊 近30期生肖频率：")
+    for z, s in zodiac_freq:
+        bar = "█" * int(s)
+        print(f"  {z:<4} {s:>5.1f}% {bar}")
     
-    print(f"\n📊 基础统计：")
-    print(f"  颜色：{dict(sorted(simple.freq('color').items(), key=lambda x: x[1], reverse=True))}")
-    print(f"  大小：{simple.freq('size')}")
-    print(f"  单双：{simple.freq('odd')}")
+    # 预测
+    hw_pred = halfhalf_predict(all_rows, 2)
+    zd_pred = zodiac_predict(all_rows, count=5)
+    odd_pred = simple_freq_predict(all_rows, "odd", 1)
+    color_pred = simple_freq_predict(all_rows, "color", 1)
+    size_pred = simple_freq_predict(all_rows, "size", 1)
     
-    # 生肖完整排名
-    print(f"\n📊 生肖完整排名：")
-    all_zd_scores = ensemble_zd_pred.score()
-    zd_ranking = sorted(all_zd_scores.items(), key=lambda x: x[1], reverse=True)
-    for i, (zod, score) in enumerate(zd_ranking, 1):
-        marker = " ⭐" if i <= CONFIG["zodiac_bet_count"] else ""
-        print(f"  {i:>2}. {zod}: {score:>5.1f}分{marker}")
+    print(f"\n⭐ 推荐：")
+    print(f"\n  半波（2选）：{', '.join(f'{h}({s:.1f}%)' for h, s in hw_pred)}")
     
-    print(f"\n🎯 预测推荐：")
-    print(f"\n  半波预测（置信度：{hw_confidence}%）：")
-    print(f"    简单版：{', '.join(f'{x}({s:.1f})' for x, s in simple_hw)}")
-    print(f"    综合版：{', '.join(f'{x}({s:.1f})' for x, s in ensemble_hw)}")
+    print(f"\n  生肖（5选）：")
+    for i, (z, s) in enumerate(zd_pred, 1):
+        bar = "█" * int(s)
+        print(f"    {i}. {z:<4} {s:>5.1f}% {bar}")
     
-    print(f"\n  生肖预测（{CONFIG['zodiac_bet_count']}选，置信度：{zd_confidence}%）：")
-    print(f"    简单版：{', '.join(f'{x}({s:.1f})' for x, s in simple_zd)}")
-    print(f"    综合版：{', '.join(f'{x}({s:.1f})' for x, s in ensemble_zd)}")
+    print(f"\n  单双：{odd_pred[0][0]} ({odd_pred[0][1]:.1f}%)")
+    print(f"  颜色：{color_pred[0][0]} ({color_pred[0][1]:.1f}%)")
+    print(f"  大小：{size_pred[0][0]} ({size_pred[0][1]:.1f}%)")
     
-    print(f"\n  单双预测：")
-    print(f"    简单版：{', '.join(f'{x}({s:.1f})' for x, s in simple_odd)}")
-    print(f"    综合版：{', '.join(f'{x}({s:.1f})' for x, s in ensemble_odd)}")
-    
-    # 最终建议
-    if results:
-        print(f"\n{'='*60}")
-        print(f"📋 综合建议：")
-        if results["ensemble_hw"] > results["simple_hw"]:
-            print(f"  ✅ 半波：推荐综合版（近期命中率{results['ensemble_hw']*100:.0f}%）")
-            final_hw = ensemble_hw
-        else:
-            print(f"  ✅ 半波：推荐简单版（近期命中率{results['simple_hw']*100:.0f}%）")
-            final_hw = simple_hw
-        
-        if results["ensemble_zd"] > results["simple_zd"]:
-            print(f"  ✅ 生肖：推荐综合版（近期命中率{results['ensemble_zd']*100:.0f}%）")
-            final_zd = ensemble_zd
-        else:
-            print(f"  ✅ 生肖：推荐简单版（近期命中率{results['simple_zd']*100:.0f}%）")
-            final_zd = simple_zd
-        
-        print(f"\n⭐ 最终推荐：")
-        print(f"  半波：{', '.join(f'{x}({s:.1f})' for x, s in final_hw)}")
-        print(f"  生肖（{CONFIG['zodiac_bet_count']}选）：")
-        for i, (zod, score) in enumerate(final_zd, 1):
-            print(f"    {i}. {zod} ({score:.1f}分)")
-        print(f"  单双：{ensemble_odd[0][0]}（参考）")
-    
-    print(f"\n⚠️ 免责声明：彩票开奖独立随机，预测仅供参考。")
-    print(f"  生肖{CONFIG['zodiac_bet_count']}选理论命中率={CONFIG['zodiac_bet_count']/12*100:.1f}%")
+    print(f"\n{'='*60}")
+    print("⚠️ 彩票开奖独立随机，预测仅供参考。理性投注！")
 
 if __name__ == "__main__":
     main()
