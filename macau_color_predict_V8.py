@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注策略）
+新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注策略 + 半半波策略）
 """
 
 import re
@@ -83,6 +83,10 @@ def get_highlow(n):
     """高/低（1-24为低，25-49为高）"""
     return "高" if n >= 25 else "低"
 
+def get_halfhalf_detail(n):
+    """获取半半波（颜色+大小+单双）"""
+    return get_color(n) + get_size(n) + get_odd(n)
+
 def parse_numbers(text):
     nums = re.findall(r"\d+", text)
     return [int(x) for x in nums if 1 <= int(x) <= 49]
@@ -122,6 +126,7 @@ def fetch_new_macau(limit=50):
                         "size": get_size(special),
                         "odd": get_odd(special),
                         "halfhalf": get_halfhalf(special),
+                        "halfhalf_detail": get_halfhalf_detail(special),
                         "zodiac": get_zodiac(special),
                         "tail": get_tail(special),
                         "remainder": get_remainder(special),
@@ -159,8 +164,18 @@ class FrequencyPredictor:
             for s in ["大", "小"]:
                 scores[c + s] = color_pred.get(c, 0) * 0.5 + size_pred.get(s, 0) * 0.5
         sorted_items = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        # 🔧 纯按分数取前count个
         return sorted_items[:count]
+
+    def predict_halfhalf_detail(self, count=3):
+        """预测半半波（颜色+大小+单双）"""
+        hh_pred = self.freq("halfhalf_detail")
+        all_types = []
+        for c in ["红", "蓝", "绿"]:
+            for s in ["大", "小"]:
+                for o in ["单", "双"]:
+                    all_types.append(c + s + o)
+        full = {t: hh_pred.get(t, 0.0) for t in all_types}
+        return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
 
     def predict_zodiac(self, count=5):
         zod_pred = self.freq("zodiac")
@@ -212,7 +227,6 @@ class FrequencyPredictor:
         """预测具体号码（基于多维度综合评分）"""
         scores = defaultdict(float)
         
-        # 获取各维度预测
         tail_pred = {int(k): v for k, v in self.predict_tail(5)}
         rem_pred = {int(k): v for k, v in self.predict_remainder(5)}
         tens_pred = {int(k): v for k, v in self.predict_tens(3)}
@@ -231,7 +245,6 @@ class FrequencyPredictor:
             odd = get_odd(num)
             size = get_size(num)
             
-            # 加权综合评分
             score += tail_pred.get(tail, 0) * 0.25
             score += rem_pred.get(rem, 0) * 0.15
             score += tens_pred.get(tens, 0) * 0.10
@@ -244,10 +257,9 @@ class FrequencyPredictor:
         
         return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:count]
 
-    # ========== 组合投注策略（新增） ==========
+    # ========== 组合投注策略 ==========
     def generate_betting_combinations(self, bet_count=5):
         """生成组合投注方案"""
-        # 获取各维度预测
         tail_pred = [int(x[0]) for x in self.predict_tail(3)]
         rem_pred = [int(x[0]) for x in self.predict_remainder(3)]
         zod_pred = [x[0] for x in self.predict_zodiac(5)]
@@ -255,7 +267,6 @@ class FrequencyPredictor:
         size_pred = self.predict_size()[0][0]
         odd_pred = self.predict_odd()[0][0]
         
-        # 方案1：尾数+余数双维度筛选（核心策略）
         combo1 = []
         for tail in tail_pred:
             for rem in rem_pred:
@@ -264,7 +275,6 @@ class FrequencyPredictor:
                         combo1.append(num)
         combo1 = list(set(combo1))
         
-        # 方案2：尾数+生肖筛选
         combo2 = []
         for tail in tail_pred:
             for zod in zod_pred:
@@ -273,7 +283,6 @@ class FrequencyPredictor:
                         combo2.append(num)
         combo2 = list(set(combo2))
         
-        # 方案3：余数+生肖筛选
         combo3 = []
         for rem in rem_pred:
             for zod in zod_pred:
@@ -282,7 +291,6 @@ class FrequencyPredictor:
                         combo3.append(num)
         combo3 = list(set(combo3))
         
-        # 方案4：尾数+颜色筛选
         combo4 = []
         for tail in tail_pred:
             for num in range(1, 50):
@@ -290,31 +298,150 @@ class FrequencyPredictor:
                     combo4.append(num)
         combo4 = list(set(combo4))
         
-        # 方案5：综合评分最高（原predict_specific_number结果）
         combo5 = [num for num, score in self.predict_specific_number(bet_count)]
         
-        # 综合所有方案，取交集并排序
         all_combos = combo1 + combo2 + combo3 + combo4 + combo5
         combo_count = defaultdict(int)
         for num in all_combos:
             combo_count[num] += 1
         
-        # 按出现次数排序，取前bet_count个
         final_combo = sorted(combo_count.items(), key=lambda x: x[1], reverse=True)[:bet_count]
         final_numbers = [num for num, count in final_combo]
         
         return {
-            "tail_remainder": combo1[:10],  # 尾数+余数
-            "tail_zodiac": combo2[:10],     # 尾数+生肖
-            "remainder_zodiac": combo3[:10], # 余数+生肖
-            "tail_color": combo4[:10],       # 尾数+颜色
-            "top_score": combo5,             # 综合评分
-            "final_recommendation": final_numbers  # 最终推荐
+            "tail_remainder": combo1[:10],
+            "tail_zodiac": combo2[:10],
+            "remainder_zodiac": combo3[:10],
+            "tail_color": combo4[:10],
+            "top_score": combo5,
+            "final_recommendation": final_numbers
         }
 
-# ========== 滑动窗口回测（修复版） ==========
+    # ========== 半半波策略（新增） ==========
+    def generate_halfhalf_strategy(self):
+        """生成半半波投注策略"""
+        # 获取预测的半半波（前3个）
+        hh_detail_pred = self.predict_halfhalf_detail(5)
+        
+        # 获取预测的号码
+        num_pred = self.predict_specific_number(5)
+        recommended_numbers = [num for num, score in num_pred]
+        
+        # 为每个推荐号码找出对应的半半波
+        number_halfhalf_map = {}
+        for num in recommended_numbers:
+            hh = get_halfhalf_detail(num)
+            if hh not in number_halfhalf_map:
+                number_halfhalf_map[hh] = []
+            number_halfhalf_map[hh].append(num)
+        
+        # 半半波赔率（固定）
+        halfhalf_odds = {
+            "红大单": 15.76, "红大双": 11.82, "红小单": 9.45, "红小双": 9.45,
+            "蓝大单": 9.45, "蓝大双": 11.82, "蓝小单": 15.76, "蓝小双": 11.82,
+            "绿大单": 11.82, "绿大双": 11.82, "绿小单": 11.82, "绿小双": 15.76
+        }
+        
+        # 筛选高赔率半半波（>=15.76）
+        high_odds_hh = []
+        for hh, odds in halfhalf_odds.items():
+            if odds >= 15.76:
+                high_odds_hh.append(hh)
+        
+        # 找出推荐号码中属于高赔率半半波的
+        high_odds_numbers = []
+        for num in recommended_numbers:
+            hh = get_halfhalf_detail(num)
+            if hh in high_odds_hh:
+                high_odds_numbers.append(num)
+        
+        # 找出预测概率最高的半半波
+        top_hh = [hh for hh, prob in hh_detail_pred[:3]]
+        
+        return {
+            "predicted_halfhalf": hh_detail_pred,
+            "number_halfhalf_map": number_halfhalf_map,
+            "high_odds_numbers": high_odds_numbers,
+            "top_halfhalf": top_hh,
+            "halfhalf_odds": halfhalf_odds
+        }
+
+# ========== 半半波回测（新增） ==========
+def halfhalf_backtest(all_rows, test_periods=10, min_history=5):
+    """半半波策略回测"""
+    if len(all_rows) < min_history + test_periods:
+        print(f"❌ 数据不足")
+        return None
+    
+    test_set = all_rows[:test_periods]
+    
+    print(f"\n{'='*80}")
+    print(f"📊 半半波策略回测（最近{test_periods}期，每期用前{min_history}期预测）")
+    print(f"{'='*80}")
+    print(f"{'期号':<12} {'实际号码':<10} {'实际半半波':<12} {'预测半半波(前3)':<20} {'命中':<6} {'高赔率推荐':<12}")
+    print("-" * 80)
+    
+    hh_hits = 0
+    high_odds_hits = 0
+    
+    for i, test_row in enumerate(test_set):
+        hist_start = test_periods - i
+        history = all_rows[hist_start:hist_start + min_history]
+        
+        if len(history) < min_history:
+            continue
+        
+        predictor = FrequencyPredictor(history)
+        hh_detail_pred = predictor.predict_halfhalf_detail(3)
+        hh_pred_list = [hh for hh, prob in hh_detail_pred]
+        
+        # 获取高赔率推荐号码
+        num_pred = predictor.predict_specific_number(5)
+        recommended_numbers = [num for num, score in num_pred]
+        
+        # 找出高赔率半半波对应的号码
+        halfhalf_odds = {
+            "红大单": 15.76, "红大双": 11.82, "红小单": 9.45, "红小双": 9.45,
+            "蓝大单": 9.45, "蓝大双": 11.82, "蓝小单": 15.76, "蓝小双": 11.82,
+            "绿大单": 11.82, "绿大双": 11.82, "绿小单": 11.82, "绿小双": 15.76
+        }
+        high_odds_hh = [hh for hh, odds in halfhalf_odds.items() if odds >= 15.76]
+        
+        high_odds_numbers = []
+        for num in recommended_numbers:
+            hh = get_halfhalf_detail(num)
+            if hh in high_odds_hh:
+                high_odds_numbers.append(num)
+        
+        actual_hh = test_row["halfhalf_detail"]
+        actual_num = test_row["special"]
+        
+        hh_hit = actual_hh in hh_pred_list
+        high_odds_hit = actual_num in high_odds_numbers
+        
+        hh_hits += hh_hit
+        high_odds_hits += high_odds_hit
+        
+        hh_pred_str = ','.join(hh_pred_list)
+        high_odds_str = ','.join(f'{n:02d}' for n in high_odds_numbers[:3]) if high_odds_numbers else "无"
+        
+        print(f"{test_row['issue']:<12} {actual_num:02d}{'':<8} {actual_hh:<12} {hh_pred_str:<20} {'✓' if hh_hit else '✗':<6} {high_odds_str:<12}")
+    
+    n = len(test_set)
+    print("-" * 80)
+    
+    print(f"\n📈 半半波策略命中率统计（{n}期）：")
+    print(f"  半半波（3选12）命中率：{hh_hits/n*100:.1f}% (随机期望：25%)")
+    print(f"  高赔率号码推荐命中率：{high_odds_hits/n*100:.1f}% (随机期望：{len(set([get_halfhalf_detail(n) for n in range(1,50) if get_halfhalf_detail(n) in [hh for hh, odds in halfhalf_odds.items() if odds >= 15.76]]) )/49*100:.1f}%)")
+    
+    return {
+        "hh_hits": hh_hits/n,
+        "high_odds_hits": high_odds_hits/n
+    }
+
+# ========== 滑动窗口回测 ==========
 def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
-    """滑动窗口分析：每个窗口内，每期只用该期之前的min_history期预测"""
+    """滑动窗口分析"""
     if len(all_rows) < min_history + window_size:
         return []
     
@@ -325,10 +452,10 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
         
         hw_hits = zd_hits = odd_hits = color_hits = size_hits = 0
         tail_hits = rem_hits = tens_hits = range_hits = hl_hits = 0
+        hh_detail_hits = 0
         valid = 0
         
         for i, test_row in enumerate(test_set):
-            # 🔧 修复：取测试期之后的min_history期作为历史
             hist_start = start + window_size - i
             history = all_rows[hist_start:hist_start + min_history]
             
@@ -347,6 +474,7 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
             tens_pred = [int(x[0]) for x in predictor.predict_tens(2)]
             range_pred = [x[0] for x in predictor.predict_range(2)]
             hl_pred = predictor.predict_highlow()[0][0] if predictor.predict_highlow() else ""
+            hh_detail_pred = [x[0] for x in predictor.predict_halfhalf_detail(3)]
             
             if test_row["halfhalf"] in hw_pred:
                 hw_hits += 1
@@ -368,6 +496,8 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
                 range_hits += 1
             if test_row["highlow"] == hl_pred:
                 hl_hits += 1
+            if test_row["halfhalf_detail"] in hh_detail_pred:
+                hh_detail_hits += 1
             valid += 1
         
         if valid > 0:
@@ -383,15 +513,16 @@ def sliding_window_analysis(all_rows, window_size=10, step=5, min_history=5):
                 "tens_rate": tens_hits / valid,
                 "range_rate": range_hits / valid,
                 "hl_rate": hl_hits / valid,
+                "hh_detail_rate": hh_detail_hits / valid,
             })
         
         start += step
     
     return results
 
-# ========== 主回测（修复版） ==========
+# ========== 主回测 ==========
 def honest_backtest(all_rows, test_periods=10, min_history=5):
-    """诚实回测：每期只用该期之前min_history期预测"""
+    """诚实回测"""
     if len(all_rows) < min_history + test_periods:
         print(f"❌ 数据不足")
         return None
@@ -401,14 +532,14 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
     print(f"\n{'='*120}")
     print(f"📊 最近{test_periods}期回测（每期只用前{min_history}期预测）")
     print(f"{'='*120}")
-    print(f"{'期号':<12} {'实际':<10} {'半波':<8} {'生肖':<8} {'单双':<6} {'颜色':<6} {'大小':<6} {'尾数':<8} {'余数':<8} {'十位':<6} {'区间':<8} {'高低':<6}")
-    print("-" * 120)
+    print(f"{'期号':<12} {'实际':<10} {'半波':<8} {'生肖':<8} {'单双':<6} {'颜色':<6} {'大小':<6} {'尾数':<8} {'余数':<8} {'十位':<6} {'区间':<8} {'高低':<6} {'半半波':<8}")
+    print("-" * 130)
     
     hw_hits = zd_hits = odd_hits = color_hits = size_hits = 0
     tail_hits = rem_hits = tens_hits = range_hits = hl_hits = 0
+    hh_detail_hits = 0
     
     for i, test_row in enumerate(test_set):
-        # 🔧 修复：取测试期之后固定min_history期
         hist_start = test_periods - i
         history = all_rows[hist_start:hist_start + min_history]
         
@@ -426,6 +557,7 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
         tens_pred = [int(x[0]) for x in predictor.predict_tens(2)]
         range_pred = [x[0] for x in predictor.predict_range(2)]
         hl_pred = predictor.predict_highlow()[0][0]
+        hh_detail_pred = [x[0] for x in predictor.predict_halfhalf_detail(3)]
         
         actual = f"{test_row['special']:02d}"
         
@@ -439,6 +571,7 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
         tens_hit = test_row["tens"] in tens_pred
         range_hit = test_row["range"] in range_pred
         hl_hit = test_row["highlow"] == hl_pred
+        hh_detail_hit = test_row["halfhalf_detail"] in hh_detail_pred
         
         hw_hits += hw_hit
         zd_hits += zd_hit
@@ -450,19 +583,20 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
         tens_hits += tens_hit
         range_hits += range_hit
         hl_hits += hl_hit
+        hh_detail_hits += hh_detail_hit
         
         print(f"{test_row['issue']:<12} {actual:<10} "
               f"{','.join(hw_pred):<8} {','.join(zd_pred):<8} "
               f"{odd_pred:<6} {color_pred:<6} {size_pred:<6} "
               f"{','.join(map(str, tail_pred)):<8} {','.join(map(str, rem_pred)):<8} "
-              f"{','.join(map(str, tens_pred)):<6} {','.join(range_pred):<8} {hl_pred:<6}")
+              f"{','.join(map(str, tens_pred)):<6} {','.join(range_pred):<8} {hl_pred:<6} {','.join(hh_detail_pred):<8}")
     
     n = len(test_set)
-    print("-" * 120)
+    print("-" * 130)
     
     print(f"\n📈 命中率统计（{n}期）vs 随机期望：")
-    print(f"  {'维度':<12} {'实际命中':<12} {'随机期望':<12} {'评价':<15}")
-    print(f"  {'-'*55}")
+    print(f"  {'维度':<14} {'实际命中':<12} {'随机期望':<12} {'评价':<15}")
+    print(f"  {'-'*60}")
     
     metrics = [
         ("半波(2选)", hw_hits/n, 2/6, "6种半波选2"),
@@ -475,25 +609,26 @@ def honest_backtest(all_rows, test_periods=10, min_history=5):
         ("十位(2选)", tens_hits/n, 2/5, "5个十位选2"),
         ("区间(2选)", range_hits/n, 2/5, "5个区间选2"),
         ("高低(1选)", hl_hits/n, 1/2, "2选1"),
+        ("半半波(3选)", hh_detail_hits/n, 3/12, "12种半半波选3"),
     ]
     
     for name, actual, expected, note in metrics:
         diff = actual - expected
         emoji = "✅" if diff > 0.05 else ("⚠️" if diff > -0.05 else "❌")
-        print(f"  {name:<12} {actual*100:>6.1f}%     {expected*100:>6.1f}%     {emoji} {diff*100:+.1f}% ({note})")
+        print(f"  {name:<14} {actual*100:>6.1f}%     {expected*100:>6.1f}%     {emoji} {diff*100:+.1f}% ({note})")
     
     return {
         "hw": hw_hits/n, "zd": zd_hits/n, "odd": odd_hits/n,
         "color": color_hits/n, "size": size_hits/n,
         "tail": tail_hits/n, "rem": rem_hits/n,
         "tens": tens_hits/n, "range": range_hits/n,
-        "hl": hl_hits/n
+        "hl": hl_hits/n, "hh_detail": hh_detail_hits/n
     }
 
 # ========== 主函数 ==========
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注策略）")
+    print("新澳门彩预测系统 - 诚实版（增强灵敏度 + 组合投注 + 半半波策略）")
     print("基于滑动窗口分析的简单频率统计")
     print("=" * 60)
     
@@ -509,12 +644,12 @@ def main():
     window_results = sliding_window_analysis(all_rows, 10, 5, CONFIG["min_history"])
     
     if window_results:
-        print(f"\n{'窗口':<22} {'半波':<8} {'生肖':<8} {'单双':<8} {'颜色':<8} {'大小':<8} {'尾数':<8} {'余数':<8}")
-        print("-" * 80)
+        print(f"\n{'窗口':<22} {'半波':<8} {'生肖':<8} {'单双':<8} {'颜色':<8} {'大小':<8} {'尾数':<8} {'余数':<8} {'半半波':<8}")
+        print("-" * 90)
         for wr in window_results:
             print(f"{wr['window']:<22} {wr['hw_rate']*100:>5.1f}%  {wr['zd_rate']*100:>5.1f}%  "
                   f"{wr['odd_rate']*100:>5.1f}%  {wr['color_rate']*100:>5.1f}%  {wr['size_rate']*100:>5.1f}%  "
-                  f"{wr['tail_rate']*100:>5.1f}%  {wr['rem_rate']*100:>5.1f}%")
+                  f"{wr['tail_rate']*100:>5.1f}%  {wr['rem_rate']*100:>5.1f}%  {wr['hh_detail_rate']*100:>5.1f}%")
         
         hw_rates = [w['hw_rate'] for w in window_results]
         zd_rates = [w['zd_rate'] for w in window_results]
@@ -523,6 +658,7 @@ def main():
         size_rates = [w['size_rate'] for w in window_results]
         tail_rates = [w['tail_rate'] for w in window_results]
         rem_rates = [w['rem_rate'] for w in window_results]
+        hh_detail_rates = [w['hh_detail_rate'] for w in window_results]
         
         print(f"\n📊 各维度统计（均值/范围）：")
         print(f"  半波：{sum(hw_rates)/len(hw_rates)*100:.1f}% ({min(hw_rates)*100:.0f}%-{max(hw_rates)*100:.0f}%) [随机33.3%]")
@@ -532,9 +668,13 @@ def main():
         print(f"  大小：{sum(size_rates)/len(size_rates)*100:.1f}% ({min(size_rates)*100:.0f}%-{max(size_rates)*100:.0f}%) [随机50%]")
         print(f"  尾数：{sum(tail_rates)/len(tail_rates)*100:.1f}% ({min(tail_rates)*100:.0f}%-{max(tail_rates)*100:.0f}%) [随机30%]")
         print(f"  余数：{sum(rem_rates)/len(rem_rates)*100:.1f}% ({min(rem_rates)*100:.0f}%-{max(rem_rates)*100:.0f}%) [随机42.9%]")
+        print(f"  半半波：{sum(hh_detail_rates)/len(hh_detail_rates)*100:.1f}% ({min(hh_detail_rates)*100:.0f}%-{max(hh_detail_rates)*100:.0f}%) [随机25%]")
     
     # 最近10期回测
     results = honest_backtest(all_rows, CONFIG["test_periods"], CONFIG["min_history"])
+    
+    # 半半波专项回测
+    hh_results = halfhalf_backtest(all_rows, CONFIG["test_periods"], CONFIG["min_history"])
     
     # 最新预测
     print(f"\n{'='*60}")
@@ -551,6 +691,7 @@ def main():
     tail_freq = predictor.freq("tail")
     rem_freq = predictor.freq("remainder")
     tens_freq = predictor.freq("tens")
+    hh_detail_freq = predictor.freq("halfhalf_detail")
     
     print(f"  颜色：{dict(sorted(color_freq.items(), key=lambda x: x[1], reverse=True))}")
     print(f"  大小：{size_freq}")
@@ -558,6 +699,7 @@ def main():
     print(f"  尾数：{dict(sorted(tail_freq.items(), key=lambda x: x[1], reverse=True))}")
     print(f"  余数：{dict(sorted(rem_freq.items(), key=lambda x: x[1], reverse=True))}")
     print(f"  十位：{dict(sorted(tens_freq.items(), key=lambda x: x[1], reverse=True))}")
+    print(f"  半半波：{dict(sorted(hh_detail_freq.items(), key=lambda x: x[1], reverse=True))}")
     
     hw_pred = predictor.predict_halfhalf(CONFIG["bet_count"])
     zd_pred = predictor.predict_zodiac(CONFIG["zodiac_bet_count"])
@@ -570,6 +712,7 @@ def main():
     range_pred = predictor.predict_range(2)
     hl_pred = predictor.predict_highlow()
     num_pred = predictor.predict_specific_number(5)
+    hh_detail_pred = predictor.predict_halfhalf_detail(5)
     
     print(f"\n⭐ 预测推荐：")
     print(f"  半波：{', '.join(f'{x}({s:.1f}%)' for x, s in hw_pred)}")
@@ -584,11 +727,14 @@ def main():
     print(f"  十位：{', '.join(f'{x}({s:.1f}%)' for x, s in tens_pred)}")
     print(f"  区间：{', '.join(f'{x}({s:.1f}%)' for x, s in range_pred)}")
     print(f"  高低：{hl_pred[0][0]} ({hl_pred[0][1]:.1f}%)")
+    print(f"  半半波：")
+    for i, (hh, s) in enumerate(hh_detail_pred[:5], 1):
+        print(f"    {i}. {hh} ({s:.1f}%)")
     print(f"\n  综合推荐号码（前5）：")
     for i, (num, score) in enumerate(num_pred, 1):
-        print(f"    {i}. {num:02d} (评分{score:.1f}) - {get_color(num)}{get_size(num)} {get_odd(num)} 尾{get_tail(num)} 余{get_remainder(num)}")
+        print(f"    {i}. {num:02d} (评分{score:.1f}) - {get_halfhalf_detail(num)} 尾{get_tail(num)} 余{get_remainder(num)}")
     
-    # ========== 新增：组合投注策略 ==========
+    # ========== 组合投注策略 ==========
     print(f"\n{'='*60}")
     print(f"💰 组合投注策略（基于高命中率维度）")
     print(f"{'='*60}")
@@ -598,7 +744,7 @@ def main():
     print(f"\n📌 策略说明：")
     print(f"  - 核心维度：尾数（命中率{tail_rates[-1]*100:.0f}%）、余数（命中率{rem_rates[-1]*100:.0f}%）")
     print(f"  - 辅助维度：生肖（命中率{zd_rates[-1]*100:.0f}%）、颜色（命中率{color_rates[-1]*100:.0f}%）")
-    print(f"  - 赔率：特码 1:47，单双/大小 1:0.95")
+    print(f"  - 赔率：特码 1:47，半半波最高 1:15.76")
     
     print(f"\n🎯 各方案候选号码：")
     print(f"  方案1（尾数+余数）: {', '.join(f'{x:02d}' for x in combos['tail_remainder'][:8])}")
@@ -615,30 +761,61 @@ def main():
         tail = get_tail(num)
         rem = get_remainder(num)
         zod = get_zodiac(num)
-        print(f"  {i}. {num:02d} | {color}{size} {odd} | 尾{tail} 余{rem} | 生肖{zod}")
+        hh_detail = get_halfhalf_detail(num)
+        print(f"  {i}. {num:02d} | {hh_detail} | 尾{tail} 余{rem} | 生肖{zod}")
     
-    # 投注策略建议
+    # ========== 半半波策略（新增） ==========
+    print(f"\n{'='*60}")
+    print(f"🎯 半半波投注策略")
+    print(f"{'='*60}")
+    
+    hh_strategy = predictor.generate_halfhalf_strategy()
+    
+    print(f"\n📊 预测半半波（前5）：")
+    for i, (hh, prob) in enumerate(hh_strategy['predicted_halfhalf'], 1):
+        odds = hh_strategy['halfhalf_odds'].get(hh, 0)
+        print(f"  {i}. {hh} (概率{prob:.1f}%, 赔率{odds})")
+    
+    print(f"\n📌 推荐号码对应的半半波：")
+    for hh, nums in hh_strategy['number_halfhalf_map'].items():
+        odds = hh_strategy['halfhalf_odds'].get(hh, 0)
+        print(f"  {hh} (赔率{odds})：{', '.join(f'{n:02d}' for n in nums)}")
+    
+    print(f"\n⭐ 高赔率半半波推荐（赔率>=15.76）：")
+    if hh_strategy['high_odds_numbers']:
+        for num in hh_strategy['high_odds_numbers']:
+            hh = get_halfhalf_detail(num)
+            odds = hh_strategy['halfhalf_odds'].get(hh, 0)
+            print(f"  {num:02d} → {hh} (赔率{odds})")
+    else:
+        print(f"  当前推荐号码中没有高赔率半半波")
+    
     print(f"\n📊 投注策略建议：")
-    print(f"  策略A（稳健型）：")
-    print(f"    - 投注：最终推荐5个号码，每个1元")
-    print(f"    - 投入：5元/期")
-    print(f"    - 预期命中率：{len(combos['final_recommendation'])/49*100:.1f}%")
-    print(f"    - 中奖回报：47元（净赚42元）")
+    print(f"  策略A（半半波专注）：")
+    print(f"    - 投注：预测前3个半半波，各1元")
+    print(f"    - 投入：3元/期")
+    print(f"    - 预期命中率：{len(hh_strategy['predicted_halfhalf'][:3])/12*100:.1f}%")
+    print(f"    - 最高中奖回报：15.76元（净赚12.76元）")
     
-    print(f"\n  策略B（精准型）：")
-    print(f"    - 投注：最终推荐前3个号码，每个2元")
-    print(f"    - 投入：6元/期")
-    print(f"    - 预期命中率：{len(combos['final_recommendation'][:3])/49*100:.1f}%")
-    print(f"    - 中奖回报：94元（净赚88元）")
+    print(f"\n  策略B（特码+半半波组合）：")
+    print(f"    - 投注：5个特码（5元）+ 3个半半波（3元）")
+    print(f"    - 投入：8元/期")
+    print(f"    - 如果特码中了：47元（净赚39元）")
+    print(f"    - 如果半半波中了：最高15.76元（净赚7.76元）")
+    print(f"    - 如果都中：62.76元（净赚54.76元）")
     
-    print(f"\n  策略C（保险型 - 配合单双大小）：")
-    print(f"    - 投注：最终推荐5个号码（5元）+ 单（1元）+ 小（1元）")
-    print(f"    - 投入：7元/期")
-    print(f"    - 如果特码中了：47+0.95+0.95=48.9元（净赚41.9元）")
-    print(f"    - 如果特码没中但单双大小中了：1.9元（亏损5.1元）")
+    print(f"\n  策略C（高赔率半半波精选）：")
+    if hh_strategy['high_odds_numbers']:
+        bet_count = min(len(hh_strategy['high_odds_numbers']), 3)
+        print(f"    - 投注：高赔率半半波对应的{bet_count}个号码，各1元")
+        print(f"    - 投入：{bet_count}元/期")
+        print(f"    - 中奖回报：15.76元（净赚{15.76-bet_count:.2f}元）")
+    else:
+        print(f"    - 当前无高赔率推荐，建议使用策略A或B")
     
     print(f"\n⚠️ 风险提示：")
     print(f"  - 所有策略的期望值仍为负（庄家有优势）")
+    print(f"  - 半半波虽然赔率低，但命中率更高")
     print(f"  - 建议每期投入不超过总资金的5%")
     print(f"  - 设置止损线，亏损达到预算即停止")
     print(f"  - 切勿借钱或使用倍投法")
@@ -648,11 +825,12 @@ def main():
     print(f"{'='*60}")
     print(f"  经过滑动窗口分析：")
     print(f"  - 简单频率统计是最稳定的基线")
-    print(f"  - 增加尾数、余数、十位、区间、高低等灵敏维度")
+    print(f"  - 增加尾数、余数、十位、区间、高低、半半波等灵敏维度")
     print(f"  - 复杂模型（遗漏值、转移概率）没有稳定提升")
     print(f"  - 所有维度命中率均接近随机期望")
     print(f"  - 彩票开奖本质上是独立随机事件")
     print(f"  - 组合投注能提高中奖概率，但不改变期望值")
+    print(f"  - 半半波策略提供更高的命中率，但赔率较低")
     print(f"\n⚠️ 建议：理性投注，量力而行，切勿迷信任何预测。")
 
 if __name__ == "__main__":
