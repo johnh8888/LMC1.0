@@ -2,57 +2,67 @@
 # -*- coding: utf-8 -*-
 
 """
-三彩 V10.1 四层特码量化预测系统
+========================================================
+三彩 V11.0 AI量化特码预测系统
 
-核心:
+功能:
+
+1. 香港彩
+2. 新澳门彩
+3. 老澳门彩
+
+四层模型:
 
 第一层:
-    尾数热度
-    尾数遗漏
-    余数组合
-    特码遗漏
+    尾数
+    余数
+    遗漏
 
 第二层:
-    大小趋势
+    大小
 
 第三层:
-    单双趋势
+    单双
 
 第四层:
-    颜色确认
+    颜色
 
 
-输出:
+增强:
 
-TOP1
-TOP3
-TOP5
+    动态半波
+    AI融合评分
+    权重训练
+    历史回测
+    盈亏模拟
+    风险控制
 
-历史回测
-
+========================================================
 """
+
 
 import re
 import json
 import math
+import random
 import urllib.request
 
-from collections import Counter
 from datetime import datetime
 
 
-
-# ==============================
-# 配置
-# ==============================
+# =====================================================
+# 基础配置
+# =====================================================
 
 
 API_URL = (
+
     "https://marksix6.net/index.php?api=1"
+
 )
 
 
-LOTTERIES=[
+LOTTERIES = [
 
     "香港彩",
 
@@ -63,38 +73,165 @@ LOTTERIES=[
 ]
 
 
-
-NUMBERS=list(range(1,50))
-
+HISTORY_LIMIT = 200
 
 
-# ==============================
-# 颜色库
-# ==============================
+
+NUMBERS = list(range(1,50))
 
 
-RED=set([
 
-1,2,7,8,12,13,18,19,23,24,
-29,30,34,35,40,45,46
-
-])
+# 理论属性
 
 
-BLUE=set([
-
-3,4,9,10,14,15,20,25,
-26,31,36,37,41,42,47,48
-
-])
+BIG_START = 25
 
 
-GREEN=set([
 
-5,6,11,16,17,21,22,27,
-28,32,33,38,39,43,44,49
+# 初始权重
 
-])
+
+WEIGHTS = {
+
+
+    "tail":0.30,
+
+
+    "remainder":0.30,
+
+
+    "missing":0.15,
+
+
+    "size":0.10,
+
+
+    "odd":0.05,
+
+
+    "color":0.10
+
+}
+
+
+
+
+
+# =====================================================
+# 号码基础属性
+# =====================================================
+
+
+
+def number_tail(num):
+
+    """
+    尾数
+    """
+
+    return num % 10
+
+
+
+
+
+def number_remainder(num):
+
+    """
+    余数组合
+    """
+
+    return {
+
+
+        "r3":
+
+        num % 3,
+
+
+        "r5":
+
+        num % 5,
+
+
+        "r7":
+
+        num % 7
+
+    }
+
+
+
+
+
+def is_big(num):
+
+
+    return num >= BIG_START
+
+
+
+
+
+
+def is_odd(num):
+
+
+    return num % 2 == 1
+
+
+
+
+
+
+
+# =====================================================
+# 三色定义
+# 根据你的数据库规则可替换
+# =====================================================
+
+
+RED = {
+
+1,2,7,8,12,13,
+
+18,19,23,24,
+
+29,30,34,35,
+
+40,45,46
+
+}
+
+
+
+BLUE = {
+
+3,4,9,10,14,
+
+15,20,25,
+
+26,31,36,
+
+37,41,42,47
+
+}
+
+
+
+GREEN = {
+
+5,6,11,16,17,
+
+21,22,27,28,
+
+32,33,38,
+
+39,43,44,48,49
+
+}
+
+
 
 
 
@@ -106,85 +243,36 @@ def get_color(num):
         return "红"
 
 
-    if num in BLUE:
+    elif num in BLUE:
 
         return "蓝"
 
 
-    return "绿"
+    else:
+
+        return "绿"
 
 
 
 
 
-# ==============================
-# 号码基础属性
-# ==============================
 
 
-def number_info(num):
-
-
-    return {
-
-        "num":num,
-
-        "tail":
-            num%10,
-
-
-        "big":
-            num>=25,
-
-
-        "odd":
-            num%2==1,
-
-
-        "r3":
-            num%3,
-
-
-        "r5":
-            num%5,
-
-
-        "r7":
-            num%7,
-
-
-        "color":
-            get_color(num)
-
-    }
-
-
-
-
-
-NUMBER_INFO={
-
-    n:number_info(n)
-
-    for n in NUMBERS
-
-}
-
-
-
-
-
-# ==============================
+# =====================================================
 # 数据解析
-# ==============================
+# =====================================================
+
 
 
 def parse_numbers(text):
 
 
-    nums=re.findall(
+    nums = re.findall(
+
         r"\d+",
+
         text
+
     )
 
 
@@ -194,7 +282,7 @@ def parse_numbers(text):
 
         for x in nums
 
-        if 1<=int(x)<=49
+        if 1 <= int(x) <=49
 
     ]
 
@@ -202,17 +290,17 @@ def parse_numbers(text):
 
 
 
-# ==============================
-# 获取历史数据
-# ==============================
 
 
 def fetch_lottery(name,limit=200):
 
 
     print(
+
         f"📡 获取{name}数据..."
+
     )
+
 
 
     try:
@@ -225,6 +313,7 @@ def fetch_lottery(name,limit=200):
             headers={
 
                 "User-Agent":
+
                 "Mozilla/5.0"
 
             }
@@ -232,51 +321,62 @@ def fetch_lottery(name,limit=200):
         )
 
 
-        response=urllib.request.urlopen(
+
+        with urllib.request.urlopen(
 
             req,
 
             timeout=15
 
-        )
+        ) as response:
 
 
-        data=json.loads(
+            data=json.loads(
 
-            response.read()
-            .decode("utf-8")
+                response.read()
 
-        )
+                .decode("utf-8")
+
+            )
 
 
 
         rows=[]
 
 
+
         for item in data.get(
+
             "lottery_data",
+
             []
+
         ):
 
 
             if item.get(
-                "name",
-                ""
-            ).strip()!=name:
+
+                "name"
+
+            ) != name:
+
 
                 continue
 
 
 
             for line in item.get(
+
                 "history",
+
                 []
+
             ):
 
 
-                nums=parse_numbers(
-                    line
-                )
+
+                nums=parse_numbers(line)
+
 
 
                 if len(nums)<7:
@@ -289,30 +389,7 @@ def fetch_lottery(name,limit=200):
 
 
 
-                issue=re.search(
-
-                    r"(20\d{5,8})",
-
-                    line
-
-                )
-
-
-                if not issue:
-
-                    continue
-
-
-
-                code=issue.group(1)
-
-
-
                 rows.append({
-
-                    "issue":
-
-                    code,
 
 
                     "special":
@@ -320,59 +397,38 @@ def fetch_lottery(name,limit=200):
                     special,
 
 
-                    "tail":
-
-                    special%10,
-
-
                     "big":
 
-                    special>=25,
+                    is_big(special),
 
 
                     "odd":
 
-                    special%2==1,
+                    is_odd(special),
 
 
                     "color":
 
-                    get_color(
-                        special
-                    )
+                    get_color(special),
+
+
+                    "tail":
+
+                    number_tail(special),
+
+
+                    "remainder":
+
+                    number_remainder(special)
+
 
                 })
+
 
 
             break
 
 
-
-
-        # 去重
-
-        temp={}
-
-
-        for r in rows:
-
-            temp[
-                r["issue"]
-            ]=r
-
-
-
-        rows=list(
-            temp.values()
-        )
-
-
-        rows.sort(
-
-            key=lambda x:
-            x["issue"]
-
-        )
 
 
         rows=rows[-limit:]
@@ -381,14 +437,13 @@ def fetch_lottery(name,limit=200):
 
         print(
 
-            f"✅ {name}"
-            f" 获取{len(rows)}期"
+            f"✅ 获取{len(rows)}期"
 
         )
 
 
-        return rows
 
+        return rows
 
 
 
@@ -396,8 +451,11 @@ def fetch_lottery(name,limit=200):
 
 
         print(
+
             "❌ 数据错误:",
+
             e
+
         )
 
 
@@ -407,223 +465,80 @@ def fetch_lottery(name,limit=200):
 
 
 
-# ==============================
-# 测试基础数据
-# ==============================
 
 
-if __name__=="__main__":
+# =====================================================
+# 基础统计
+# =====================================================
 
 
-    print(
-        "三彩 V10.1 启动"
+
+def count_number(rows,num,window=50):
+
+
+    recent=rows[-window:]
+
+
+
+    return sum(
+
+        1
+
+        for r in recent
+
+        if r["special"]==num
+
     )
 
 
-    for i in range(1,6):
 
-        print(
-            NUMBER_INFO[i]
-        )
-        # ==============================
-# 第一层：尾数强化模型
-# ==============================
+
+
+
+
+def missing_count(rows,num):
+
+
+    gap=0
+
+
+
+    for r in reversed(rows):
+
+
+        if r["special"]==num:
+
+            break
+
+
+        gap+=1
+
+
+
+    return gap
+    # =====================================================
+# 第一层：号码因子模型
+# 尾数 / 余数 / 遗漏
+# =====================================================
+
 
 
 class TailModel:
 
-    """
-    尾数:
-    
-    热度70%
-    遗漏30%
 
     """
+    尾数趋势模型
 
-    def __init__(self, rows):
+    分析:
 
-        self.rows = rows
-
-
-        self.tails = [
-
-            r["special"] % 10
-
-            for r in rows
-
-        ]
-
-
-
-    def analyze(self):
-
-
-        counter = Counter(
-            self.tails
-        )
-
-
-        total=len(
-            self.tails
-        )
-
-
-        result={}
-
-
-
-        for tail in range(10):
-
-
-            count = counter.get(
-                tail,
-                0
-            )
-
-
-            miss=999
-
-
-            for i,t in enumerate(
-                reversed(self.tails)
-            ):
-
-
-                if t==tail:
-
-                    miss=i
-
-                    break
-
-
-
-            # 热度
-
-            hot=(
-
-                count /
-                total
-                *
-                100
-
-            ) if total else 0
-
-
-
-            # 遗漏
-
-            miss_score=min(
-                miss,
-                20
-            )
-
-
-
-            score=(
-
-                hot*0.7
-
-                +
-
-                miss_score*0.3
-
-            )
-
-
-            result[tail]={
-
-                "count":
-                count,
-
-
-                "miss":
-                miss,
-
-
-                "score":
-                score
-
-            }
-
-
-        return result
-
-
-
-
-
-    def score(self,num):
-
-
-        data=self.analyze()
-
-
-        tail=num%10
-
-
-        return data[tail]["score"]
-
-
-
-
-
-# ==============================
-# 第二部分：余数组合模型
-# ==============================
-
-
-class RemainderPatternModel:
-
-
-    """
-    余数组合:
-
-    除3
-    除5
-    除7
-
-    形成:
-
-    a-b-c
+    0-9尾近期热度
 
     """
 
 
     def __init__(self,rows):
 
-
-        self.patterns=[]
-
-
-        for r in rows:
-
-
-            n=r["special"]
-
-
-            self.patterns.append(
-
-                (
-
-                n%3,
-
-                n%5,
-
-                n%7
-
-                )
-
-            )
-
-
-
-
-    def analyze(self):
-
-
-        return Counter(
-            self.patterns
-        )
+        self.rows=rows
 
 
 
@@ -631,52 +546,29 @@ class RemainderPatternModel:
     def score(self,num):
 
 
-        pattern=(
-
-            num%3,
-
-            num%5,
-
-            num%7
-
-        )
+        tail=number_tail(num)
 
 
-        data=self.analyze()
 
+        count=sum(
 
-        hit=data.get(
+            1
 
-            pattern,
+            for r in self.rows[-50:]
 
-            0
+            if r["tail"]==tail
 
         )
 
 
-        total=sum(
-            data.values()
-        )
 
+        # 热尾提高
 
-        if total==0:
+        return min(
 
-            return 0
+            count*12,
 
-
-
-        # 放大差异
-
-
-        return (
-
-            hit /
-
-            total
-
-            *
-
-            1000
+            100
 
         )
 
@@ -684,22 +576,67 @@ class RemainderPatternModel:
 
 
 
-# ==============================
-# 第三部分：号码遗漏模型
-# ==============================
 
 
-class NumberMissingModel:
+
+class RemainderModel:
 
 
     """
+    余数模型
 
-    特码遗漏
+    r3/r5/r7组合
 
-    刚出的降低
+    """
 
-    长期未出的增加
 
+    def __init__(self,rows):
+
+        self.rows=rows
+
+
+
+
+    def score(self,num):
+
+
+        target=number_remainder(num)
+
+
+
+        score=0
+
+
+
+        for r in self.rows[-80:]:
+
+
+            if r["remainder"]==target:
+
+
+                score+=3
+
+
+
+        return min(
+
+            score,
+
+            100
+
+        )
+
+
+
+
+
+
+
+class MissingModel:
+
+
+    """
+    遗漏周期模型
 
     """
 
@@ -712,72 +649,57 @@ class NumberMissingModel:
 
 
 
-
     def score(self,num):
 
 
-        miss=999
+        gap=missing_count(
+
+            self.rows,
+
+            num
+
+        )
 
 
 
-        for i,r in enumerate(
-
-            reversed(
-                self.rows
-            )
-
-        ):
-
-
-            if r["special"]==num:
-
-                miss=i
-
-                break
-
-
-
-
-        if miss==999:
+        if gap>=40:
 
             return 100
 
 
 
+        elif gap>=25:
 
-        # 最近出现
-
-        if miss<=3:
-
-            return 20
+            return 85
 
 
 
+        elif gap>=10:
 
-        # 长遗漏
-
-
-        if miss>=20:
-
-            return 100
+            return 65
 
 
 
-        return miss*5
+        else:
+
+            return 40
 
 
 
 
 
 
-# ==============================
+
+# =====================================================
 # 第二层：大小模型
-# ==============================
+# =====================================================
+
 
 
 class SizeModel:
 
 
+
     def __init__(self,rows):
 
         self.rows=rows
@@ -785,65 +707,69 @@ class SizeModel:
 
 
 
+
     def score(self,num):
 
 
-        total=len(
-            self.rows
-        )
-
-
-        if total==0:
-
-            return 0
+        big=is_big(num)
 
 
 
-        big=sum(
+        recent=self.rows[-50:]
+
+
+
+        count=sum(
 
             1
 
-            for r in self.rows
+            for r in recent
 
-            if r["big"]
+            if r["big"]==big
 
         )
 
 
 
-        rate=big/total
+        rate=count/len(recent)
 
 
 
-        if num>=25:
+        # 趋近50%得分高
 
 
-            return rate*100
+        diff=abs(
 
+            rate-0.5
 
-        else:
-
-
-            return (
-
-                1-rate
-
-            )*100
+        )
 
 
 
+        return max(
+
+            20,
+
+            100-diff*200
+
+        )
 
 
 
 
-# ==============================
+
+
+
+# =====================================================
 # 第三层：单双模型
-# ==============================
+# =====================================================
+
 
 
 class OddModel:
 
 
+
     def __init__(self,rows):
 
         self.rows=rows
@@ -854,60 +780,54 @@ class OddModel:
     def score(self,num):
 
 
-        total=len(
-            self.rows
-        )
-
-
-        if total==0:
-
-            return 0
+        odd=is_odd(num)
 
 
 
-        odd=sum(
+        recent=self.rows[-50:]
+
+
+
+        count=sum(
 
             1
 
-            for r in self.rows
+            for r in recent
 
-            if r["odd"]
+            if r["odd"]==odd
 
         )
 
 
-        rate=odd/total
+
+        rate=count/len(recent)
 
 
 
-        if num%2==1:
+        return max(
 
+            20,
 
-            return rate*100
+            100-abs(rate-0.5)*200
 
-
-        else:
-
-
-            return (
-
-                1-rate
-
-            )*100
+        )
 
 
 
 
 
 
-# ==============================
+
+# =====================================================
 # 第四层：颜色模型
-# ==============================
+# =====================================================
+
 
 
 class ColorModel:
 
 
+
     def __init__(self,rows):
 
         self.rows=rows
@@ -918,299 +838,384 @@ class ColorModel:
     def score(self,num):
 
 
-        total=len(
-            self.rows
-        )
-
-
-        if total==0:
-
-            return 0
+        color=get_color(num)
 
 
 
-        colors=Counter(
+        count=sum(
 
-            r["color"]
+            1
 
-            for r in self.rows
+            for r in self.rows[-50:]
 
-        )
-
-
-        rate=(
-
-            colors[
-                get_color(num)
-            ]
-
-            /
-
-            total
+            if r["color"]==color
 
         )
 
 
 
-        return rate*100
-        # ==============================
+        rate=count/50
+
+
+
+        # 防止颜色过热
+
+        if rate>0.45:
+
+            return 40
+
+
+
+        elif rate<0.25:
+
+            return 90
+
+
+
+        else:
+
+            return 70
+
+
+
+
+
+
+
+# =====================================================
+# 趋势辅助模型
+# =====================================================
+
+
+
+class TrendModel:
+
+
+    def __init__(self,rows):
+
+        self.rows=rows
+
+
+
+
+    def score(self,num):
+
+
+        count=count_number(
+
+            self.rows,
+
+            num,
+
+            30
+
+        )
+
+
+        return min(
+
+            count*20,
+
+            100
+
+        )
+
+
+
+
+
+
+
+class HotColdModel:
+
+
+
+    def __init__(self,rows):
+
+        self.rows=rows
+
+
+
+
+
+    def score(self,num):
+
+
+        hot=count_number(
+
+            self.rows,
+
+            num,
+
+            100
+
+        )
+
+
+
+        if hot>=4:
+
+            return 90
+
+
+
+        elif hot>=2:
+
+            return 75
+
+
+
+        elif hot==0:
+
+            return 65
+
+
+
+        else:
+
+            return 50
+            # =====================================================
 # 四层融合评分引擎
-# ==============================
+# =====================================================
 
 
 class FusionEngine:
 
 
+
     def __init__(self,rows):
 
         self.rows=rows
 
 
-        # 第一层
+        self.tail=TailModel(rows)
 
-        self.tail_model=TailModel(
-            rows
-        )
+        self.rem=RemainderModel(rows)
 
+        self.missing=MissingModel(rows)
 
-        self.pattern_model=RemainderPatternModel(
-            rows
-        )
+        self.size=SizeModel(rows)
 
+        self.odd=OddModel(rows)
 
-        self.missing_model=NumberMissingModel(
-            rows
-        )
+        self.color=ColorModel(rows)
 
 
 
-        # 第二层
+        self.trend=TrendModel(rows)
 
-        self.size_model=SizeModel(
-            rows
-        )
-
-
-
-        # 第三层
-
-        self.odd_model=OddModel(
-            rows
-        )
-
-
-
-        # 第四层
-
-        self.color_model=ColorModel(
-            rows
-        )
+        self.hot=HotColdModel(rows)
 
 
 
 
 
-    def normalize(self,value,max_value):
+    def calculate(self,num):
 
-
-        if max_value==0:
-
-            return 0
-
-
-        return (
-
-            value /
-
-            max_value
-
-            *
-
-            100
-
-        )
-
-
-
-
-
-    def score(self,num):
-
-
-        # 第一层
 
         tail_score=(
 
-            self.tail_model
-            .score(num)
+            self.tail.score(num)
 
         )
 
 
+        rem_score=(
 
-        pattern_score=(
-
-            self.pattern_model
-            .score(num)
+            self.rem.score(num)
 
         )
 
 
-        missing_score=(
+        miss_score=(
 
-            self.missing_model
-            .score(num)
+            self.missing.score(num)
 
         )
 
-
-
-        # 第二层
 
         size_score=(
 
-            self.size_model
-            .score(num)
+            self.size.score(num)
 
         )
 
-
-        # 第三层
 
         odd_score=(
 
-            self.odd_model
-            .score(num)
+            self.odd.score(num)
 
         )
 
-
-
-        # 第四层
 
         color_score=(
 
-            self.color_model
-            .score(num)
+            self.color.score(num)
 
         )
 
 
 
-        # 余数组合压缩
+        trend_score=(
 
-        pattern_score=min(
-
-            pattern_score,
-
-            100
+            self.trend.score(num)
 
         )
 
 
+        hot_score=(
+
+            self.hot.score(num)
+
+        )
+
+
+
+        # 四层权重
 
         total=(
 
 
             tail_score
+
             *
+
             0.25
 
 
 
             +
 
-            pattern_score
+
+
+            rem_score
+
             *
-            0.30
+
+            0.20
 
 
 
             +
 
-            missing_score
+
+
+            miss_score
+
             *
+
             0.15
 
 
 
             +
 
+
+
             size_score
+
             *
+
             0.10
 
 
 
             +
+
+
 
             odd_score
+
             *
-            0.05
 
-
-
-            +
-
-            color_score
-            *
-            0.05
-
-
-
-            +
-
-            tail_score
-            *
             0.10
 
+
+
+            +
+
+
+
+            color_score
+
+            *
+
+            0.10
+
+
+
+            +
+
+
+
+            trend_score
+
+            *
+
+            0.05
+
+
+
+            +
+
+
+
+            hot_score
+
+            *
+
+            0.05
+
         )
+
 
 
 
         return {
 
 
-            "number":
+            "num":
 
             num,
 
 
+            "total":
+
+            round(total,2),
+
+
             "tail":
 
-            tail_score,
+            round(tail_score,1),
 
 
-            "pattern":
+            "remainder":
 
-            pattern_score,
+            round(rem_score,1),
 
 
             "missing":
 
-            missing_score,
+            round(miss_score,1),
 
 
             "size":
 
-            size_score,
+            round(size_score,1),
 
 
             "odd":
 
-            odd_score,
+            round(odd_score,1),
 
 
             "color":
 
-            color_score,
-
-
-            "total":
-
-            total
+            round(color_score,1)
 
         }
+
+
 
 
 
@@ -1222,18 +1227,21 @@ class FusionEngine:
         result=[]
 
 
+
         for n in NUMBERS:
 
 
             result.append(
 
-                self.score(n)
+                self.calculate(n)
 
             )
 
 
 
-        result.sort(
+        return sorted(
+
+            result,
 
             key=lambda x:
 
@@ -1244,192 +1252,94 @@ class FusionEngine:
         )
 
 
+
+
+
+
+
+# =====================================================
+# 动态半波选择器
+# =====================================================
+
+
+class DynamicHalfwaveSelector:
+
+
+
+    def __init__(self,ranked):
+
+        self.ranked=ranked
+
+
+
+
+
+    def select(self,count=5):
+
+
+        result=[]
+
+
+        colors={
+
+            "红":0,
+
+            "蓝":0,
+
+            "绿":0
+
+        }
+
+
+
+        for item in self.ranked:
+
+
+            num=item["num"]
+
+            color=get_color(num)
+
+
+
+            # 控制颜色分散
+
+            if colors[color]>=3:
+
+                continue
+
+
+
+            result.append(item)
+
+
+
+            colors[color]+=1
+
+
+
+            if len(result)>=count:
+
+                break
+
+
+
         return result
 
 
 
 
 
-    def top10(self):
 
 
-        return self.rank()[:10]
 
+# =====================================================
+# AI二次融合
+# =====================================================
 
 
 
+class AIFusion:
 
-    def confidence(self):
-
-
-        data=self.rank()
-
-
-        gap=(
-
-            data[0]["total"]
-
-            -
-
-            data[4]["total"]
-
-        )
-
-
-
-        if gap>=20:
-
-            return "★★★★★"
-
-
-        elif gap>=10:
-
-            return "★★★★"
-
-
-        elif gap>=5:
-
-            return "★★★"
-
-
-        else:
-
-            return "★★"
-
-
-
-
-
-
-
-# ==============================
-# 推荐输出
-# ==============================
-
-
-def print_prediction(
-        lottery,
-        rows
-):
-
-
-    print("\n")
-    print("="*70)
-
-    print(
-        f"🎯 {lottery} V10.1预测"
-    )
-
-    print("="*70)
-
-
-
-    latest=rows[-1]["special"]
-
-
-    print(
-        f"最新特码: {latest}"
-    )
-
-
-
-    engine=FusionEngine(
-        rows[-200:]
-    )
-
-
-
-    result=engine.rank()
-
-
-
-    print("\n🔥 TOP10号码")
-
-
-
-    for i,item in enumerate(
-
-        result[:10],
-
-        1
-
-    ):
-
-
-        print(
-
-            f"{i:02d}. "
-
-            f"{item['number']:02d}"
-
-            f" "
-
-            f"总分:{item['total']:.2f}"
-
-            f" "
-
-            f"尾:{item['tail']:.1f}"
-
-            f" "
-
-            f"余:{item['pattern']:.1f}"
-
-            f" "
-
-            f"漏:{item['missing']:.1f}"
-
-        )
-
-
-
-
-    print("\n⭐ 主推:")
-
-
-    print(
-
-        result[0]["number"],
-
-        "+",
-
-        result[1]["number"]
-
-    )
-
-
-
-    print(
-        "\n🛡 防守:"
-    )
-
-
-    print(
-
-        [
-
-            x["number"]
-
-            for x in result[2:5]
-
-        ]
-
-    )
-
-
-
-    print(
-
-        "\n信心:",
-
-        engine.confidence()
-
-    )
-    # ==============================
-# 回测系统
-# ==============================
-
-
-class BacktestEngine:
 
 
     def __init__(self,rows):
@@ -1439,32 +1349,186 @@ class BacktestEngine:
 
 
 
-    def run(self,window=100):
+
+    def run(self):
 
 
-        if len(self.rows)<=window:
+        engine=FusionEngine(
 
-            print(
-                "数据不足回测"
-            )
+            self.rows
 
-            return
+        )
 
+
+
+        ranked=engine.rank()
+
+
+
+        selector=DynamicHalfwaveSelector(
+
+            ranked
+
+        )
+
+
+
+        top=selector.select(10)
+
+
+
+        return top
+
+
+
+
+
+
+# =====================================================
+# 输出预测结果
+# =====================================================
+
+
+def print_prediction(name,rows):
+
+
+    print()
+
+    print("="*70)
+
+    print(
+
+        f"🎯 {name} V11 AI预测"
+
+    )
+
+    print("="*70)
+
+
+
+    print(
+
+        "最新特码:",
+
+        rows[-1]["special"]
+
+    )
+
+
+
+    ai=AIFusion(rows)
+
+
+
+    top=ai.run()
+
+
+
+    print()
+
+    print("🔥 TOP10")
+
+
+
+    for i,x in enumerate(top,1):
+
+
+        print(
+
+            f"{i:02d}. "
+
+            f"{x['num']:02d}"
+
+            "  "
+
+            f"综合:{x['total']}"
+
+            " "
+
+            f"尾:{x['tail']}"
+
+            " "
+
+            f"余:{x['remainder']}"
+
+            " "
+
+            f"大小:{x['size']}"
+
+            " "
+
+            f"单双:{x['odd']}"
+
+            " "
+
+            f"颜色:{x['color']}"
+
+        )
+
+
+
+    print()
+
+
+    print(
+
+        "⭐ 主推:",
+
+        top[0]["num"],
+
+        "+",
+
+        top[1]["num"]
+
+    )
+
+
+
+    print(
+
+        "🛡 防守:",
+
+        [
+
+            x["num"]
+
+            for x in top[2:5]
+
+        ]
+
+    )
+
+
+
+    return top
+    # =====================================================
+# 历史回测系统
+# =====================================================
+
+
+class BackTester:
+
+
+
+    def __init__(self,rows):
+
+        self.rows=rows
+
+
+
+
+
+    def test(self,window=100,topn=3):
 
 
         total=0
 
-
-        hit1=0
-
-        hit3=0
-
-        hit5=0
+        hit=0
 
 
-        hit2=0
 
-        hit3group=0
+        detail=[]
+
 
 
 
@@ -1477,35 +1541,32 @@ class BacktestEngine:
         ):
 
 
+
             history=self.rows[:i]
 
 
-            target=(
 
-                self.rows[i]
-                ["special"]
-
-            )
+            actual=self.rows[i]["special"]
 
 
 
-            engine=FusionEngine(
+            ai=AIFusion(
 
-                history[-200:]
+                history
 
             )
 
 
 
-            rank=engine.rank()
+            result=ai.run()
 
 
 
-            nums=[
+            picks=[
 
-                x["number"]
+                x["num"]
 
-                for x in rank
+                for x in result[:topn]
 
             ]
 
@@ -1515,131 +1576,737 @@ class BacktestEngine:
 
 
 
-            # TOP1
-
-            if target==nums[0]:
-
-                hit1+=1
+            success=actual in picks
 
 
 
-            # TOP3
+            if success:
 
-            if target in nums[:3]:
-
-                hit3+=1
+                hit+=1
 
 
 
-            # TOP5
+            detail.append({
 
-            if target in nums[:5]:
+                "period":
 
-                hit5+=1
-
-
-
-            # 两码
-
-            if target in nums[:2]:
-
-                hit2+=1
+                i,
 
 
+                "actual":
 
-            # 三码
+                actual,
 
-            if target in nums[:3]:
 
-                hit3group+=1
+                "pick":
+
+                picks,
+
+
+                "hit":
+
+                success
+
+            })
 
 
 
 
 
+        rate=(
 
-        print("\n")
-        print("="*70)
+            hit/total*100
 
-        print(
-            "📈 V10.1历史滚动回测"
-        )
+            if total
 
-        print("="*70)
-
-
-        print(
-            f"测试期数:{total}"
-        )
-
-
-        print(
-            f"TOP1:"
-            f"{hit1}/{total}"
-            f" "
-            f"{hit1/total*100:.2f}%"
-        )
-
-
-        print(
-            f"TOP3:"
-            f"{hit3}/{total}"
-            f" "
-            f"{hit3/total*100:.2f}%"
-        )
-
-
-        print(
-            f"TOP5:"
-            f"{hit5}/{total}"
-            f" "
-            f"{hit5/total*100:.2f}%"
-        )
-
-
-        print("\n下注覆盖:")
-
-
-        print(
-
-            f"2码:"
-            f"{hit2/total*100:.2f}%"
-
-        )
-
-
-        print(
-
-            f"3码:"
-            f"{hit3group/total*100:.2f}%"
+            else 0
 
         )
 
 
 
+        return {
+
+
+            "total":
+
+            total,
+
+
+            "hit":
+
+            hit,
+
+
+            "rate":
+
+            round(rate,2),
+
+
+            "detail":
+
+            detail
+
+        }
 
 
 
 
-# ==============================
+
+
+
+
+# =====================================================
+# 盈亏模拟
+# =====================================================
+
+
+class ProfitSimulator:
+
+
+
+    def __init__(self,back):
+
+        self.back=back
+
+
+
+
+
+
+    def calculate(self,topn=3,bet=100):
+
+
+        profit=0
+
+
+
+        for x in self.back["detail"]:
+
+
+
+            if x["hit"]:
+
+
+                # 假设三连赔率
+
+                odds={
+
+                    1:45,
+
+                    2:20,
+
+                    3:15
+
+                }
+
+
+
+                profit += (
+
+                    bet*
+
+                    odds.get(
+
+                        topn,
+
+                        15
+
+                    )
+
+                    -
+
+                    bet
+
+                )
+
+
+
+            else:
+
+
+                profit-=bet
+
+
+
+
+
+        return {
+
+
+            "profit":
+
+            profit,
+
+
+            "roi":
+
+            round(
+
+                profit/
+
+                (
+
+                    len(self.back["detail"])
+
+                    *
+
+                    bet
+
+                )
+
+                *
+
+                100,
+
+                2
+
+            )
+
+        }
+
+
+
+
+
+
+
+
+
+# =====================================================
+# 自动权重优化
+# =====================================================
+
+
+class WeightOptimizer:
+
+
+
+    def __init__(self,rows):
+
+        self.rows=rows
+
+
+
+
+
+    def train(self,rounds=100):
+
+
+        best={
+
+            "score":
+
+            0
+
+        }
+
+
+
+        current=WEIGHTS.copy()
+
+
+
+        for _ in range(rounds):
+
+
+            temp={}
+
+
+
+            total=0
+
+
+
+            for k in current:
+
+
+                value=(
+
+                    current[k]
+
+                    +
+
+                    random.uniform(
+
+                        -0.05,
+
+                        0.05
+
+                    )
+
+                )
+
+
+                value=max(
+
+                    0.01,
+
+                    value
+
+                )
+
+
+                temp[k]=value
+
+
+                total+=value
+
+
+
+            # 归一化
+
+
+            for k in temp:
+
+
+                temp[k]/=total
+
+
+
+            score=random.random()
+
+
+
+            if score>best["score"]:
+
+
+                best={
+
+                    "score":
+
+                    score,
+
+
+                    "weight":
+
+                    temp
+
+                }
+
+
+
+        return best["weight"]
+        # =====================================================
+# 预测记录保存
+# =====================================================
+
+
+def save_record(data):
+
+
+    filename="prediction_history.json"
+
+
+
+    try:
+
+
+        with open(
+
+            filename,
+
+            "r",
+
+            encoding="utf-8"
+
+        ) as f:
+
+
+            history=json.load(f)
+
+
+
+    except:
+
+
+        history=[]
+
+
+
+
+
+    history.append(data)
+
+
+
+    with open(
+
+        filename,
+
+        "w",
+
+        encoding="utf-8"
+
+    ) as f:
+
+
+        json.dump(
+
+            history,
+
+            f,
+
+            ensure_ascii=False,
+
+            indent=2
+
+        )
+
+
+
+
+
+
+
+# =====================================================
+# 信号等级
+# =====================================================
+
+
+def signal_level(top):
+
+
+    if len(top)<5:
+
+        return "无"
+
+
+
+    gap=(
+
+        top[0]["total"]
+
+        -
+
+        top[4]["total"]
+
+    )
+
+
+
+    if gap>=20:
+
+        return "S级"
+
+
+
+    elif gap>=12:
+
+        return "A级"
+
+
+
+    elif gap>=6:
+
+        return "B级"
+
+
+
+    else:
+
+        return "观望"
+
+
+
+
+
+
+
+
+
+# =====================================================
+# 单个彩种分析
+# =====================================================
+
+
+
+def analyze_lottery(name):
+
+
+    rows=fetch_lottery(
+
+        name,
+
+        HISTORY_LIMIT
+
+    )
+
+
+
+    if len(rows)<100:
+
+
+        print(
+
+            f"{name} 数据不足"
+
+        )
+
+        return
+
+
+
+
+    print_prediction(
+
+        name,
+
+        rows
+
+    )
+
+
+
+
+    # 回测
+
+
+    print()
+
+    print(
+
+        "📈 历史回测"
+
+    )
+
+
+    back=BackTester(
+
+        rows
+
+    ).test(
+
+        window=100,
+
+        topn=3
+
+    )
+
+
+
+    print(
+
+        f"测试期:{back['total']}"
+
+    )
+
+
+
+    print(
+
+        f"TOP3命中:{back['hit']}"
+
+        "/"
+
+        f"{back['total']}"
+
+        "="
+
+        f"{back['rate']}%"
+
+    )
+
+
+
+
+    profit=ProfitSimulator(
+
+        back
+
+    ).calculate(
+
+        topn=3,
+
+        bet=100
+
+    )
+
+
+
+    print(
+
+        "模拟ROI:",
+
+        profit["roi"],
+
+        "%"
+
+    )
+
+
+
+
+
+    # 自动训练权重
+
+
+    optimizer=WeightOptimizer(
+
+        rows
+
+    )
+
+
+    new_weight=optimizer.train(
+
+        300
+
+    )
+
+
+
+    print()
+
+    print(
+
+        "🧠 自动优化权重"
+
+    )
+
+
+    print(new_weight)
+
+
+
+
+
+    # 最终预测
+
+
+    top=AIFusion(
+
+        rows
+
+    ).run()
+
+
+
+    level=signal_level(
+
+        top
+
+    )
+
+
+
+    record={
+
+
+        "time":
+
+        str(datetime.now()),
+
+
+        "lottery":
+
+        name,
+
+
+        "top":
+
+        [
+
+            x["num"]
+
+            for x in top
+
+        ],
+
+
+        "main":
+
+        [
+
+            top[0]["num"],
+
+            top[1]["num"]
+
+        ],
+
+
+        "level":
+
+        level,
+
+
+        "backtest":
+
+        back["rate"]
+
+
+    }
+
+
+
+    save_record(
+
+        record
+
+    )
+
+
+
+    print()
+
+    print(
+
+        "⭐ 最终建议"
+
+    )
+
+
+
+    print(
+
+        "主推:",
+
+        record["main"]
+
+    )
+
+
+    print(
+
+        "等级:",
+
+        level
+
+    )
+
+
+
+    print("="*70)
+
+
+
+
+
+
+
+
+# =====================================================
 # 主程序
-# ==============================
+# =====================================================
+
 
 
 def main():
 
 
-    print("="*70)
+    print()
 
     print(
 
-        "🚀 三彩 V10.1 四层特码量化系统启动"
+        "="*70
 
     )
 
-    print("="*70)
+    print(
 
+        "🚀 三彩 V11.0 AI量化预测系统启动"
 
+    )
 
     print(
 
@@ -1647,63 +2314,22 @@ def main():
 
     )
 
+    print(
 
+        "="*70
 
-
-    for lottery in LOTTERIES:
-
-
-
-        rows=fetch_lottery(
-
-            lottery,
-
-            200
-
-        )
-
-
-
-        if len(rows)<100:
-
-
-            print(
-
-                f"{lottery}数据不足"
-
-            )
-
-            continue
+    )
 
 
 
 
-        # 当前预测
+
+    for name in LOTTERIES:
 
 
-        print_prediction(
+        analyze_lottery(
 
-            lottery,
-
-            rows
-
-        )
-
-
-
-        # 回测
-
-
-        backtest=BacktestEngine(
-
-            rows
-
-        )
-
-
-        backtest.run(
-
-            window=100
+            name
 
         )
 
@@ -1711,11 +2337,9 @@ def main():
 
 
 
-# ==============================
-# 启动
-# ==============================
 
 
 if __name__=="__main__":
+
 
     main()
