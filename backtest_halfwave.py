@@ -1,856 +1,163 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# ============================================================
+# 三彩 V11.3 AI四层特码预测系统
+# 第一部分：
+# 配置 + 数据获取模块 fetch_lottery
+# ============================================================
 
-"""
-三彩 V11.2.1 AI四层特码预测系统
-
-修复:
-1. fetch_lottery 数据错位
-2. 特码自动识别
-3. 数据完整校验
-
-模型:
-第一层:
-尾数 + 余数
-
-第二层:
-大小
-
-第三层:
-单双
-
-第四层:
-颜色
-"""
-
-
-import re
+import requests
 import json
-import math
-import urllib.request
-from datetime import datetime
-from collections import Counter
+import datetime
+import time
+import random
+
+
+# ============================================================
+# 基础配置
+# ============================================================
+
+VERSION = "V11.3"
+
+LOTTERY_CONFIG = {
+
+    "香港彩":{
+        "url":
+        "https://marksix6.net/index.php?api=1",
+
+        "name":"香港彩"
+    },
+
+
+    "新澳门彩":{
+        "url":
+        "https://marksix6.net/index.php?api=1",
+
+        "name":"新澳门彩"
+    },
+
+
+    "老澳门彩":{
+        "url":
+        "https://marksix6.net/index.php?api=1",
+
+        "name":"老澳门彩"
+    }
+
+}
+
+
+# 历史数量
+
+HISTORY_LIMIT = 500
 
 
 
-# ==============================
-# API
-# ==============================
+# ============================================================
+# 请求头
+# ============================================================
 
-API_URL = "https://marksix6.net/index.php?api=1"
+HEADERS={
 
+    "User-Agent":
+    "Mozilla/5.0",
 
-
-# ==============================
-# 四层权重
-# ==============================
-
-WEIGHTS = {
-
-    "tail":0.40,
-
-    "size":0.25,
-
-    "odd":0.20,
-
-    "color":0.15
+    "Accept":
+    "application/json,text/plain,*/*"
 
 }
 
 
 
-LOTTERIES=[
-
-    "香港彩",
-
-    "新澳门彩",
-
-    "老澳门彩"
-
-]
-
-
-
-
-# ==============================
-# 颜色表
-# ==============================
-
+# ============================================================
+# 颜色数据库
+# ============================================================
 
 RED = {
-
 1,2,7,8,12,13,18,19,
-
 23,24,29,30,34,35,40,
-
 45,46
-
 }
-
 
 
 BLUE = {
-
-3,4,9,10,14,15,20,
-
-25,26,31,36,37,41,
-
-42,47,48
-
+3,4,9,10,14,15,20,25,
+26,31,36,37,41,42,47,48
 }
 
 
-
-GREEN={
-
-5,6,11,16,17,21,
-
-22,27,28,32,33,
-
-38,39,43,44,49
-
+GREEN = {
+5,6,11,16,17,21,22,27,
+28,32,33,38,39,43,44,49
 }
-
-
-
 
 
 
 def get_color(num):
 
+    num=int(num)
 
     if num in RED:
-
         return "红"
 
-
     elif num in BLUE:
-
         return "蓝"
 
-
-    else:
-
+    elif num in GREEN:
         return "绿"
 
+    else:
+        return "未知"
 
 
 
+# ============================================================
+# 数字属性
+# ============================================================
 
+def number_feature(num):
 
-
-# ==============================
-# 数字提取
-# ==============================
-
-
-def parse_numbers(text):
-
-
-    nums=re.findall(
-
-        r"\d+",
-
-        str(text)
-
-    )
-
-
-    result=[]
-
-
-    for n in nums:
-
-
-        n=int(n)
-
-
-        if 1<=n<=49:
-
-
-            result.append(n)
-
-
-    return result
-
-
-
-
-
-
-# ==============================
-# 新特码识别核心
-# ==============================
-
-
-def extract_special(item,line):
-
-
-    """
-    优先读取字段
-    防止把生肖/日期当特码
-    """
-
-
-
-    keys=[
-
-
-        "special",
-
-        "special_num",
-
-        "teMa",
-
-        "tm",
-
-        "特码",
-
-        "特码号码"
-
-
-    ]
-
-
-
-
-    # 第一优先
-    for k in keys:
-
-
-        if k in item:
-
-
-            try:
-
-                n=int(item[k])
-
-
-                if 1<=n<=49:
-
-
-                    return n
-
-            except:
-
-                pass
-
-
-
-
-
-
-    # 第二优先
-    # 从字符串寻找:
-    # 特码:38
-    # 特码 38
-
-
-    m=re.search(
-
-        r"(特码|特碼|tm)\s*[:： ]\s*(\d{1,2})",
-
-        str(line),
-
-        re.I
-
-    )
-
-
-
-    if m:
-
-
-        n=int(m.group(2))
-
-
-        if 1<=n<=49:
-
-
-            return n
-
-
-
-
-
-
-    return None
-    # ====================================================
-# 数据获取模块 V11.2.1
-# ====================================================
-
-
-def fetch_lottery(lottery_name, limit=500):
-
-
-    print()
-
-    print(
-        f"📡 获取数据: {lottery_name}"
-    )
-
-
-    try:
-
-
-        req = urllib.request.Request(
-
-            API_URL,
-
-            headers={
-
-                "User-Agent":
-                "Mozilla/5.0"
-
-            }
-
-        )
-
-
-
-        with urllib.request.urlopen(
-
-            req,
-
-            timeout=15
-
-        ) as response:
-
-
-            raw=response.read().decode(
-
-                "utf-8"
-
-            )
-
-
-
-        data=json.loads(raw)
-
-
-
-    except Exception as e:
-
-
-        print(
-
-            "❌ API读取失败:",
-
-            e
-
-        )
-
-        return []
-
-
-
-
-
-
-
-    rows=[]
-
-
-
-
-    lottery_block=None
-
-
-
-
-    # ----------------------------
-    # 找对应彩种
-    # ----------------------------
-
-
-    for item in data.get(
-
-        "lottery_data",
-
-        []
-
-    ):
-
-
-
-        name=str(
-
-            item.get(
-
-                "name",
-
-                ""
-
-            )
-
-        ).strip()
-
-
-
-        if name==lottery_name:
-
-
-            lottery_block=item
-
-            break
-
-
-
-
-
-    if not lottery_block:
-
-
-        print(
-
-            "❌ 未找到彩种"
-
-        )
-
-        return []
-
-
-
-
-
-
-    history=lottery_block.get(
-
-        "history",
-
-        []
-
-    )
-
-
-
-
-
-    for line in history:
-
-
-
-        special=None
-
-
-
-        issue=None
-
-
-
-
-        # ======================
-        # 1. 获取期号
-        # ======================
-
-
-        text=str(line)
-
-
-
-
-        m=re.search(
-
-            r"(20\d{5,8})",
-
-            text
-
-        )
-
-
-        if m:
-
-
-            raw_issue=m.group(1)
-
-
-
-            try:
-
-
-                issue=(
-
-                    raw_issue[:4]
-
-                    +
-
-                    "/"
-
-                    +
-
-                    str(
-
-                        int(
-
-                            raw_issue[4:]
-
-                        )
-
-                    ).zfill(3)
-
-                )
-
-
-
-            except:
-
-
-                continue
-
-
-
-
-        else:
-
-
-            continue
-
-
-
-
-
-        # ======================
-        # 2. 优先字段特码
-        # ======================
-
-
-        if isinstance(line,dict):
-
-
-            special=extract_special(
-
-                line,
-
-                line
-
-            )
-
-
-
-        else:
-
-
-            special=extract_special(
-
-                lottery_block,
-
-                line
-
-            )
-
-
-
-
-
-        # ======================
-        # 3. 备用解析
-        # ======================
-
-
-        if special is None:
-
-
-
-            nums=parse_numbers(
-
-                text
-
-            )
-
-
-
-            # 查找连续6+1号码结构
-
-            if len(nums)>=7:
-
-
-
-                candidates=[
-
-                    n for n in nums
-
-                    if 1<=n<=49
-
-                ]
-
-
-
-                # 去掉期号年份
-
-                candidates=[
-
-                    n for n in candidates
-
-                    if n<50
-
-                ]
-
-
-
-                # 特码通常最后一个独立号码
-
-                if len(candidates)>=7:
-
-
-                    special=candidates[-1]
-
-
-
-
-
-
-
-        # ======================
-        # 4. 最终检查
-        # ======================
-
-
-        if special is None:
-
-
-            continue
-
-
-
-        if not(
-
-            1<=special<=49
-
-        ):
-
-
-            continue
-
-
-
-
-
-
-        rows.append(
-
-            {
-
-
-            "issue":
-
-            issue,
-
-
-            "num":
-
-            special,
-
-
-            "color":
-
-            get_color(special),
-
-
-            "big":
-
-            special>=25,
-
-
-            "small":
-
-            special<25,
-
-
-            "odd":
-
-            special%2==1,
-
-
-            "even":
-
-            special%2==0
-
-
-
-            }
-
-        )
-
-
-
-
-
-
-
-
-    # ==========================
-    # 去重
-    # ==========================
-
-
-    unique={}
-
-
-
-    for r in rows:
-
-
-        unique[r["issue"]]=r
-
-
-
-
-    rows=list(
-
-        unique.values()
-
-    )
-
-
-
-
-    rows.sort(
-
-        key=lambda x:
-
-        x["issue"]
-
-    )
-
-
-
-
-
-    rows=rows[-limit:]
-
-
-
-
-
-
-
-    print(
-
-        f"✅ 获取 {len(rows)} 期"
-
-    )
-
-
-
-
-    # ==========================
-    # 数据检查
-    # ==========================
-
-
-    if rows:
-
-
-
-        print()
-
-        print(
-
-            "🔍 数据校验"
-
-        )
-
-
-        print(
-
-            "最新期:",
-
-            rows[-1]["issue"]
-
-        )
-
-
-        print(
-
-            "最新特码:",
-
-            rows[-1]["num"]
-
-        )
-
-
-        print(
-
-            "颜色:",
-
-            rows[-1]["color"]
-
-        )
-
-
-
-        if 1<=rows[-1]["num"]<=49:
-
-
-            print(
-
-                "✅ 特码范围正常"
-
-            )
-
-
-        else:
-
-
-            print(
-
-                "❌ 特码异常"
-
-            )
-
-
-
-
-
-    return rows
-    # ====================================================
-# 号码属性
-# ====================================================
-
-
-def number_info(num):
-
+    num=int(num)
 
     return {
 
-
-        "num":
-
-        num,
+        "num":num,
 
 
+        # 尾数
         "tail":
+        num%10,
 
-        num % 10,
 
+        # 大小
+        # 1-24 小
+        # 25-49 大
+
+        "big":
+        True if num>=25 else False,
+
+
+        # 单双
+
+        "odd":
+        True if num%2==1 else False,
+
+
+        # 余数
 
         "r3":
-
-        num % 3,
+        num%3,
 
 
         "r5":
-
-        num % 5,
+        num%5,
 
 
         "r7":
-
-        num % 7,
-
-
-        "big":
-
-        num >= 25,
+        num%7,
 
 
-        "odd":
-
-        num % 2 == 1,
-
+        # 颜色
 
         "color":
-
         get_color(num)
 
     }
@@ -858,25 +165,337 @@ def number_info(num):
 
 
 
+# ============================================================
+# 数据清洗
+# ============================================================
 
-def enrich_rows(rows):
 
+def clean_number(x):
+
+    """
+    提取特码数字
+    """
+
+    if x is None:
+        return None
+
+
+    try:
+
+        # 数字
+
+        if isinstance(x,int):
+
+            if 1<=x<=49:
+                return x
+
+
+
+        # 字符
+
+        s=str(x)
+
+
+        nums=[]
+
+        for i in s:
+
+            if i.isdigit():
+
+                nums.append(i)
+
+
+
+        if len(nums)>0:
+
+            n=int(
+                "".join(nums)
+            )
+
+            if 1<=n<=49:
+
+                return n
+
+
+    except:
+
+        pass
+
+
+
+    return None
+
+
+
+
+# ============================================================
+# 核心 fetch_lottery
+# ============================================================
+
+
+def fetch_lottery(name):
+
+
+    print()
+
+    print(
+    "📡 获取数据:",
+    name
+    )
+
+
+    cfg=LOTTERY_CONFIG[name]
+
+
+    try:
+
+
+        r=requests.get(
+
+            cfg["url"],
+
+            headers=HEADERS,
+
+            timeout=10
+
+        )
+
+
+        data=r.json()
+
+
+
+    except Exception as e:
+
+
+        print(
+        "❌接口失败:",
+        e
+        )
+
+
+        return []
+
+
+
+    records=[]
+
+
+
+    # ==================================================
+    # 自动寻找列表
+    # ==================================================
+
+    raw=None
+
+
+    if isinstance(data,list):
+
+        raw=data
+
+
+    elif isinstance(data,dict):
+
+
+        for k,v in data.items():
+
+            if isinstance(v,list):
+
+                raw=v
+
+                break
+
+
+
+    if raw is None:
+
+        print(
+        "❌没有找到开奖列表"
+        )
+
+        return []
+
+
+
+
+    # ==================================================
+    # 解析每一期
+    # ==================================================
+
+
+    for item in raw:
+
+
+        if not isinstance(item,dict):
+
+            continue
+
+
+
+        issue=None
+
+        num=None
+
+
+
+        # -------------------------
+        # 期号字段
+        # -------------------------
+
+
+        for key in [
+
+            "expect",
+            "issue",
+            "period",
+            "qihao",
+            "term",
+            "no"
+
+        ]:
+
+            if key in item:
+
+                issue=item[key]
+
+                break
+
+
+
+
+        # -------------------------
+        # 特码字段优先级
+        # -------------------------
+
+
+        possible=[
+
+
+            "tm",
+
+            "teMa",
+
+            "tema",
+
+            "special",
+
+            "special_num",
+
+            "specialNumber",
+
+            "sx",
+
+            "zodiac"
+
+        ]
+
+
+
+        for key in possible:
+
+
+            if key in item:
+
+
+                num=clean_number(
+                    item[key]
+                )
+
+
+                if num:
+
+                    break
+
+
+
+        # ==================================================
+        # 如果没有特码字段
+        # 尝试所有字段寻找49以内数字
+        # ==================================================
+
+
+        if num is None:
+
+
+            for k,v in item.items():
+
+
+                n=clean_number(v)
+
+
+                if n:
+
+
+                    num=n
+
+                    break
+
+
+
+
+        # ==================================================
+        # 最终校验
+        # ==================================================
+
+        if num is None:
+
+            continue
+
+
+
+        if not(
+            1<=num<=49
+        ):
+
+            continue
+
+
+
+        records.append({
+
+            "issue":issue,
+
+            "num":num,
+
+            "feature":
+            number_feature(num)
+
+        })
+
+
+
+
+    # 去重
 
     result=[]
 
+    seen=set()
 
-    for r in rows:
+
+    for x in records:
 
 
-        result.append(
+        if x["num"] not in seen:
 
-            number_info(
+            result.append(x)
 
-                r["num"]
-
+            seen.add(
+                x["num"]
             )
 
-        )
+
+
+    # 最新在前
+
+    result=result[:HISTORY_LIMIT]
+
+
+
+    print(
+    "✅ 获取",
+    len(result),
+    "期"
+    )
 
 
     return result
@@ -884,840 +503,659 @@ def enrich_rows(rows):
 
 
 
+# ============================================================
+# 数据校验
+# ============================================================
+
+
+def check_data(data):
+
+
+    print()
+
+    print(
+    "🔍 数据校验"
+    )
+
+
+    if len(data)==0:
+
+        print(
+        "❌ 无数据"
+        )
+
+        return False
 
 
 
-# ====================================================
-# 第一层
-# 尾数 + 余数模型
-# ====================================================
-
-
-class TailRemainderModel:
+    latest=data[0]
 
 
 
-    def __init__(self,rows):
+    print(
+
+    "最新期:",
+
+    latest["issue"]
+
+    )
 
 
-        self.rows=rows
+    print(
 
+    "最新特码:",
 
+    latest["num"]
 
-
-
-    def tail_score(self,num):
-
-
-        recent=[
-
-            x["num"]%10
-
-            for x in self.rows[-100:]
-
-        ]
+    )
 
 
 
-        count=Counter(recent)
+    print(
+
+    "颜色:",
+
+    latest["feature"]["color"]
+
+    )
 
 
 
-        tail=num%10
+    if 1<=latest["num"]<=49:
 
 
-
-        return (
-
-            count.get(
-
-                tail,
-
-                0
-
-            )
-
-            /
-
-            len(recent)
-
-            *
-
-            100
-
+        print(
+        "✅特码范围正常"
         )
 
 
+        return True
+
+
+    else:
+
+
+        print(
+        "❌特码异常"
+        )
+
+        return False
 
 
 
+# ============================================================
+# 测试
+# ============================================================
 
 
-    def remainder_score(self,num):
+if __name__=="__main__":
+
+
+    print("="*70)
+
+    print(
+    "三彩",
+    VERSION,
+    "数据模块测试"
+    )
+
+    print("="*70)
+
+
+
+    for name in LOTTERY_CONFIG:
+
+
+        data=fetch_lottery(name)
+
+
+        check_data(data)
+        # ============================================================
+# 三彩 V11.3
+# 第二部分：
+# 四层漏斗预测核心
+# ============================================================
+
+
+import math
+from collections import Counter
+
+
+
+# ============================================================
+# 参数
+# ============================================================
+
+
+TAIL_WEIGHT = 0.45
+
+REMAIN_WEIGHT = 0.55
+
+
+
+# ============================================================
+# 第一层
+# 尾数 + 余数分析
+# ============================================================
+
+
+def tail_remainder_score(history):
+
+
+    """
+    第一层核心
+
+    分析:
+    1.尾数热度
+    2.尾数遗漏
+    3.余数周期
+
+    """
+
+
+    nums=[
+
+        x["num"]
+
+        for x in history
+
+    ]
+
+
+
+    tail_count=Counter(
+
+        n%10
+
+        for n in nums
+
+    )
+
+
+
+    r3_count=Counter(
+
+        n%3
+
+        for n in nums
+
+    )
+
+
+    r5_count=Counter(
+
+        n%5
+
+        for n in nums
+
+    )
+
+
+    scores={}
+
+
+
+    for n in range(1,50):
+
+
+        tail=n%10
+
+
+        r3=n%3
+
+        r5=n%5
+
 
 
         score=0
 
 
 
-        recent=self.rows[-100:]
+        # ---------------------
+        # 尾数热度
+        # ---------------------
 
+        score += (
 
-
-        for base in [
-
-            3,
-
-            5,
-
-            7
-
-        ]:
-
-
-            values=[
-
-                x["num"]%base
-
-                for x in recent
-
-            ]
-
-
-
-            target=num%base
-
-
-
-            score += (
-
-                values.count(
-
-                    target
-
-                )
-
-                /
-
-                len(values)
-
-                *
-
-                100
-
-            )
-
-
-
-        return score/3
-
-
-
-
-
-
-
-    def score(self,num):
-
-
-        return (
-
-            self.tail_score(num)
-
-            +
-
-            self.remainder_score(num)
-
-        )/2
-
-
-
-
-
-
-
-# ====================================================
-# 第二层
-# 大小模型
-# ====================================================
-
-
-class SizeModel:
-
-
-
-    def __init__(self,rows):
-
-
-        self.rows=rows
-
-
-
-
-
-    def score(self,num):
-
-
-        recent=self.rows[-50:]
-
-
-
-        if num>=25:
-
-
-            rate=sum(
-
-                1
-
-                for x in recent
-
-                if x["num"]>=25
-
-            )
-
-
-
-        else:
-
-
-            rate=sum(
-
-                1
-
-                for x in recent
-
-                if x["num"]<25
-
-            )
-
-
-
-        return rate/len(recent)*100
-
-
-
-
-
-
-
-
-# ====================================================
-# 第三层
-# 单双模型
-# ====================================================
-
-
-class OddEvenModel:
-
-
-
-    def __init__(self,rows):
-
-
-        self.rows=rows
-
-
-
-
-
-    def score(self,num):
-
-
-        recent=self.rows[-50:]
-
-
-
-        if num%2:
-
-
-            hit=sum(
-
-                1
-
-                for x in recent
-
-                if x["num"]%2
-
-            )
-
-
-        else:
-
-
-            hit=sum(
-
-                1
-
-                for x in recent
-
-                if x["num"]%2==0
-
-            )
-
-
-
-        return hit/len(recent)*100
-
-
-
-
-
-
-
-# ====================================================
-# 第四层
-# 颜色模型
-# ====================================================
-
-
-class ColorModel:
-
-
-
-    def __init__(self,rows):
-
-
-        self.rows=rows
-
-
-
-
-
-    def score(self,num):
-
-
-        recent=[
-
-            get_color(
-
-                x["num"]
-
-            )
-
-            for x in self.rows[-100:]
-
-        ]
-
-
-
-        c=get_color(num)
-
-
-
-        return (
-
-            recent.count(c)
-
-            /
-
-            len(recent)
+            tail_count[tail]
 
             *
 
-            100
-
-        )
-        # ====================================================
-# AI融合引擎
-# ====================================================
-
-
-class FusionEngine:
-
-
-
-    def __init__(self, rows):
-
-
-        self.rows = rows
-
-
-
-        self.tail = TailRemainderModel(rows)
-
-
-        self.size = SizeModel(rows)
-
-
-        self.odd = OddEvenModel(rows)
-
-
-        self.color = ColorModel(rows)
-
-
-
-
-
-    # ----------------------------
-    # 单号码评分
-    # ----------------------------
-
-
-    def score_number(self,num):
-
-
-        tail_score = self.tail.score(num)
-
-
-        size_score = self.size.score(num)
-
-
-        odd_score = self.odd.score(num)
-
-
-        color_score = self.color.score(num)
-
-
-
-
-
-        total = (
-
-
-            tail_score
-
-            *
-
-            WEIGHTS["tail"]
-
-
-
-            +
-
-
-
-            size_score
-
-            *
-
-            WEIGHTS["size"]
-
-
-
-            +
-
-
-
-            odd_score
-
-            *
-
-            WEIGHTS["odd"]
-
-
-
-            +
-
-
-
-            color_score
-
-            *
-
-            WEIGHTS["color"]
-
-
+            TAIL_WEIGHT
 
         )
 
 
 
+        # ---------------------
+        # 余数周期
+        # ---------------------
+
+        score += (
+
+            r3_count[r3]
+
+            *
+
+            0.3
+
+        )
 
 
-        return {
+        score += (
 
+            r5_count[r5]
 
-            "num":
+            *
 
-            num,
-
-
-            "tail":
-
-            round(tail_score,2),
-
-
-
-            "size":
-
-            round(size_score,2),
-
-
-
-            "odd":
-
-            round(odd_score,2),
-
-
-
-            "color":
-
-            round(color_score,2),
-
-
-
-            "score":
-
-            round(total,2)
-
-
-        }
-
-
-
-
-
-
-
-
-    # ----------------------------
-    # 49号码全部评分
-    # ----------------------------
-
-
-    def rank(self):
-
-
-        result=[]
-
-
-
-        for num in range(1,50):
-
-
-            result.append(
-
-                self.score_number(num)
-
-            )
-
-
-
-        result.sort(
-
-            key=lambda x:
-
-            x["score"],
-
-            reverse=True
+            0.25
 
         )
 
 
 
-        return result
+        # ---------------------
+        # 遗漏补偿
+        # ---------------------
 
+        miss=0
 
 
+        for i,x in enumerate(history):
 
+            if x["num"]==n:
 
+                miss=i
 
+                break
 
-# ====================================================
-# 双码优化选择
-# ====================================================
 
+        score += min(
+            miss*0.15,
+            10
+        )
 
-def best_pair(ranking):
 
 
+        scores[n]=score
 
-    top=ranking[:10]
 
 
+    return scores
 
-    best=None
 
 
-    best_score=0
 
+# ============================================================
+# 第一层筛选12码
+# ============================================================
 
 
+def layer_one(history):
 
 
-    for i in range(len(top)):
+    scores=tail_remainder_score(history)
 
 
+    result=sorted(
 
-        for j in range(
+        scores.items(),
 
-            i+1,
+        key=lambda x:x[1],
 
-            len(top)
-
-        ):
-
-
-
-            a=top[i]
-
-
-            b=top[j]
-
-
-
-            score=(
-
-
-                a["score"]
-
-                +
-
-                b["score"]
-
-
-            )
-
-
-
-
-
-            # 同尾降低
-
-
-            if a["num"]%10 == b["num"]%10:
-
-
-                score*=0.85
-
-
-
-
-
-            # 同单双降低
-
-
-            if a["num"]%2 == b["num"]%2:
-
-
-                score*=0.90
-
-
-
-
-
-
-            # 同颜色降低
-
-
-            if get_color(a["num"]) == get_color(b["num"]):
-
-
-                score*=0.95
-
-
-
-
-
-
-            if score > best_score:
-
-
-
-                best_score=score
-
-
-
-                best={
-
-
-                    "pair":(
-
-                        a["num"],
-
-                        b["num"]
-
-                    ),
-
-
-
-                    "score":
-
-                    round(
-
-                        score,
-
-                        2
-
-                    )
-
-                }
-
-
-
-
-    return best
-
-
-
-
-
-
-
-# ====================================================
-# 打印TOP
-# ====================================================
-
-
-def print_top10(ranking):
-
-
-    print()
-
-
-    print(
-
-        "🔥 TOP10号码"
+        reverse=True
 
     )
 
 
-    print("-"*70)
+    return result[:12]
 
 
 
 
-    for i,x in enumerate(
 
-        ranking[:10],
+# ============================================================
+# 第二层
+# 大小过滤
+# ============================================================
+
+
+
+def size_filter(candidates,history):
+
+
+    nums=[
+
+        x["num"]
+
+        for x in history
+
+    ]
+
+
+
+    big=sum(
 
         1
 
-    ):
+        for n in nums
+
+        if n>=25
+
+    )
+
+
+    small=len(nums)-big
 
 
 
-        print(
+    big_rate=big/len(nums)
 
-            f"{i:02d}. "
 
-            f"{x['num']:02d} "
 
-            f"总分:{x['score']} "
+    result=[]
 
-            f"尾余:{x['tail']} "
 
-            f"大小:{x['size']} "
 
-            f"单双:{x['odd']} "
+    for num,score in candidates:
 
-            f"颜色:{x['color']}"
+
+        bonus=0
+
+
+        if big_rate>0.52:
+
+
+            if num>=25:
+
+                bonus+=8
+
+
+        else:
+
+
+            if num<25:
+
+                bonus+=8
+
+
+
+        result.append(
+
+            (
+            num,
+
+            score+bonus
+
+            )
 
         )
 
 
 
+    result.sort(
+
+        key=lambda x:x[1],
+
+        reverse=True
+
+    )
+
+
+    return result[:8]
 
 
 
 
 
-# ====================================================
-# 预测输出
-# ====================================================
+# ============================================================
+# 第三层
+# 单双过滤
+# ============================================================
 
 
-def predict(name,rows):
+def odd_even_filter(candidates,history):
+
+
+    nums=[
+
+        x["num"]
+
+        for x in history
+
+    ]
+
+
+
+    odd=sum(
+
+        1
+
+        for n in nums
+
+        if n%2
+
+    )
+
+
+    odd_rate=odd/len(nums)
+
+
+
+    result=[]
+
+
+
+    for num,score in candidates:
+
+
+
+        bonus=0
+
+
+
+        if odd_rate>0.55:
+
+
+            if num%2==1:
+
+                bonus+=7
+
+
+
+        elif odd_rate<0.45:
+
+
+            if num%2==0:
+
+                bonus+=7
+
+
+
+        else:
+
+
+            bonus+=3
+
+
+
+        result.append(
+
+            (
+            num,
+
+            score+bonus
+
+            )
+
+        )
+
+
+
+    result.sort(
+
+        key=lambda x:x[1],
+
+        reverse=True
+
+    )
+
+
+    return result[:5]
+
+
+
+
+
+# ============================================================
+# 第四层
+# 颜色确认
+# ============================================================
+
+
+
+def color_filter(candidates):
+
+
+    result=[]
+
+
+    color_count=Counter()
+
+
+
+    for num,score in candidates:
+
+
+        color=get_color(num)
+
+
+        result.append(
+
+            {
+
+            "num":num,
+
+            "score":score,
+
+            "color":color
+
+            }
+
+        )
+
+
+
+    # 颜色分散
+
+    result.sort(
+
+        key=lambda x:x["score"],
+
+        reverse=True
+
+    )
+
+
+    return result
+
+
+
+
+# ============================================================
+# 最终预测
+# ============================================================
+
+
+
+def predict_v113(history):
 
 
     print()
 
     print("="*70)
 
-
-    print(
-
-        "🎯",
-
-        name,
-
-        "V11.2.1 AI预测"
-
-    )
-
+    print("🎯 V11.3 四层漏斗预测")
 
     print("="*70)
 
 
 
+    # 第一层
 
-    print(
-
-        "最新特码:",
-
-        rows[-1]["num"]
-
-    )
-
-
-
-
-
-    engine=FusionEngine(rows)
-
-
-
-    ranking=engine.rank()
-
-
-
-
-    print_top10(
-
-        ranking
-
-    )
-
-
-
-
-
-    pair=best_pair(
-
-        ranking
-
-    )
-
+    l1=layer_one(history)
 
 
 
     print()
 
+    print("第一层 尾余TOP12:")
 
     print(
-
-        "⭐ 主推双码:",
-
-        pair["pair"]
-
-    )
-
-
-
-    print(
-
-        "组合评分:",
-
-        pair["score"]
-
-    )
-
-
-
-
-
-    print()
-
-
-    print(
-
-        "🛡 防守号码:",
 
         [
+            x[0]
 
-            x["num"]
+            for x in l1
 
-            for x in ranking[2:5]
+        ]
+
+    )
+
+
+
+    # 第二层
+
+
+    l2=size_filter(
+
+        l1,
+
+        history
+
+    )
+
+
+    print()
+
+    print("第二层 大小过滤:")
+
+    print(
+
+        [
+            x[0]
+
+            for x in l2
+
+        ]
+
+    )
+
+
+
+
+    # 第三层
+
+
+    l3=odd_even_filter(
+
+        l2,
+
+        history
+
+    )
+
+
+    print()
+
+    print("第三层 单双过滤:")
+
+    print(
+
+        [
+            x[0]
+
+            for x in l3
 
         ]
 
@@ -1727,412 +1165,318 @@ def predict(name,rows):
 
 
 
-    return {
+    # 第四层
 
 
-        "ranking":
-
-        ranking,
-
-
-        "pair":
-
-        pair
-
-    }
-    # ====================================================
-# 历史回测
-# ====================================================
-
-
-class BackTester:
+    final=color_filter(l3)
 
 
 
-    def __init__(self,rows):
+    print()
+
+    print("第四层 颜色确认:")
 
 
-        self.rows=rows
+    for x in final:
 
+        print(
 
+            x["num"],
 
+            x["color"],
 
-
-
-    def run(self,window=100):
-
-
-        total=0
-
-
-        hit1=0
-
-
-        hit3=0
-
-
-        hit5=0
-
-
-
-        detail=[]
-
-
-
-
-
-        if len(self.rows)<=window:
-
-
-            return None
-
-
-
-
-
-
-        for i in range(
-
-            window,
-
-            len(self.rows)
-
-        ):
-
-
-
-            history=self.rows[:i]
-
-
-
-            engine=FusionEngine(
-
-                history
-
+            round(
+                x["score"],
+                2
             )
-
-
-
-            ranking=engine.rank()
-
-
-
-            actual=self.rows[i]["num"]
-
-
-
-
-
-            top1=ranking[0]["num"]
-
-
-
-            top3=[
-
-                x["num"]
-
-                for x in ranking[:3]
-
-            ]
-
-
-
-            top5=[
-
-                x["num"]
-
-                for x in ranking[:5]
-
-            ]
-
-
-
-
-            total+=1
-
-
-
-
-
-            if actual==top1:
-
-
-                hit1+=1
-
-
-
-
-
-            if actual in top3:
-
-
-                hit3+=1
-
-
-
-
-
-            if actual in top5:
-
-
-                hit5+=1
-
-
-
-
-
-            detail.append(
-
-
-                {
-
-
-                    "actual":
-
-                    actual,
-
-
-                    "top1":
-
-                    top1,
-
-
-                    "top3":
-
-                    top3,
-
-
-                    "top5":
-
-                    top5
-
-
-
-                }
-
-            )
-
-
-
-
-
-
-        return {
-
-
-            "total":
-
-            total,
-
-
-            "top1":
-
-            round(
-
-                hit1/
-
-                total*
-
-                100,
-
-                2
-
-            ),
-
-
-            "top3":
-
-            round(
-
-                hit3/
-
-                total*
-
-                100,
-
-                2
-
-            ),
-
-
-            "top5":
-
-            round(
-
-                hit5/
-
-                total*
-
-                100,
-
-                2
-
-            ),
-
-
-            "detail":
-
-            detail
-
-        }
-
-
-
-
-
-
-
-
-# ====================================================
-# 双码回测
-# ====================================================
-
-
-def pair_backtest(rows,window=100):
-
-
-    total=0
-
-
-    hit=0
-
-
-
-
-
-    for i in range(
-
-        window,
-
-        len(rows)
-
-    ):
-
-
-
-        history=rows[:i]
-
-
-
-        ranking=FusionEngine(
-
-            history
-
-        ).rank()
-
-
-
-        pair=best_pair(
-
-            ranking
 
         )
 
 
 
-        actual=rows[i]["num"]
+    main=[
+
+        x["num"]
+
+        for x in final[:2]
+
+    ]
 
 
 
+    guard=[
 
-        total+=1
+        x["num"]
 
+        for x in final[2:]
 
-
-
-        if actual in pair["pair"]:
-
-
-            hit+=1
+    ]
 
 
 
+    print()
+
+    print(
+    "⭐ 主推双码:",
+    tuple(main)
+    )
 
 
-    if total==0:
+    print(
 
+    "🛡 防守号码:",
 
-        return None
+    guard
 
-
-
+    )
 
 
     return {
 
+        "main":main,
 
-        "total":
+        "guard":guard,
 
-        total,
-
-
-        "hit":
-
-        hit,
-
-
-        "rate":
-
-        round(
-
-            hit/
-
-            total*
-
-            100,
-
-            2
-
-        )
+        "detail":final
 
     }
+    # ============================================================
+# 三彩 V11.3
+# 第三部分：
+# 滚动回测 + ROI模块
+# ============================================================
+
+
+import statistics
+
+
+
+# ============================================================
+# 回测配置
+# ============================================================
+
+
+BACKTEST_PERIOD = 100
+
+
+BET_AMOUNT = 10
+
+
+# 单码赔率(示例)
+
+ODDS_SINGLE = 47
+
+
+
+# 双码赔率(示例)
+
+ODDS_DOUBLE = 18
+
+
+
+
+
+# ============================================================
+# 单次收益计算
+# ============================================================
+
+
+def calc_profit(hit,bet):
+
+
+    if hit:
+
+        return bet*ODDS_SINGLE-bet
+
+
+    else:
+
+        return -bet
+
+
+
+
+
+# ============================================================
+# 双码收益
+# ============================================================
+
+
+def calc_double_profit(hit,bet):
+
+
+    if hit:
+
+        return bet*ODDS_DOUBLE-bet
+
+
+    else:
+
+        return -bet
 
 
 
 
 
 
+# ============================================================
+# 滚动回测
+# ============================================================
 
 
-# ====================================================
-# 盈亏模拟
-# ====================================================
+def backtest_v113(history):
 
 
-def roi_simulation(back,bet=100):
+    print()
+
+    print("="*70)
+
+    print("📈 V11.3 历史滚动回测")
+
+    print("="*70)
+
+
+
+    total=len(history)
+
+
+
+    if total < BACKTEST_PERIOD+50:
+
+
+        test_count=total-50
+
+
+    else:
+
+        test_count=BACKTEST_PERIOD
+
+
+
+
+    top1=0
+
+    top3=0
+
+    top5=0
+
+
+    double_hit=0
+
 
 
     profit=0
 
 
-    count=0
+
+    double_profit=0
+
+
+
+    records=[]
+
+
+
+
+    # 注意:
+
+    # history[0] 最新
+
+    # 从旧到新预测
+
+
+    for i in range(
+
+        test_count,
+
+        0,
+
+        -1
+
+    ):
+
+
+
+        train=history[i:]
+
+
+
+        target=history[i-1]["num"]
+
+
+
+
+        try:
+
+
+            result=predict_v113(
+
+                train
+
+            )
+
+
+        except:
+
+
+            continue
+
+
+
+
+        main=result["main"]
+
+
+
+        detail=[
+
+            x["num"]
+
+            for x in result["detail"]
+
+        ]
 
 
 
 
 
-    for x in back["detail"]:
+        # TOP统计
+
+
+        if target==main[0]:
+
+            top1+=1
 
 
 
-        count+=1
+        if target in detail[:3]:
+
+            top3+=1
+
+
+
+        if target in detail[:5]:
+
+            top5+=1
 
 
 
 
-        if x["actual"] in x["top3"]:
+        # 双码
+
+
+        if target in main:
+
+
+            double_hit+=1
 
 
 
-            profit += (
+            double_profit += calc_double_profit(
 
-                bet*
+                True,
 
-                4
-
-                -
-
-                bet
+                BET_AMOUNT
 
             )
 
@@ -2140,79 +1484,56 @@ def roi_simulation(back,bet=100):
         else:
 
 
-            profit-=bet
+            double_profit += calc_double_profit(
+
+                False,
+
+                BET_AMOUNT
+
+            )
 
 
 
 
 
+        # 单码
 
-    total=bet*count
-
-
-
+        hit=target in main
 
 
-    return {
+        profit += calc_profit(
 
+            hit,
 
-        "投注":
-
-        total,
-
-
-        "盈利":
-
-        profit,
-
-
-        "ROI":
-
-        round(
-
-            profit/
-
-            total*
-
-            100,
-
-            2
+            BET_AMOUNT
 
         )
 
-    }
+
+
+        records.append({
+
+            "target":
+
+            target,
+
+
+            "predict":
+
+            main,
+
+
+            "hit":
+
+            hit
+
+        })
 
 
 
 
 
-
-
-
-# ====================================================
-# 分析单个彩种
-# ====================================================
-
-
-def analyze(name):
-
-
-    rows=fetch_lottery(
-
-        name
-
-    )
-
-
-
-    if len(rows)<100:
-
-
-        print(
-
-            "数据不足"
-
-        )
+    if test_count==0:
 
         return
 
@@ -2220,123 +1541,387 @@ def analyze(name):
 
 
 
-    result=predict(
+    print()
 
-        name,
+    print(
 
-        rows
+    "测试期:",
+
+    test_count
 
     )
 
+
+    print(
+
+    "TOP1:",
+
+    round(
+
+        top1/test_count*100,
+
+        2
+
+    ),
+
+    "%"
+
+    )
+
+
+    print(
+
+    "TOP3:",
+
+    round(
+
+        top3/test_count*100,
+
+        2
+
+    ),
+
+    "%"
+
+    )
+
+
+    print(
+
+    "TOP5:",
+
+    round(
+
+        top5/test_count*100,
+
+        2
+
+    ),
+
+    "%"
+
+    )
+
+
+
+    print()
+
+    print(
+
+    "双码命中:",
+
+    round(
+
+        double_hit/test_count*100,
+
+        2
+
+    ),
+
+    "%"
+
+    )
+
+
+
+    roi=(
+
+        profit
+
+        /
+
+        (
+
+        test_count*
+
+        BET_AMOUNT
+
+        )
+
+        *
+
+        100
+
+    )
+
+
+
+    double_roi=(
+
+        double_profit
+
+        /
+
+        (
+
+        test_count*
+
+        BET_AMOUNT
+
+        )
+
+        *
+
+        100
+
+    )
+
+
+
+    print()
+
+    print(
+
+    "单码ROI:",
+
+    round(
+
+        roi,
+
+        2
+
+    ),
+
+    "%"
+
+    )
+
+
+
+    print(
+
+    "双码ROI:",
+
+    round(
+
+        double_roi,
+
+        2
+
+    ),
+
+    "%"
+
+    )
+
+
+
+
+    return {
+
+
+        "top1":
+
+        top1/test_count,
+
+
+        "top3":
+
+        top3/test_count,
+
+
+        "top5":
+
+        top5/test_count,
+
+
+        "double":
+
+        double_hit/test_count,
+
+
+        "roi":
+
+        roi,
+
+
+        "double_roi":
+
+        double_roi
+
+
+    }
+    # ============================================================
+# 三彩 V11.3
+# 第四部分：
+# 主程序运行入口
+# ============================================================
+
+
+import datetime
+
+
+
+# ============================================================
+# 单个彩种运行
+# ============================================================
+
+
+def run_lottery(name):
+
+
+    print()
+
+    print("="*70)
+
+    print(
+        "📡 获取数据:",
+        name
+    )
+
+    print("="*70)
+
+
+
+    # 获取数据
+
+    history = fetch_lottery(name)
+
+
+
+    if not history:
+
+
+        print(
+            "❌ 数据为空:",
+            name
+        )
+
+        return
+
+
+
+    # 数据检查
+
+
+    if not check_data(history):
+
+
+        print(
+            "❌ 数据异常"
+        )
+
+        return
 
 
 
 
     print()
 
+    print("="*70)
 
     print(
 
-        "📈 历史回测"
+        "🎯",
+
+        name,
+
+        "V11.3预测"
+
+    )
+
+    print("="*70)
+
+
+
+    # 当前最新号码
+
+    print(
+
+        "最新特码:",
+
+        history[0]["num"]
 
     )
 
 
 
-    back=BackTester(
 
-        rows
-
-    ).run()
-
+    # =========================
+    # 四层预测
+    # =========================
 
 
+    result=predict_v113(
 
-
-    if back:
-
-
-
-        print(
-
-            "TOP1:",
-
-            back["top1"],
-
-            "%"
-
-        )
-
-
-
-        print(
-
-            "TOP3:",
-
-            back["top3"],
-
-            "%"
-
-        )
-
-
-
-        print(
-
-            "TOP5:",
-
-            back["top5"],
-
-            "%"
-
-        )
-
-
-
-
-
-
-
-        roi=roi_simulation(
-
-            back
-
-        )
-
-
-
-        print(
-
-            "模拟ROI:",
-
-            roi["ROI"],
-
-            "%"
-
-        )
-
-
-
-
-
-    pair=pair_backtest(
-
-        rows
+        history
 
     )
 
 
 
-    if pair:
+
+    print()
+
+    print("="*70)
+
+    print("⭐ 最终推荐")
+
+    print("="*70)
+
+
+
+    print(
+
+        "主推双码:",
+
+        result["main"]
+
+    )
+
+
+    print(
+
+        "防守号码:",
+
+        result["guard"]
+
+    )
+
+
+
+
+    print()
+
+    print(
+
+        "颜色分布:"
+    )
+
+
+    for x in result["detail"]:
 
 
         print(
 
-            "双码命中:",
+            x["num"],
 
-            pair["rate"],
+            x["color"],
 
-            "%"
+            round(
+
+                x["score"],
+
+                2
+
+            )
+
+        )
+
+
+
+
+    # =========================
+    # 回测
+    # =========================
+
+
+    if len(history)>100:
+
+
+        backtest_v113(
+
+            history
 
         )
 
@@ -2344,90 +1929,110 @@ def analyze(name):
 
 
 
+# ============================================================
+# 总运行
+# ============================================================
 
-
-
-
-# ====================================================
-# 主程序
-# ====================================================
 
 
 def main():
 
 
+    print()
+
+    print("="*70)
+
+    print(
+
+    "🚀 三彩 V11.3 AI四层特码预测系统启动"
+
+    )
+
+    print(
+
+    datetime.datetime.now()
+
+    )
+
+    print("="*70)
+
+
 
     print()
 
+    print(
 
-    print("="*70)
-
+    "模型结构:"
+    )
 
     print(
 
-        "🚀 三彩 V11.2.1 AI四层特码预测系统启动"
+    "尾数+余数 → 大小 → 单双 → 颜色"
 
     )
 
 
-    print(
-
-        datetime.now()
-
-    )
-
-
-    print("="*70)
 
 
 
+    for name in [
 
+        "香港彩",
 
-    for name in LOTTERIES:
+        "新澳门彩",
+
+        "老澳门彩"
+
+    ]:
 
 
         try:
 
 
-            analyze(name)
+            run_lottery(
 
+                name
+
+            )
 
 
         except Exception as e:
 
 
+            print()
+
             print(
 
-                "❌",
+            "❌运行错误:",
 
-                name,
-
-                e
+            name
 
             )
 
+            print(e)
 
 
 
 
     print()
 
-
     print("="*70)
-
 
     print(
 
-        "✅ 运行完成"
+    "✅ V11.3运行完成"
 
     )
-
 
     print("="*70)
 
 
 
 
+
+# ============================================================
+# 启动
+# ============================================================
 
 
 if __name__=="__main__":
