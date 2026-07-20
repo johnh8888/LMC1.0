@@ -40,38 +40,368 @@ VERSION = "V11.4"
 
 
 
-# ============================================================
+# =========================================================
+# V11.5 数据获取模块
+# =========================================================
+
+import requests
+import time
+
+
+# ===============================
 # API配置
-#
-# 这里保持你的原接口
-# 后面可以继续增加备用源
-#
-# ============================================================
+# ===============================
+
+API_URL = "https://marksix6.net/index.php?api=1"
 
 
-API_CONFIG = {
+LOTTERY_CONFIG = {
 
+    "香港彩":{
+        "type":"hk"
+    },
 
-    "香港彩":
+    "新澳门彩":{
+        "type":"new"
+    },
 
-    "https://marksix6.net/index.php?api=1",
-
-
-
-    "新澳门彩":
-
-    "https://marksix6.net/index.php?api=1",
-
-
-
-    "老澳门彩":
-
-    "https://marksix6.net/index.php?api=1"
-
-
+    "老澳门彩":{
+        "type":"old"
+    }
 
 }
 
+
+
+# ===============================
+# 数据获取
+# ===============================
+
+
+def fetch_lottery(name):
+
+    print()
+    print("="*70)
+    print(f"📡 获取数据: {name}")
+    print("="*70)
+
+
+    if name not in LOTTERY_CONFIG:
+
+        print(
+            f"❌ 未知彩种:{name}"
+        )
+
+        return []
+
+
+
+    try:
+
+
+        params={
+
+            "type":
+            LOTTERY_CONFIG[name]["type"]
+
+        }
+
+
+        r=requests.get(
+
+            API_URL,
+
+            params=params,
+
+            timeout=15
+
+        )
+
+
+        r.encoding="utf-8"
+
+
+
+        if r.status_code !=200:
+
+
+            print(
+                "❌ API连接失败",
+                r.status_code
+            )
+
+            return []
+
+
+
+        data=r.json()
+
+
+
+        # ===========================
+        # 兼容不同接口结构
+        # ===========================
+
+
+        if isinstance(data,dict):
+
+
+            for key in [
+
+                "data",
+                "result",
+                "list",
+                "history"
+
+            ]:
+
+                if key in data:
+
+                    data=data[key]
+
+                    break
+
+
+
+
+        if not isinstance(data,list):
+
+
+            print(
+                "❌ 数据格式错误"
+            )
+
+            return []
+
+
+
+
+        records=[]
+
+
+
+        for item in data:
+
+
+            if not isinstance(item,dict):
+
+                continue
+
+
+
+            # -----------------------
+            # 期号
+            # -----------------------
+
+            issue=(
+
+                item.get("qishu")
+
+                or
+
+                item.get("issue")
+
+                or
+
+                item.get("period")
+
+                or
+
+                item.get("expect")
+
+            )
+
+
+
+            # -----------------------
+            # 特码
+            # -----------------------
+
+            number=(
+
+                item.get("tm")
+
+                or
+
+                item.get("special")
+
+                or
+
+                item.get("number")
+
+                or
+
+                item.get("te")
+
+            )
+
+
+
+            try:
+
+                number=int(number)
+
+            except:
+
+                continue
+
+
+
+            if number<1 or number>49:
+
+                continue
+
+
+
+            records.append({
+
+                "issue":str(issue),
+
+                "number":number
+
+            })
+
+
+
+
+
+        # ===========================
+        # 去重
+        # ===========================
+
+
+        new=[]
+
+        seen=set()
+
+
+        for x in records:
+
+
+            key=(
+
+                x["issue"],
+
+                x["number"]
+
+            )
+
+
+            if key not in seen:
+
+                seen.add(key)
+
+                new.append(x)
+
+
+
+        records=new
+
+
+
+        print(
+
+            f"✅ 获取 {len(records)} 期"
+
+        )
+
+
+
+        return records
+
+
+
+
+
+    except Exception as e:
+
+
+        print(
+
+            "❌ fetch_lottery错误:",
+
+            e
+
+        )
+
+
+        return []
+
+
+
+
+
+# ===============================
+# 数据校验
+# ===============================
+
+
+def check_data(data,name):
+
+
+    print()
+
+    print("🔍 数据校验")
+
+
+    if not data:
+
+
+        print(
+            "❌ 无数据"
+        )
+
+        return False
+
+
+
+    print(
+
+        f"数据数量:{len(data)}"
+
+    )
+
+
+
+    latest=data[0]
+
+
+    print(
+
+        "最新期:",
+
+        latest["issue"]
+
+    )
+
+
+    print(
+
+        "最新特码:",
+
+        latest["number"]
+
+    )
+
+
+
+    if 1<=latest["number"]<=49:
+
+
+        print(
+            "✅ 数据正常"
+        )
+
+        return True
+
+
+    else:
+
+        print(
+            "❌ 号码异常"
+        )
+
+        return False
 
 
 
