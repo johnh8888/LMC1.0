@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - V9（加入尾数/余数预测）
-在原有基础上新增：
-  1. 近期加权频率 + 遗漏值 + 马尔可夫
-  2. 尾数（0-9）和余数（mod3/mod4）预测
-参数已轻度调整（降低gap权重），避免过拟合。
+新澳门彩预测系统 - V9.2（修复版）
+修复：半波推荐固定问题，现在会随历史动态变化。
+新增：尾数/余数预测 + 参数防过拟合。
 """
 
 import re
@@ -23,11 +21,11 @@ CONFIG = {
     "cache_file": "newmacau_cache.json",
     "zodiac_year": 2026,
 
-    # ---- 综合版参数（已轻微调整，避免过拟合）----
-    "recency_decay": 0.85,   # 加强近期权重
-    "weight_freq": 0.50,     # 提高频率权重
-    "weight_gap": 0.20,      # 降低遗漏值权重
-    "weight_trans": 0.30,    # 转移概率保持
+    # ---- 综合版参数（轻度调整）----
+    "recency_decay": 0.85,
+    "weight_freq": 0.50,
+    "weight_gap": 0.20,
+    "weight_trans": 0.30,
     "backtest_periods": 20,
 }
 
@@ -36,13 +34,10 @@ RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
 BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 
-# 生肖顺序
 ZODIAC_ORDER = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
 ZODIAC_BASE_YEAR = 2020
 
 HALFHALF_CATEGORIES = [c + s for c in ["红", "蓝", "绿"] for s in ["大", "小"]]
-
-# 新增：尾数和余数类别
 TAIL_CATEGORIES = [str(i) for i in range(10)]
 MOD3_CATEGORIES = [f"余{i}" for i in range(3)]
 MOD4_CATEGORIES = [f"余{i}" for i in range(4)]
@@ -75,7 +70,6 @@ def get_halfhalf(n):
 def get_zodiac(n):
     return ZODIAC_MAP.get(n, "?")
 
-# 新增功能
 def get_tail(n):
     return str(n % 10)
 
@@ -99,7 +93,7 @@ def fetch_new_macau(limit=30):
         except:
             pass
 
-    print("正在获取最新数据...")
+    print("🌐 正在获取最新数据...")
     try:
         req = urllib.request.Request(CONFIG["api_url"], headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=15) as response:
@@ -137,9 +131,9 @@ def fetch_new_macau(limit=30):
         return rows[:limit]
     except Exception as e:
         print(f"❌ 获取失败: {e}")
+        print("💡 可使用缓存或手动提供历史数据继续运行。")
         return []
 
-# 简单版
 class SimplePredictor:
     def __init__(self, rows):
         self.rows = rows[:30]
@@ -151,26 +145,19 @@ class SimplePredictor:
         total = sum(c.values()) or 1
         return {k: round(v / total * 100, 2) for k, v in c.items()}
 
+# 修复后的半波选择器（直接用 halfhalf 频率）
 class DynamicHalfwaveSelector:
-    def __init__(self, color_pred, size_pred):
-        self.color_pred = color_pred
-        self.size_pred = size_pred
+    def __init__(self, rows):
+        self.rows = rows[:30]
 
     def select_best(self, count=2):
-        scores = {}
-        for c in ["红", "蓝", "绿"]:
-            for s in ["大", "小"]:
-                scores[c + s] = self.color_pred.get(c, 33.3) * 0.5 + self.size_pred.get(s, 50) * 0.5
-        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        result, used = [], set()
-        for hw, score in sorted_scores:
-            color = hw[0]
-            if color not in used:
-                result.append((hw, score))
-                used.add(color)
-            if len(result) >= count:
-                break
-        return result[:count]
+        c = defaultdict(int)
+        for r in self.rows:
+            c[r["halfhalf"]] += 1
+        total = sum(c.values()) or 1
+        freq = {k: round(v / total * 100, 2) for k, v in c.items()}
+        sorted_hw = sorted(freq.items(), key=lambda x: x[1], reverse=True)
+        return sorted_hw[:count]
 
 class SimpleZodiacSelector:
     def __init__(self, zodiac_pred):
@@ -180,7 +167,7 @@ class SimpleZodiacSelector:
         full = {a: self.zodiac_pred.get(a, 0.0) for a in ZODIAC_ORDER}
         return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
 
-# 综合版（EnsemblePredictor 等函数保持原逻辑）
+# EnsemblePredictor（综合版）保持原逻辑
 def recency_weighted_freq(rows, key, decay=0.9):
     scores = defaultdict(float)
     total_weight = 0.0
@@ -257,7 +244,6 @@ class EnsemblePredictor:
         s = self.score()
         return sorted(s.items(), key=lambda x: x[1], reverse=True)[:count]
 
-# 回测函数（保持原样）
 def run_backtest(rows, periods):
     total = min(periods, len(rows) - 1)
     if total <= 0:
@@ -281,7 +267,9 @@ def run_backtest(rows, periods):
         sp = SimplePredictor(history)
         color_pred, size_pred, zod_pred = sp.freq("color"), sp.freq("size"), sp.freq("zodiac")
 
-        hw_simple = [b[0] for b in DynamicHalfwaveSelector(color_pred, size_pred).select_best(2)]
+        # 简单版半波（使用修复后的选择器）
+        hw_simple_list = DynamicHalfwaveSelector(history).select_best(2)
+        hw_simple = [b[0] for b in hw_simple_list]
         zd_simple = [b[0] for b in SimpleZodiacSelector(zod_pred).select_best(3)]
 
         hw_ens = [b[0] for b in EnsemblePredictor(history, HALFHALF_CATEGORIES, "halfhalf").select_best(2)]
@@ -309,12 +297,10 @@ def run_backtest(rows, periods):
           f"综合版: {hw_ens_hits}/{total} = {hw_ens_hits/total*100:.1f}%")
     print(f"生肖命中率  简单版: {zd_simple_hits}/{total} = {zd_simple_hits/total*100:.1f}%   "
           f"综合版: {zd_ens_hits}/{total} = {zd_ens_hits/total*100:.1f}%")
-    print("\n💡 请以上方命中率对比为准来决定采用简单版还是综合版；")
-    print("   也可以调整 CONFIG 中的参数后重新回测。")
 
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - V9（含尾数预测）")
+    print("新澳门彩预测系统 - V9.2（半波修复版）")
     print(f"生肖年份基准: {CONFIG['zodiac_year']}年")
     print("=" * 60)
 
@@ -343,7 +329,7 @@ def main():
     print("余3:", mod3_pred)
     print("余4:", mod4_pred)
 
-    hw_simple = DynamicHalfwaveSelector(color_pred, size_pred).select_best(CONFIG["bet_count"])
+    hw_simple_list = DynamicHalfwaveSelector(rows).select_best(CONFIG["bet_count"])
     hw_ens = EnsemblePredictor(rows, HALFHALF_CATEGORIES, "halfhalf").select_best(CONFIG["bet_count"])
     zd_simple = SimpleZodiacSelector(zod_pred).select_best(CONFIG["zodiac_bet_count"])
     zd_ens = EnsemblePredictor(rows, ZODIAC_ORDER, "zodiac").select_best(CONFIG["zodiac_bet_count"])
@@ -352,14 +338,14 @@ def main():
     tail_ens = EnsemblePredictor(rows, TAIL_CATEGORIES, "tail").select_best(4)
 
     print("\n💡 半波推荐")
-    print("  简单版:", ", ".join(f"{hw}({s:.1f})" for hw, s in hw_simple))
+    print("  简单版:", ", ".join(f"{hw}({s:.1f})" for hw, s in hw_simple_list))
     print("  综合版:", ", ".join(f"{hw}({s:.1f})" for hw, s in hw_ens))
 
     print("\n💡 生肖推荐")
     print("  简单版:", ", ".join(f"{z}({s:.1f})" for z, s in zd_simple))
     print("  综合版:", ", ".join(f"{z}({s:.1f})" for z, s in zd_ens))
 
-    print("\n💡 尾数推荐（新增）")
+    print("\n💡 尾数推荐")
     print("  简单版:", ", ".join(f"{t}({s:.1f})" for t, s in tail_simple))
     print("  综合版:", ", ".join(f"{t}({s:.1f})" for t, s in tail_ens))
 
