@@ -1,60 +1,61 @@
 #!/usr/bin/env python3
-# -*- coding:utf-8 -*-
+# -*- coding: utf-8 -*-
 
 """
-========================================================
-三彩 V11.1 AI量化特码预测系统
+三彩 V11.2.1 AI四层特码预测系统
 
-核心:
+修复:
+1. fetch_lottery 数据错位
+2. 特码自动识别
+3. 数据完整校验
 
+模型:
 第一层:
-    尾数
-    余数
-    遗漏
+尾数 + 余数
 
 第二层:
-    大小
+大小
 
 第三层:
-    单双
+单双
 
 第四层:
-    颜色
-
-
-增强:
-
-    500期滚动训练
-    联合概率
-    双码组合评分
-    动态半波
-    自动回测
-    ROI模拟
-    风控管理
-
-========================================================
+颜色
 """
 
 
 import re
 import json
 import math
-import random
 import urllib.request
 from datetime import datetime
+from collections import Counter
 
 
 
-# =====================================================
-# 参数配置
-# =====================================================
+# ==============================
+# API
+# ==============================
+
+API_URL = "https://marksix6.net/index.php?api=1"
 
 
-API_URL = (
 
-    "https://marksix6.net/index.php?api=1"
+# ==============================
+# 四层权重
+# ==============================
 
-)
+WEIGHTS = {
+
+    "tail":0.40,
+
+    "size":0.25,
+
+    "odd":0.20,
+
+    "color":0.15
+
+}
 
 
 
@@ -69,42 +70,32 @@ LOTTERIES=[
 ]
 
 
-HISTORY_LIMIT=500
 
 
-
-NUMBERS=list(range(1,50))
-
-
-
-# =====================================================
-# 颜色库
-# =====================================================
+# ==============================
+# 颜色表
+# ==============================
 
 
-RED={
+RED = {
 
-1,2,7,8,12,
+1,2,7,8,12,13,18,19,
 
-13,18,19,23,
+23,24,29,30,34,35,40,
 
-24,29,30,34,
-
-35,40,45,46
+45,46
 
 }
 
 
 
-BLUE={
+BLUE = {
 
-3,4,9,10,14,
+3,4,9,10,14,15,20,
 
-15,20,25,26,
+25,26,31,36,37,41,
 
-31,36,37,41,
-
-42,47
+42,47,48
 
 }
 
@@ -112,15 +103,14 @@ BLUE={
 
 GREEN={
 
-5,6,11,16,17,
+5,6,11,16,17,21,
 
-21,22,27,28,
+22,27,28,32,33,
 
-32,33,38,39,
-
-43,44,48,49
+38,39,43,44,49
 
 }
+
 
 
 
@@ -134,12 +124,14 @@ def get_color(num):
         return "红"
 
 
-    if num in BLUE:
+    elif num in BLUE:
 
         return "蓝"
 
 
-    return "绿"
+    else:
+
+        return "绿"
 
 
 
@@ -147,57 +139,9 @@ def get_color(num):
 
 
 
-# =====================================================
-# 基础属性
-# =====================================================
-
-
-def is_big(num):
-
-
-    return num>=25
-
-
-
-
-def is_odd(num):
-
-
-    return num%2==1
-
-
-
-
-def get_tail(num):
-
-
-    return num%10
-
-
-
-
-def get_remainder(num):
-
-
-    return (
-
-        num%3,
-
-        num%5,
-
-        num%7
-
-    )
-
-
-
-
-
-
-
-# =====================================================
-# 数据解析
-# =====================================================
+# ==============================
+# 数字提取
+# ==============================
 
 
 def parse_numbers(text):
@@ -207,50 +151,155 @@ def parse_numbers(text):
 
         r"\d+",
 
-        text
+        str(text)
 
     )
 
 
-    return [
+    result=[]
 
-        int(x)
 
-        for x in nums
+    for n in nums:
 
-        if 1<=int(x)<=49
+
+        n=int(n)
+
+
+        if 1<=n<=49:
+
+
+            result.append(n)
+
+
+    return result
+
+
+
+
+
+
+# ==============================
+# 新特码识别核心
+# ==============================
+
+
+def extract_special(item,line):
+
+
+    """
+    优先读取字段
+    防止把生肖/日期当特码
+    """
+
+
+
+    keys=[
+
+
+        "special",
+
+        "special_num",
+
+        "teMa",
+
+        "tm",
+
+        "特码",
+
+        "特码号码"
+
 
     ]
 
 
 
 
+    # 第一优先
+    for k in keys:
+
+
+        if k in item:
+
+
+            try:
+
+                n=int(item[k])
+
+
+                if 1<=n<=49:
+
+
+                    return n
+
+            except:
+
+                pass
 
 
 
-def fetch_lottery(name):
 
+
+
+    # 第二优先
+    # 从字符串寻找:
+    # 特码:38
+    # 特码 38
+
+
+    m=re.search(
+
+        r"(特码|特碼|tm)\s*[:： ]\s*(\d{1,2})",
+
+        str(line),
+
+        re.I
+
+    )
+
+
+
+    if m:
+
+
+        n=int(m.group(2))
+
+
+        if 1<=n<=49:
+
+
+            return n
+
+
+
+
+
+
+    return None
+    # ====================================================
+# 数据获取模块 V11.2.1
+# ====================================================
+
+
+def fetch_lottery(lottery_name, limit=500):
+
+
+    print()
 
     print(
-
-        "📡 获取:",
-
-        name
-
+        f"📡 获取数据: {lottery_name}"
     )
 
 
     try:
 
 
-        req=urllib.request.Request(
+        req = urllib.request.Request(
 
             API_URL,
 
             headers={
 
                 "User-Agent":
-
                 "Mozilla/5.0"
 
             }
@@ -265,126 +314,18 @@ def fetch_lottery(name):
 
             timeout=15
 
-        ) as r:
+        ) as response:
 
 
-            data=json.loads(
+            raw=response.read().decode(
 
-                r.read()
-
-                .decode("utf-8")
+                "utf-8"
 
             )
 
 
 
-
-        rows=[]
-
-
-
-
-        for item in data.get(
-
-            "lottery_data",
-
-            []
-
-        ):
-
-
-            if item.get(
-
-                "name"
-
-            ) != name:
-
-
-                continue
-
-
-
-
-            for line in item.get(
-
-                "history",
-
-                []
-
-            ):
-
-
-
-                nums=parse_numbers(line)
-
-
-
-                if len(nums)<7:
-
-                    continue
-
-
-
-                n=nums[-1]
-
-
-
-                rows.append({
-
-                    "num":
-
-                    n,
-
-
-                    "tail":
-
-                    get_tail(n),
-
-
-                    "remainder":
-
-                    get_remainder(n),
-
-
-                    "big":
-
-                    is_big(n),
-
-
-                    "odd":
-
-                    is_odd(n),
-
-
-                    "color":
-
-                    get_color(n)
-
-                })
-
-
-
-            break
-
-
-
-
-        rows=rows[-HISTORY_LIMIT:]
-
-
-
-        print(
-
-            "✅ 数据:",
-
-            len(rows),
-
-            "期"
-
-        )
-
-
-        return rows
+        data=json.loads(raw)
 
 
 
@@ -393,12 +334,11 @@ def fetch_lottery(name):
 
         print(
 
-            "数据错误:",
+            "❌ API读取失败:",
 
             e
 
         )
-
 
         return []
 
@@ -408,25 +348,77 @@ def fetch_lottery(name):
 
 
 
-# =====================================================
-# 基础统计
-# =====================================================
+    rows=[]
 
 
 
-def count_number(rows,num,window=50):
+
+    lottery_block=None
 
 
-    data=rows[-window:]
 
 
-    return sum(
+    # ----------------------------
+    # 找对应彩种
+    # ----------------------------
 
-        1
 
-        for x in data
+    for item in data.get(
 
-        if x["num"]==num
+        "lottery_data",
+
+        []
+
+    ):
+
+
+
+        name=str(
+
+            item.get(
+
+                "name",
+
+                ""
+
+            )
+
+        ).strip()
+
+
+
+        if name==lottery_name:
+
+
+            lottery_block=item
+
+            break
+
+
+
+
+
+    if not lottery_block:
+
+
+        print(
+
+            "❌ 未找到彩种"
+
+        )
+
+        return []
+
+
+
+
+
+
+    history=lottery_block.get(
+
+        "history",
+
+        []
 
     )
 
@@ -434,738 +426,474 @@ def count_number(rows,num,window=50):
 
 
 
-
-
-def missing(rows,num):
-
-
-    gap=0
+    for line in history:
 
 
 
-    for x in reversed(rows):
-
-
-        if x["num"]==num:
-
-            return gap
-
-
-        gap+=1
+        special=None
 
 
 
-    return gap
-    # =====================================================
-# 第一层
-# 尾数模型
-# =====================================================
-
-
-class TailModel:
-
-
-    def score(self,rows,num):
-
-
-        tail=get_tail(num)
-
-
-        recent=rows[-100:]
-
-
-        total=len(recent)
-
-
-        if total==0:
-
-            return 0
+        issue=None
 
 
 
-        hit=sum(
 
-            1
+        # ======================
+        # 1. 获取期号
+        # ======================
 
-            for x in recent
 
-            if x["tail"]==tail
+        text=str(line)
+
+
+
+
+        m=re.search(
+
+            r"(20\d{5,8})",
+
+            text
 
         )
 
 
-        rate=hit/total
+        if m:
 
 
+            raw_issue=m.group(1)
 
-        return round(
 
-            rate*100,
 
-            2
+            try:
 
-        )
 
+                issue=(
 
+                    raw_issue[:4]
 
+                    +
 
+                    "/"
 
+                    +
 
+                    str(
 
-# =====================================================
-# 第一层
-# 余数模型
-# =====================================================
+                        int(
 
+                            raw_issue[4:]
 
-class RemainderModel:
+                        )
 
+                    ).zfill(3)
 
+                )
 
-    def score(self,rows,num):
 
 
-        r=get_remainder(num)
+            except:
 
 
+                continue
 
-        recent=rows[-100:]
-
-
-
-        score=0
-
-
-
-        for x in recent:
-
-
-
-            if x["remainder"]==r:
-
-                score+=1
-
-
-
-        return round(
-
-            score/
-
-            max(
-
-                len(recent),
-
-                1
-
-            )
-
-            *
-
-            100,
-
-            2
-
-        )
-
-
-
-
-
-
-
-
-# =====================================================
-# 第一层
-# 遗漏模型
-# =====================================================
-
-
-
-class MissingModel:
-
-
-
-    def score(self,rows,num):
-
-
-        gap=missing(
-
-            rows,
-
-            num
-
-        )
-
-
-
-        # 30期以内遗漏最佳
-
-        if gap<=5:
-
-
-            return 90
-
-
-
-        elif gap<=15:
-
-
-            return 75
-
-
-
-        elif gap<=30:
-
-
-            return 60
 
 
 
         else:
 
 
-            return 40
+            continue
 
 
 
 
 
+        # ======================
+        # 2. 优先字段特码
+        # ======================
 
 
+        if isinstance(line,dict):
 
-# =====================================================
-# 第二层
-# 大小模型
-# =====================================================
 
+            special=extract_special(
 
-class BigSmallModel:
+                line,
 
-
-
-    def score(self,rows,num):
-
-
-        target=is_big(num)
-
-
-
-        recent=rows[-100:]
-
-
-
-        if not recent:
-
-            return 0
-
-
-
-        hit=sum(
-
-            1
-
-            for x in recent
-
-            if x["big"]==target
-
-        )
-
-
-
-        return round(
-
-            hit/
-
-            len(recent)
-
-            *
-
-            100,
-
-            2
-
-        )
-
-
-
-
-
-
-
-
-
-# =====================================================
-# 第三层
-# 单双模型
-# =====================================================
-
-
-
-class OddEvenModel:
-
-
-
-    def score(self,rows,num):
-
-
-        target=is_odd(num)
-
-
-
-        recent=rows[-100:]
-
-
-
-        hit=sum(
-
-            1
-
-            for x in recent
-
-            if x["odd"]==target
-
-        )
-
-
-
-        return round(
-
-            hit/
-
-            max(
-
-                len(recent),
-
-                1
-
-            )
-
-            *
-
-            100,
-
-            2
-
-        )
-
-
-
-
-
-
-
-
-
-# =====================================================
-# 第四层
-# 颜色模型
-# =====================================================
-
-
-
-class ColorModel:
-
-
-
-    def score(self,rows,num):
-
-
-        color=get_color(num)
-
-
-
-        recent=rows[-100:]
-
-
-
-        hit=sum(
-
-            1
-
-            for x in recent
-
-            if x["color"]==color
-
-        )
-
-
-
-        return round(
-
-            hit/
-
-            max(
-
-                len(recent),
-
-                1
-
-            )
-
-            *
-
-            100,
-
-            2
-
-        )
-
-
-
-
-
-
-
-
-
-# =====================================================
-# 热冷趋势模型
-# =====================================================
-
-
-
-class TrendModel:
-
-
-
-    def score(self,rows,num):
-
-
-        recent30=rows[-30:]
-
-        recent100=rows[-100:]
-
-
-
-        c30=count_number(
-
-            recent30,
-
-            num,
-
-            30
-
-        )
-
-
-        c100=count_number(
-
-            recent100,
-
-            num,
-
-            100
-
-        )
-
-
-
-        value=(
-
-            c30*0.7
-
-            +
-
-            c100*0.3
-
-        )
-
-
-
-        return round(
-
-            value*20,
-
-            2
-
-        )
-        # =====================================================
-# 四属性联合概率模型
-# 尾数 + 颜色 + 大小 + 单双
-# =====================================================
-
-
-class JointProbability:
-
-
-
-    def score(self,rows,num):
-
-
-        tail=get_tail(num)
-
-        color=get_color(num)
-
-        big=is_big(num)
-
-        odd=is_odd(num)
-
-
-
-        recent=rows[-300:]
-
-
-
-        hit=0
-
-
-
-        for x in recent:
-
-
-            if (
-
-                x["tail"]==tail
-
-                and
-
-                x["color"]==color
-
-                and
-
-                x["big"]==big
-
-                and
-
-                x["odd"]==odd
-
-            ):
-
-                hit+=1
-
-
-
-
-        if not recent:
-
-            return 0
-
-
-
-        rate=(
-
-            hit/
-
-            len(recent)
-
-        )
-
-
-
-        return round(
-
-            rate*1000,
-
-            2
-
-        )
-
-
-
-
-
-
-
-
-
-# =====================================================
-# 双码组合评分
-# =====================================================
-
-
-class PairModel:
-
-
-
-    def score(self,a,b):
-
-
-        score=100
-
-
-
-        # 同尾风险
-
-
-        if get_tail(a)==get_tail(b):
-
-
-            score-=20
-
-
-
-
-        # 同颜色
-
-
-        if get_color(a)==get_color(b):
-
-
-            score-=15
-
-
-
-
-        # 同大小
-
-
-        if is_big(a)==is_big(b):
-
-
-            score-=8
-
-
-
-
-        # 同单双
-
-
-        if is_odd(a)==is_odd(b):
-
-
-            score-=5
-
-
-
-
-        # 距离太近
-
-
-        if abs(a-b)<=3:
-
-
-            score-=10
-
-
-
-
-        return max(
-
-            score,
-
-            0
-
-        )
-
-
-
-
-
-
-
-
-
-# =====================================================
-# 动态半波选择
-# =====================================================
-
-
-class HalfWaveSelector:
-
-
-
-    def select(self,numbers):
-
-
-        result=[]
-
-
-
-        for x in numbers:
-
-
-            color=get_color(
-
-                x["num"]
+                line
 
             )
 
 
 
-            result.append(
-
-                {
-
-                "num":
-
-                x["num"],
+        else:
 
 
-                "color":
+            special=extract_special(
 
-                color,
+                lottery_block,
 
-
-                "score":
-
-                x["score"]
-
-                }
+                line
 
             )
 
 
 
 
-        # 强制颜色分散
+
+        # ======================
+        # 3. 备用解析
+        # ======================
 
 
-        final=[]
-
-
-        used=set()
-
-
-
-        for x in result:
-
-
-            if (
-
-                x["color"]
-
-                not in used
-
-                or
-
-                len(final)<2
-
-            ):
-
-
-                final.append(x)
-
-                used.add(
-
-                    x["color"]
-
-                )
+        if special is None:
 
 
 
-            if len(final)>=5:
+            nums=parse_numbers(
 
-                break
+                text
 
-
-
-        return final
+            )
 
 
 
+            # 查找连续6+1号码结构
+
+            if len(nums)>=7:
+
+
+
+                candidates=[
+
+                    n for n in nums
+
+                    if 1<=n<=49
+
+                ]
+
+
+
+                # 去掉期号年份
+
+                candidates=[
+
+                    n for n in candidates
+
+                    if n<50
+
+                ]
+
+
+
+                # 特码通常最后一个独立号码
+
+                if len(candidates)>=7:
+
+
+                    special=candidates[-1]
 
 
 
 
 
 
-# =====================================================
-# AI融合引擎
-# =====================================================
+
+        # ======================
+        # 4. 最终检查
+        # ======================
+
+
+        if special is None:
+
+
+            continue
 
 
 
-class FusionEngine:
+        if not(
+
+            1<=special<=49
+
+        ):
+
+
+            continue
+
+
+
+
+
+
+        rows.append(
+
+            {
+
+
+            "issue":
+
+            issue,
+
+
+            "num":
+
+            special,
+
+
+            "color":
+
+            get_color(special),
+
+
+            "big":
+
+            special>=25,
+
+
+            "small":
+
+            special<25,
+
+
+            "odd":
+
+            special%2==1,
+
+
+            "even":
+
+            special%2==0
+
+
+
+            }
+
+        )
+
+
+
+
+
+
+
+
+    # ==========================
+    # 去重
+    # ==========================
+
+
+    unique={}
+
+
+
+    for r in rows:
+
+
+        unique[r["issue"]]=r
+
+
+
+
+    rows=list(
+
+        unique.values()
+
+    )
+
+
+
+
+    rows.sort(
+
+        key=lambda x:
+
+        x["issue"]
+
+    )
+
+
+
+
+
+    rows=rows[-limit:]
+
+
+
+
+
+
+
+    print(
+
+        f"✅ 获取 {len(rows)} 期"
+
+    )
+
+
+
+
+    # ==========================
+    # 数据检查
+    # ==========================
+
+
+    if rows:
+
+
+
+        print()
+
+        print(
+
+            "🔍 数据校验"
+
+        )
+
+
+        print(
+
+            "最新期:",
+
+            rows[-1]["issue"]
+
+        )
+
+
+        print(
+
+            "最新特码:",
+
+            rows[-1]["num"]
+
+        )
+
+
+        print(
+
+            "颜色:",
+
+            rows[-1]["color"]
+
+        )
+
+
+
+        if 1<=rows[-1]["num"]<=49:
+
+
+            print(
+
+                "✅ 特码范围正常"
+
+            )
+
+
+        else:
+
+
+            print(
+
+                "❌ 特码异常"
+
+            )
+
+
+
+
+
+    return rows
+    # ====================================================
+# 号码属性
+# ====================================================
+
+
+def number_info(num):
+
+
+    return {
+
+
+        "num":
+
+        num,
+
+
+        "tail":
+
+        num % 10,
+
+
+        "r3":
+
+        num % 3,
+
+
+        "r5":
+
+        num % 5,
+
+
+        "r7":
+
+        num % 7,
+
+
+        "big":
+
+        num >= 25,
+
+
+        "odd":
+
+        num % 2 == 1,
+
+
+        "color":
+
+        get_color(num)
+
+    }
+
+
+
+
+
+def enrich_rows(rows):
+
+
+    result=[]
+
+
+    for r in rows:
+
+
+        result.append(
+
+            number_info(
+
+                r["num"]
+
+            )
+
+        )
+
+
+    return result
+
+
+
+
+
+
+
+# ====================================================
+# 第一层
+# 尾数 + 余数模型
+# ====================================================
+
+
+class TailRemainderModel:
 
 
 
@@ -1175,144 +903,419 @@ class FusionEngine:
         self.rows=rows
 
 
-        self.tail=TailModel()
-
-        self.rem=RemainderModel()
-
-        self.miss=MissingModel()
-
-        self.size=BigSmallModel()
-
-        self.odd=OddEvenModel()
-
-        self.color=ColorModel()
-
-        self.trend=TrendModel()
-
-        self.joint=JointProbability()
 
 
+
+    def tail_score(self,num):
+
+
+        recent=[
+
+            x["num"]%10
+
+            for x in self.rows[-100:]
+
+        ]
+
+
+
+        count=Counter(recent)
+
+
+
+        tail=num%10
+
+
+
+        return (
+
+            count.get(
+
+                tail,
+
+                0
+
+            )
+
+            /
+
+            len(recent)
+
+            *
+
+            100
+
+        )
+
+
+
+
+
+
+
+    def remainder_score(self,num):
+
+
+        score=0
+
+
+
+        recent=self.rows[-100:]
+
+
+
+        for base in [
+
+            3,
+
+            5,
+
+            7
+
+        ]:
+
+
+            values=[
+
+                x["num"]%base
+
+                for x in recent
+
+            ]
+
+
+
+            target=num%base
+
+
+
+            score += (
+
+                values.count(
+
+                    target
+
+                )
+
+                /
+
+                len(values)
+
+                *
+
+                100
+
+            )
+
+
+
+        return score/3
+
+
+
+
+
+
+
+    def score(self,num):
+
+
+        return (
+
+            self.tail_score(num)
+
+            +
+
+            self.remainder_score(num)
+
+        )/2
+
+
+
+
+
+
+
+# ====================================================
+# 第二层
+# 大小模型
+# ====================================================
+
+
+class SizeModel:
+
+
+
+    def __init__(self,rows):
+
+
+        self.rows=rows
+
+
+
+
+
+    def score(self,num):
+
+
+        recent=self.rows[-50:]
+
+
+
+        if num>=25:
+
+
+            rate=sum(
+
+                1
+
+                for x in recent
+
+                if x["num"]>=25
+
+            )
+
+
+
+        else:
+
+
+            rate=sum(
+
+                1
+
+                for x in recent
+
+                if x["num"]<25
+
+            )
+
+
+
+        return rate/len(recent)*100
+
+
+
+
+
+
+
+
+# ====================================================
+# 第三层
+# 单双模型
+# ====================================================
+
+
+class OddEvenModel:
+
+
+
+    def __init__(self,rows):
+
+
+        self.rows=rows
+
+
+
+
+
+    def score(self,num):
+
+
+        recent=self.rows[-50:]
+
+
+
+        if num%2:
+
+
+            hit=sum(
+
+                1
+
+                for x in recent
+
+                if x["num"]%2
+
+            )
+
+
+        else:
+
+
+            hit=sum(
+
+                1
+
+                for x in recent
+
+                if x["num"]%2==0
+
+            )
+
+
+
+        return hit/len(recent)*100
+
+
+
+
+
+
+
+# ====================================================
+# 第四层
+# 颜色模型
+# ====================================================
+
+
+class ColorModel:
+
+
+
+    def __init__(self,rows):
+
+
+        self.rows=rows
+
+
+
+
+
+    def score(self,num):
+
+
+        recent=[
+
+            get_color(
+
+                x["num"]
+
+            )
+
+            for x in self.rows[-100:]
+
+        ]
+
+
+
+        c=get_color(num)
+
+
+
+        return (
+
+            recent.count(c)
+
+            /
+
+            len(recent)
+
+            *
+
+            100
+
+        )
+        # ====================================================
+# AI融合引擎
+# ====================================================
+
+
+class FusionEngine:
+
+
+
+    def __init__(self, rows):
+
+
+        self.rows = rows
+
+
+
+        self.tail = TailRemainderModel(rows)
+
+
+        self.size = SizeModel(rows)
+
+
+        self.odd = OddEvenModel(rows)
+
+
+        self.color = ColorModel(rows)
+
+
+
+
+
+    # ----------------------------
+    # 单号码评分
+    # ----------------------------
 
 
     def score_number(self,num):
 
 
-        tail=self.tail.score(
-
-            self.rows,
-
-            num
-
-        )
+        tail_score = self.tail.score(num)
 
 
-        rem=self.rem.score(
-
-            self.rows,
-
-            num
-
-        )
+        size_score = self.size.score(num)
 
 
-        miss=self.miss.score(
-
-            self.rows,
-
-            num
-
-        )
+        odd_score = self.odd.score(num)
 
 
-        size=self.size.score(
-
-            self.rows,
-
-            num
-
-        )
-
-
-        odd=self.odd.score(
-
-            self.rows,
-
-            num
-
-        )
-
-
-        color=self.color.score(
-
-            self.rows,
-
-            num
-
-        )
-
-
-        trend=self.trend.score(
-
-            self.rows,
-
-            num
-
-        )
-
-
-        joint=self.joint.score(
-
-            self.rows,
-
-            num
-
-        )
+        color_score = self.color.score(num)
 
 
 
 
-        # 四层权重
+
+        total = (
 
 
-        total=(
+            tail_score
 
+            *
 
-            tail*0.20
+            WEIGHTS["tail"]
+
 
 
             +
 
-            rem*0.15
 
 
-            +
+            size_score
 
-            miss*0.10
+            *
 
+            WEIGHTS["size"]
 
-            +
-
-            size*0.10
 
 
             +
 
-            odd*0.10
 
 
-            +
+            odd_score
 
-            color*0.10
+            *
 
+            WEIGHTS["odd"]
 
-            +
-
-            trend*0.10
 
 
             +
 
-            joint*0.15
+
+
+            color_score
+
+            *
+
+            WEIGHTS["color"]
+
 
 
         )
@@ -1320,17 +1323,56 @@ class FusionEngine:
 
 
 
-        return round(
 
-            total,
-
-            2
-
-        )
+        return {
 
 
+            "num":
+
+            num,
 
 
+            "tail":
+
+            round(tail_score,2),
+
+
+
+            "size":
+
+            round(size_score,2),
+
+
+
+            "odd":
+
+            round(odd_score,2),
+
+
+
+            "color":
+
+            round(color_score,2),
+
+
+
+            "score":
+
+            round(total,2)
+
+
+        }
+
+
+
+
+
+
+
+
+    # ----------------------------
+    # 49号码全部评分
+    # ----------------------------
 
 
     def rank(self):
@@ -1340,37 +1382,18 @@ class FusionEngine:
 
 
 
-        for num in NUMBERS:
+        for num in range(1,50):
 
 
             result.append(
 
-                {
-
-
-                "num":
-
-                num,
-
-
-                "score":
-
-                self.score_number(
-
-                    num
-
-                )
-
-
-                }
+                self.score_number(num)
 
             )
 
 
 
-        return sorted(
-
-            result,
+        result.sort(
 
             key=lambda x:
 
@@ -1382,35 +1405,38 @@ class FusionEngine:
 
 
 
+        return result
 
 
 
 
 
 
-# =====================================================
-# 最佳双码搜索
-# =====================================================
+
+# ====================================================
+# 双码优化选择
+# ====================================================
 
 
-def find_best_pair(ranked):
+def best_pair(ranking):
 
 
-    pair_model=PairModel()
+
+    top=ranking[:10]
 
 
 
     best=None
 
+
     best_score=0
 
 
 
-    top=ranked[:10]
-
 
 
     for i in range(len(top)):
+
 
 
         for j in range(
@@ -1423,48 +1449,280 @@ def find_best_pair(ranked):
 
 
 
-            a=top[i]["num"]
+            a=top[i]
 
-            b=top[j]["num"]
+
+            b=top[j]
 
 
 
             score=(
 
 
-                top[i]["score"]
+                a["score"]
 
                 +
 
-                top[j]["score"]
+                b["score"]
 
-                +
-
-                pair_model.score(
-
-                    a,
-
-                    b
-
-                )
 
             )
 
 
 
-            if score>best_score:
+
+
+            # 同尾降低
+
+
+            if a["num"]%10 == b["num"]%10:
+
+
+                score*=0.85
+
+
+
+
+
+            # 同单双降低
+
+
+            if a["num"]%2 == b["num"]%2:
+
+
+                score*=0.90
+
+
+
+
+
+
+            # 同颜色降低
+
+
+            if get_color(a["num"]) == get_color(b["num"]):
+
+
+                score*=0.95
+
+
+
+
+
+
+            if score > best_score:
+
 
 
                 best_score=score
 
 
-                best=(
 
-                    a,
+                best={
 
-                    b
 
-                )
+                    "pair":(
+
+                        a["num"],
+
+                        b["num"]
+
+                    ),
+
+
+
+                    "score":
+
+                    round(
+
+                        score,
+
+                        2
+
+                    )
+
+                }
+
+
+
+
+    return best
+
+
+
+
+
+
+
+# ====================================================
+# 打印TOP
+# ====================================================
+
+
+def print_top10(ranking):
+
+
+    print()
+
+
+    print(
+
+        "🔥 TOP10号码"
+
+    )
+
+
+    print("-"*70)
+
+
+
+
+    for i,x in enumerate(
+
+        ranking[:10],
+
+        1
+
+    ):
+
+
+
+        print(
+
+            f"{i:02d}. "
+
+            f"{x['num']:02d} "
+
+            f"总分:{x['score']} "
+
+            f"尾余:{x['tail']} "
+
+            f"大小:{x['size']} "
+
+            f"单双:{x['odd']} "
+
+            f"颜色:{x['color']}"
+
+        )
+
+
+
+
+
+
+
+
+# ====================================================
+# 预测输出
+# ====================================================
+
+
+def predict(name,rows):
+
+
+    print()
+
+    print("="*70)
+
+
+    print(
+
+        "🎯",
+
+        name,
+
+        "V11.2.1 AI预测"
+
+    )
+
+
+    print("="*70)
+
+
+
+
+    print(
+
+        "最新特码:",
+
+        rows[-1]["num"]
+
+    )
+
+
+
+
+
+    engine=FusionEngine(rows)
+
+
+
+    ranking=engine.rank()
+
+
+
+
+    print_top10(
+
+        ranking
+
+    )
+
+
+
+
+
+    pair=best_pair(
+
+        ranking
+
+    )
+
+
+
+
+    print()
+
+
+    print(
+
+        "⭐ 主推双码:",
+
+        pair["pair"]
+
+    )
+
+
+
+    print(
+
+        "组合评分:",
+
+        pair["score"]
+
+    )
+
+
+
+
+
+    print()
+
+
+    print(
+
+        "🛡 防守号码:",
+
+        [
+
+            x["num"]
+
+            for x in ranking[2:5]
+
+        ]
+
+    )
+
 
 
 
@@ -1472,148 +1730,19 @@ def find_best_pair(ranked):
     return {
 
 
+        "ranking":
+
+        ranking,
+
+
         "pair":
 
-        best,
-
-
-        "score":
-
-        round(
-
-            best_score,
-
-            2
-
-        )
+        pair
 
     }
-    # =====================================================
-# 500期滚动训练
-# =====================================================
-
-
-class RollingTrainer:
-
-
-
-    def __init__(self,rows):
-
-        self.rows=rows
-
-
-
-
-
-    def get_windows(self):
-
-
-        return {
-
-
-            "short":
-
-            self.rows[-30:],
-
-
-
-            "middle":
-
-            self.rows[-100:],
-
-
-
-            "long":
-
-            self.rows[-500:]
-
-            if len(self.rows)>=500
-
-            else self.rows
-
-        }
-
-
-
-
-
-
-    def get_weights(self):
-
-
-        return {
-
-
-            "short":
-
-            0.40,
-
-
-            "middle":
-
-            0.35,
-
-
-            "long":
-
-            0.25
-
-        }
-
-
-
-
-
-
-
-
-# =====================================================
-# 因子自动优化
-# =====================================================
-
-
-class FactorOptimizer:
-
-
-
-    def adjust(self,rate):
-
-
-        if rate>=0.30:
-
-
-            return 1.30
-
-
-
-        elif rate>=0.20:
-
-
-            return 1.10
-
-
-
-        elif rate>=0.10:
-
-
-            return 0.90
-
-
-
-        else:
-
-
-            return 0.60
-
-
-
-
-
-
-
-# =====================================================
-# 回测系统
-# =====================================================
+    # ====================================================
+# 历史回测
+# ====================================================
 
 
 class BackTester:
@@ -1652,6 +1781,16 @@ class BackTester:
 
 
 
+        if len(self.rows)<=window:
+
+
+            return None
+
+
+
+
+
+
         for i in range(
 
             window,
@@ -1666,7 +1805,7 @@ class BackTester:
 
 
 
-            ai=FusionEngine(
+            engine=FusionEngine(
 
                 history
 
@@ -1674,7 +1813,13 @@ class BackTester:
 
 
 
-            ranking=ai.rank()
+            ranking=engine.rank()
+
+
+
+            actual=self.rows[i]["num"]
+
+
 
 
 
@@ -1702,11 +1847,9 @@ class BackTester:
 
 
 
-            actual=self.rows[i]["num"]
-
-
 
             total+=1
+
 
 
 
@@ -1718,10 +1861,14 @@ class BackTester:
 
 
 
+
+
             if actual in top3:
 
 
                 hit3+=1
+
+
 
 
 
@@ -1736,22 +1883,29 @@ class BackTester:
 
             detail.append(
 
+
                 {
 
 
-                "actual":
+                    "actual":
 
-                actual,
-
-
-                "top3":
-
-                top3,
+                    actual,
 
 
-                "hit":
+                    "top1":
 
-                actual in top3
+                    top1,
+
+
+                    "top3":
+
+                    top3,
+
+
+                    "top5":
+
+                    top5
+
 
 
                 }
@@ -1786,7 +1940,6 @@ class BackTester:
             ),
 
 
-
             "top3":
 
             round(
@@ -1800,7 +1953,6 @@ class BackTester:
                 2
 
             ),
-
 
 
             "top5":
@@ -1818,7 +1970,6 @@ class BackTester:
             ),
 
 
-
             "detail":
 
             detail
@@ -1832,564 +1983,215 @@ class BackTester:
 
 
 
-
-# =====================================================
+# ====================================================
 # 双码回测
-# =====================================================
+# ====================================================
 
 
-class PairBackTester:
+def pair_backtest(rows,window=100):
 
 
+    total=0
 
-    def __init__(self,rows):
 
+    hit=0
 
-        self.rows=rows
 
 
 
 
+    for i in range(
 
-    def run(self,window=100):
+        window,
 
-
-        total=0
-
-
-        hit=0
-
-
-
-
-        for i in range(
-
-            window,
-
-            len(self.rows)
-
-        ):
-
-
-
-            history=self.rows[:i]
-
-
-
-            ranking=FusionEngine(
-
-                history
-
-            ).rank()
-
-
-
-            pair=find_best_pair(
-
-                ranking
-
-            )
-
-
-
-            actual=self.rows[i]["num"]
-
-
-
-            total+=1
-
-
-
-
-            if actual in pair["pair"]:
-
-
-                hit+=1
-
-
-
-
-
-
-        return {
-
-
-            "total":
-
-            total,
-
-
-            "hit":
-
-            hit,
-
-
-            "rate":
-
-            round(
-
-                hit/
-
-                total*
-
-                100,
-
-                2
-
-            )
-
-        }
-
-
-
-
-
-
-
-
-
-# =====================================================
-# 盈亏模拟
-# =====================================================
-
-
-class ProfitSimulator:
-
-
-
-    def __init__(self,result):
-
-
-        self.result=result
-
-
-
-
-
-
-    def calculate(self,bet=100):
-
-
-        profit=0
-
-
-
-        for x in self.result["detail"]:
-
-
-
-            if x["hit"]:
-
-
-                # 假设TOP3命中赔率
-
-                profit += (
-
-                    bet*
-
-                    15
-
-                    -
-
-                    bet
-
-                )
-
-
-            else:
-
-
-                profit-=bet
-
-
-
-
-
-        return {
-
-
-            "profit":
-
-            profit,
-
-
-            "roi":
-
-            round(
-
-                profit/
-
-                (
-
-                len(
-
-                self.result["detail"]
-
-                )
-
-                *
-
-                bet
-
-                )
-
-                *
-
-                100,
-
-                2
-
-            )
-
-        }
-        # =====================================================
-# 保存预测记录
-# =====================================================
-
-
-def save_prediction(data):
-
-
-    file="prediction_history.json"
-
-
-
-    try:
-
-        with open(
-
-            file,
-
-            "r",
-
-            encoding="utf-8"
-
-        ) as f:
-
-
-            history=json.load(f)
-
-
-    except:
-
-
-        history=[]
-
-
-
-
-    history.append(data)
-
-
-
-    with open(
-
-        file,
-
-        "w",
-
-        encoding="utf-8"
-
-    ) as f:
-
-
-        json.dump(
-
-            history,
-
-            f,
-
-            ensure_ascii=False,
-
-            indent=2
-
-        )
-
-
-
-
-
-
-
-
-
-# =====================================================
-# 信号等级
-# =====================================================
-
-
-def get_signal(score):
-
-
-    if score>=180:
-
-
-        return "S级"
-
-
-
-    elif score>=150:
-
-
-        return "A级"
-
-
-
-    elif score>=120:
-
-
-        return "B级"
-
-
-
-    else:
-
-
-        return "观望"
-
-
-
-
-
-
-
-
-
-# =====================================================
-# 打印预测
-# =====================================================
-
-
-def print_prediction(name,rows):
-
-
-    print()
-
-    print("="*70)
-
-    print(
-
-        "🎯",
-
-        name,
-
-        "V11.1 AI预测"
-
-    )
-
-    print("="*70)
-
-
-
-
-    latest=rows[-1]
-
-
-
-    print(
-
-        "最新特码:",
-
-        latest["num"]
-
-    )
-
-
-
-
-
-    engine=FusionEngine(
-
-        rows
-
-    )
-
-
-
-    ranking=engine.rank()
-
-
-
-    print()
-
-    print("🔥 TOP10")
-
-
-
-    for i,x in enumerate(
-
-        ranking[:10],
-
-        1
+        len(rows)
 
     ):
 
 
-        print(
 
-            f"{i:02d}.",
+        history=rows[:i]
 
-            x["num"],
 
-            "评分:",
 
-            x["score"]
+        ranking=FusionEngine(
+
+            history
+
+        ).rank()
+
+
+
+        pair=best_pair(
+
+            ranking
 
         )
 
 
 
+        actual=rows[i]["num"]
 
 
 
-    pair=find_best_pair(
 
-        ranking
+        total+=1
 
-    )
 
 
 
-    print()
+        if actual in pair["pair"]:
 
-    print(
 
-        "⭐ 最佳组合"
+            hit+=1
 
-    )
 
 
 
-    print(
 
-        pair["pair"]
+    if total==0:
 
-    )
 
+        return None
 
-    print(
 
-        "组合分:",
 
-        pair["score"]
 
-    )
 
+    return {
 
 
+        "total":
 
+        total,
 
-    print()
 
-    print(
+        "hit":
 
-        "🛡 防守号码"
+        hit,
 
-    )
 
+        "rate":
 
-    print(
+        round(
 
-        [
+            hit/
 
-            x["num"]
+            total*
 
-            for x in ranking[2:5]
+            100,
 
-        ]
+            2
 
-    )
+        )
 
+    }
 
 
 
-    signal=get_signal(
 
-        pair["score"]
 
-    )
 
 
 
-    print()
+# ====================================================
+# 盈亏模拟
+# ====================================================
 
-    print(
 
-        "信号等级:",
+def roi_simulation(back,bet=100):
 
-        signal
 
-    )
+    profit=0
 
 
+    count=0
 
 
 
-    # 保存
 
 
-    save_prediction(
+    for x in back["detail"]:
 
-        {
 
 
-        "time":
+        count+=1
 
-        str(datetime.now()),
 
 
-        "lottery":
 
-        name,
+        if x["actual"] in x["top3"]:
 
 
-        "top10":
 
-        [
+            profit += (
 
-            x["num"]
+                bet*
 
-            for x in ranking[:10]
+                4
 
-        ],
+                -
 
+                bet
 
+            )
 
-        "main":
 
-        pair["pair"],
+        else:
 
 
+            profit-=bet
 
-        "score":
 
-        pair["score"],
 
 
 
-        "signal":
 
-        signal
+    total=bet*count
 
 
-        }
 
-    )
 
 
+    return {
 
-    return ranking
 
+        "投注":
 
+        total,
 
 
+        "盈利":
 
+        profit,
 
 
+        "ROI":
 
-# =====================================================
-# 单彩分析
-# =====================================================
+        round(
+
+            profit/
+
+            total*
+
+            100,
+
+            2
+
+        )
+
+    }
+
+
+
+
+
+
+
+
+# ====================================================
+# 分析单个彩种
+# ====================================================
 
 
 def analyze(name):
@@ -2417,7 +2219,8 @@ def analyze(name):
 
 
 
-    ranking=print_prediction(
+
+    result=predict(
 
         name,
 
@@ -2427,7 +2230,10 @@ def analyze(name):
 
 
 
+
+
     print()
+
 
     print(
 
@@ -2445,105 +2251,124 @@ def analyze(name):
 
 
 
-    print(
-
-        "TOP1:",
-
-        back["top1"],
-
-        "%"
-
-    )
 
 
-    print(
-
-        "TOP3:",
-
-        back["top3"],
-
-        "%"
-
-    )
-
-
-    print(
-
-        "TOP5:",
-
-        back["top5"],
-
-        "%"
-
-    )
+    if back:
 
 
 
+        print(
 
-    pairback=PairBackTester(
+            "TOP1:",
+
+            back["top1"],
+
+            "%"
+
+        )
+
+
+
+        print(
+
+            "TOP3:",
+
+            back["top3"],
+
+            "%"
+
+        )
+
+
+
+        print(
+
+            "TOP5:",
+
+            back["top5"],
+
+            "%"
+
+        )
+
+
+
+
+
+
+
+        roi=roi_simulation(
+
+            back
+
+        )
+
+
+
+        print(
+
+            "模拟ROI:",
+
+            roi["ROI"],
+
+            "%"
+
+        )
+
+
+
+
+
+    pair=pair_backtest(
 
         rows
 
-    ).run()
-
-
-
-    print()
-
-    print(
-
-        "双码命中:",
-
-        pairback["rate"],
-
-        "%"
-
     )
 
 
 
+    if pair:
 
 
-    profit=ProfitSimulator(
+        print(
 
-        back
+            "双码命中:",
 
-    ).calculate()
+            pair["rate"],
 
+            "%"
 
-
-    print(
-
-        "模拟ROI:",
-
-        profit["roi"],
-
-        "%"
-
-    )
+        )
 
 
 
 
 
 
-# =====================================================
+
+
+
+# ====================================================
 # 主程序
-# =====================================================
+# ====================================================
 
 
 def main():
 
 
+
     print()
+
 
     print("="*70)
 
+
     print(
 
-        "🚀 三彩 V11.1 AI量化特码预测系统启动"
+        "🚀 三彩 V11.2.1 AI四层特码预测系统启动"
 
     )
+
 
     print(
 
@@ -2551,7 +2376,9 @@ def main():
 
     )
 
+
     print("="*70)
+
 
 
 
@@ -2559,26 +2386,44 @@ def main():
     for name in LOTTERIES:
 
 
-        analyze(
+        try:
 
-            name
 
-        )
+            analyze(name)
+
+
+
+        except Exception as e:
+
+
+            print(
+
+                "❌",
+
+                name,
+
+                e
+
+            )
+
+
 
 
 
     print()
 
+
     print("="*70)
+
 
     print(
 
-        "运行完成"
+        "✅ 运行完成"
 
     )
 
-    print("="*70)
 
+    print("="*70)
 
 
 
