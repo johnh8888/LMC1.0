@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - 综合预测版
-在原有"简单频率"预测基础上，新增：
-  1. 近期加权频率（recency-weighted frequency）—— 越近的期数权重越高
-  2. 遗漏值分析（gap analysis）—— 距上次出现的期数
-  3. 状态转移概率（一阶马尔可夫）—— 上一期结果 -> 下一期结果 的历史概率
-三者加权融合成"综合版"预测，并与原"简单版"在回测中对比命中率。
-
-⚠️ 说明：遗漏值回补是经验性假设，并非统计学定律（各期开奖理论上独立）。
-   这里的"综合版"目的是给你一个可回测、可调参的框架，而非保证提升胜率。
-   真正是否有效，以下方回测的命中率对比为准。
+新澳门彩预测系统 - V9（加入尾数/余数预测）
+在原有基础上新增：
+  1. 近期加权频率 + 遗漏值 + 马尔可夫
+  2. 尾数（0-9）和余数（mod3/mod4）预测
+参数已轻度调整（降低gap权重），避免过拟合。
 """
 
 import re
@@ -18,7 +13,6 @@ import json
 import urllib.request
 import os
 from collections import defaultdict
-from datetime import datetime
 
 CONFIG = {
     "history_limit": 30,
@@ -29,12 +23,12 @@ CONFIG = {
     "cache_file": "newmacau_cache.json",
     "zodiac_year": 2026,
 
-    # ---- 综合版参数（可自行调参，配合下方回测对比效果）----
-    "recency_decay": 0.90,   # 时间衰减系数：越接近1，各期权重越平均；越小，越偏重最近几期
-    "weight_freq": 0.45,     # 近期加权频率 权重
-    "weight_gap": 0.25,      # 遗漏值      权重
-    "weight_trans": 0.30,    # 状态转移概率 权重
-    "backtest_periods": 20,  # 回测期数（原版为10，调大以获得更可靠的统计）
+    # ---- 综合版参数（已轻微调整，避免过拟合）----
+    "recency_decay": 0.85,   # 加强近期权重
+    "weight_freq": 0.50,     # 提高频率权重
+    "weight_gap": 0.20,      # 降低遗漏值权重
+    "weight_trans": 0.30,    # 转移概率保持
+    "backtest_periods": 20,
 }
 
 # 波色定义
@@ -42,11 +36,16 @@ RED = {1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46}
 BLUE = {3,4,9,10,14,15,20,25,26,31,36,37,41,42,47,48}
 GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 
-# 生肖顺序（鼠年为基准，2020年 = 鼠年）
+# 生肖顺序
 ZODIAC_ORDER = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
 ZODIAC_BASE_YEAR = 2020
 
 HALFHALF_CATEGORIES = [c + s for c in ["红", "蓝", "绿"] for s in ["大", "小"]]
+
+# 新增：尾数和余数类别
+TAIL_CATEGORIES = [str(i) for i in range(10)]
+MOD3_CATEGORIES = [f"余{i}" for i in range(3)]
+MOD4_CATEGORIES = [f"余{i}" for i in range(4)]
 
 def build_zodiac_map(year):
     current_idx = (year - ZODIAC_BASE_YEAR) % 12
@@ -75,6 +74,16 @@ def get_halfhalf(n):
 
 def get_zodiac(n):
     return ZODIAC_MAP.get(n, "?")
+
+# 新增功能
+def get_tail(n):
+    return str(n % 10)
+
+def get_mod3(n):
+    return f"余{n % 3}"
+
+def get_mod4(n):
+    return f"余{n % 4}"
 
 def parse_numbers(text):
     nums = re.findall(r"\d+", text)
@@ -115,6 +124,9 @@ def fetch_new_macau(limit=30):
                         "odd": get_odd(special),
                         "halfhalf": get_halfhalf(special),
                         "zodiac": get_zodiac(special),
+                        "tail": get_tail(special),
+                        "mod3": get_mod3(special),
+                        "mod4": get_mod4(special),
                     })
                 break
 
@@ -127,10 +139,7 @@ def fetch_new_macau(limit=30):
         print(f"❌ 获取失败: {e}")
         return []
 
-# ============================================================
-# 简单版：基础频率统计（原版逻辑，保留作为对照基线）
-# ============================================================
-
+# 简单版
 class SimplePredictor:
     def __init__(self, rows):
         self.rows = rows[:30]
@@ -171,12 +180,8 @@ class SimpleZodiacSelector:
         full = {a: self.zodiac_pred.get(a, 0.0) for a in ZODIAC_ORDER}
         return sorted(full.items(), key=lambda x: x[1], reverse=True)[:count]
 
-# ============================================================
-# 综合版：近期加权频率 + 遗漏值 + 状态转移 的融合预测器
-# ============================================================
-
+# 综合版（EnsemblePredictor 等函数保持原逻辑）
 def recency_weighted_freq(rows, key, decay=0.9):
-    """rows[0] 为最近一期；越靠前权重越高"""
     scores = defaultdict(float)
     total_weight = 0.0
     for i, r in enumerate(rows):
@@ -188,10 +193,9 @@ def recency_weighted_freq(rows, key, decay=0.9):
     return {k: round(v / total_weight * 100, 2) for k, v in scores.items()}
 
 def gap_map(rows, key, categories):
-    """每个类别距上次出现的期数（0=上一期刚出现，值越大遗漏越久）"""
     gaps = {}
     for cat in categories:
-        gap = len(rows)  # 从未出现，取样本长度
+        gap = len(rows)
         for i, r in enumerate(rows):
             if r[key] == cat:
                 gap = i
@@ -200,12 +204,10 @@ def gap_map(rows, key, categories):
     return gaps
 
 def gap_score(gaps):
-    """遗漏值越大分数越高（回补倾向，经验假设）"""
     total = sum(gaps.values()) or 1
     return {k: round(v / total * 100, 2) for k, v in gaps.items()}
 
 def transition_matrix(rows, key):
-    """一阶马尔可夫转移表：较旧一期的值 -> 较新一期的值"""
     trans = defaultdict(lambda: defaultdict(int))
     for i in range(len(rows) - 1):
         prev_val = rows[i + 1][key]
@@ -222,9 +224,7 @@ def transition_predict(trans, last_value, categories):
     return {c: round(row.get(c, 0) / total * 100, 2) for c in categories}
 
 class EnsemblePredictor:
-    """结合近期加权频率 + 遗漏值 + 状态转移概率 的综合评分器（适用于任意分类字段）"""
-    def __init__(self, rows, categories, key,
-                 decay=None, w_freq=None, w_gap=None, w_trans=None):
+    def __init__(self, rows, categories, key, decay=None, w_freq=None, w_gap=None, w_trans=None):
         self.rows = rows
         self.categories = categories
         self.key = key
@@ -257,10 +257,7 @@ class EnsemblePredictor:
         s = self.score()
         return sorted(s.items(), key=lambda x: x[1], reverse=True)[:count]
 
-# ============================================================
-# 回测：简单版 vs 综合版
-# ============================================================
-
+# 回测函数（保持原样）
 def run_backtest(rows, periods):
     total = min(periods, len(rows) - 1)
     if total <= 0:
@@ -284,11 +281,9 @@ def run_backtest(rows, periods):
         sp = SimplePredictor(history)
         color_pred, size_pred, zod_pred = sp.freq("color"), sp.freq("size"), sp.freq("zodiac")
 
-        # 简单版
         hw_simple = [b[0] for b in DynamicHalfwaveSelector(color_pred, size_pred).select_best(2)]
         zd_simple = [b[0] for b in SimpleZodiacSelector(zod_pred).select_best(3)]
 
-        # 综合版
         hw_ens = [b[0] for b in EnsemblePredictor(history, HALFHALF_CATEGORIES, "halfhalf").select_best(2)]
         zd_ens = [b[0] for b in EnsemblePredictor(history, ZODIAC_ORDER, "zodiac").select_best(3)]
 
@@ -315,11 +310,11 @@ def run_backtest(rows, periods):
     print(f"生肖命中率  简单版: {zd_simple_hits}/{total} = {zd_simple_hits/total*100:.1f}%   "
           f"综合版: {zd_ens_hits}/{total} = {zd_ens_hits/total*100:.1f}%")
     print("\n💡 请以上方命中率对比为准来决定采用简单版还是综合版；")
-    print("   也可以调整 CONFIG 中的 recency_decay / weight_freq / weight_gap / weight_trans 后重新回测。")
+    print("   也可以调整 CONFIG 中的参数后重新回测。")
 
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - 综合预测版")
+    print("新澳门彩预测系统 - V9（含尾数预测）")
     print(f"生肖年份基准: {CONFIG['zodiac_year']}年")
     print("=" * 60)
 
@@ -330,19 +325,31 @@ def main():
 
     run_backtest(rows, CONFIG["backtest_periods"])
 
-    # ---- 当前预测 ----
+    # 当前预测
     sp = SimplePredictor(rows)
-    color_pred, size_pred, odd_pred, zod_pred = sp.freq("color"), sp.freq("size"), sp.freq("odd"), sp.freq("zodiac")
+    color_pred = sp.freq("color")
+    size_pred = sp.freq("size")
+    odd_pred = sp.freq("odd")
+    zod_pred = sp.freq("zodiac")
+    tail_pred = sp.freq("tail")
+    mod3_pred = sp.freq("mod3")
+    mod4_pred = sp.freq("mod4")
 
     print("\n🎯 当前最新预测（近30期基础统计）")
     print("颜色:", dict(sorted(color_pred.items(), key=lambda x: x[1], reverse=True)))
     print("大小:", size_pred)
     print("单双:", odd_pred)
+    print("尾数:", dict(sorted(tail_pred.items(), key=lambda x: x[1], reverse=True)))
+    print("余3:", mod3_pred)
+    print("余4:", mod4_pred)
 
     hw_simple = DynamicHalfwaveSelector(color_pred, size_pred).select_best(CONFIG["bet_count"])
     hw_ens = EnsemblePredictor(rows, HALFHALF_CATEGORIES, "halfhalf").select_best(CONFIG["bet_count"])
     zd_simple = SimpleZodiacSelector(zod_pred).select_best(CONFIG["zodiac_bet_count"])
     zd_ens = EnsemblePredictor(rows, ZODIAC_ORDER, "zodiac").select_best(CONFIG["zodiac_bet_count"])
+
+    tail_simple = sorted(tail_pred.items(), key=lambda x: x[1], reverse=True)[:4]
+    tail_ens = EnsemblePredictor(rows, TAIL_CATEGORIES, "tail").select_best(4)
 
     print("\n💡 半波推荐")
     print("  简单版:", ", ".join(f"{hw}({s:.1f})" for hw, s in hw_simple))
@@ -351,6 +358,10 @@ def main():
     print("\n💡 生肖推荐")
     print("  简单版:", ", ".join(f"{z}({s:.1f})" for z, s in zd_simple))
     print("  综合版:", ", ".join(f"{z}({s:.1f})" for z, s in zd_ens))
+
+    print("\n💡 尾数推荐（新增）")
+    print("  简单版:", ", ".join(f"{t}({s:.1f})" for t, s in tail_simple))
+    print("  综合版:", ", ".join(f"{t}({s:.1f})" for t, s in tail_ens))
 
 if __name__ == "__main__":
     main()
