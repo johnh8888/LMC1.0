@@ -60,13 +60,13 @@ API_CONFIG = {
 
     "新澳门彩":
 
-    "你的新澳门彩接口地址",
+    "https://marksix6.net/index.php?api=1",
 
 
 
     "老澳门彩":
 
-    "你的老澳门彩接口地址"
+    "https://marksix6.net/index.php?api=1"
 
 
 
