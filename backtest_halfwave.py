@@ -54,7 +54,7 @@ API_CONFIG = {
 
     "香港彩":
 
-    "你的香港彩接口地址",
+    "https://marksix6.net/index.php?api=1",
 
 
 
