@@ -1169,7 +1169,7 @@ import statistics
 # ============================================================
 
 
-BACKTEST_PERIOD = 20
+BACKTEST_PERIOD = 13
 
 
 BET_AMOUNT = 10
