@@ -2,8 +2,8 @@ name: 新澳门彩预测工作流
 
 on:
   schedule:
-    - cron: '0 9 * * *'   # 每天9:00
-    - cron: '0 17 * * *'  # 每天17:00
+    - cron: '0 9 * * *'
+    - cron: '0 17 * * *'
   workflow_dispatch:
     inputs:
       action:
@@ -29,82 +29,36 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@v4
       
-    - name: 查看文件结构
-      run: |
-        echo "当前目录: $(pwd)"
-        ls -la
-        find . -name "*.py" -type f
-      
     - name: 设置Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
         
     - name: 安装依赖
-      run: |
-        pip install --upgrade pip
+      run: pip install --upgrade pip
         
     - name: 创建数据目录
-      run: |
-        mkdir -p data
-        mkdir -p logs
+      run: mkdir -p data
         
     - name: 执行预测
       run: |
-        # 获取输入参数
         ACTION="${{ github.event.inputs.action }}"
         BACKTEST_LIMIT="${{ github.event.inputs.backtest_limit }}"
         
-        # 定时任务默认 sync
         if [ "${{ github.event_name }}" == "schedule" ]; then
           ACTION="sync"
           BACKTEST_LIMIT="18"
         fi
         
-        # 默认值
         if [ -z "$ACTION" ]; then
           ACTION="sync"
         fi
         
-        # 处理浮点数 -> 整数 (去除小数点及后面的部分)
+        # 去除小数点和后面的数字 (18.0 -> 18)
         if [ ! -z "$BACKTEST_LIMIT" ]; then
           BACKTEST_LIMIT=$(echo "$BACKTEST_LIMIT" | cut -d'.' -f1)
-          if ! [[ "$BACKTEST_LIMIT" =~ ^[0-9]+$ ]] || [ "$BACKTEST_LIMIT" -lt 1 ]; then
-            BACKTEST_LIMIT="18"
-          fi
         else
           BACKTEST_LIMIT="18"
         fi
         
-        echo "=========================================="
-        echo "执行操作: $ACTION"
-        echo "回测期数: $BACKTEST_LIMIT"
-        echo "=========================================="
-        
-        if [ "$ACTION" == "sync" ]; then
-          python new.py sync --with-backtest --backtest-limit $BACKTEST_LIMIT
-        elif [ "$ACTION" == "vote" ]; then
-          python new.py vote --backtest-limit $BACKTEST_LIMIT
-        else
-          python new.py show --backtest-limit $BACKTEST_LIMIT
-        fi
-        
-    - name: 保存预测结果
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: prediction-results-${{ github.run_id }}
-        path: |
-          data/
-          *.db
-          *.log
-          logs/
-        retention-days: 30
-        
-    - name: 打印执行状态
-      if: always()
-      run: |
-        echo "任务完成，状态: ${{ job.status }}"
-        if [ -f "workflow.log" ]; then
-          tail -30 workflow.log
-        fi
+        python new.py $ACTION --backtest-limit $BACKTEST_LIMIT
