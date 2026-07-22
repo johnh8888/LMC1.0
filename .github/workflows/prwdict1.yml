@@ -1,4 +1,4 @@
-name: 新澳门彩预测工作流
+name: 新澳门彩预测
 
 on:
   schedule:
@@ -8,57 +8,36 @@ on:
     inputs:
       action:
         description: '执行操作'
-        required: true
         default: 'sync'
         type: choice
-        options:
-          - sync
-          - show
-          - vote
+        options: [sync, show, vote]
       backtest_limit:
         description: '回测期数'
-        required: false
         default: 18
         type: number
 
 jobs:
   predict:
     runs-on: ubuntu-latest
-    
     steps:
-    - name: 检出代码
-      uses: actions/checkout@v4
-      
-    - name: 设置Python
-      uses: actions/setup-python@v5
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        
-    - name: 安装依赖
-      run: pip install --upgrade pip
-        
     - name: 创建数据目录
       run: mkdir -p data
-        
     - name: 执行预测
       run: |
         ACTION="${{ github.event.inputs.action }}"
         BACKTEST_LIMIT="${{ github.event.inputs.backtest_limit }}"
-        
-        if [ "${{ github.event_name }}" == "schedule" ]; then
-          ACTION="sync"
-          BACKTEST_LIMIT="18"
-        fi
-        
-        if [ -z "$ACTION" ]; then
-          ACTION="sync"
-        fi
-        
-        # 去除小数点和后面的数字 (18.0 -> 18)
-        if [ ! -z "$BACKTEST_LIMIT" ]; then
-          BACKTEST_LIMIT=$(echo "$BACKTEST_LIMIT" | cut -d'.' -f1)
-        else
-          BACKTEST_LIMIT="18"
-        fi
-        
+        [ "${{ github.event_name }}" == "schedule" ] && ACTION="sync"
+        [ -z "$ACTION" ] && ACTION="sync"
+        BACKTEST_LIMIT=$(echo "${BACKTEST_LIMIT:-18}" | cut -d'.' -f1)
         python new.py $ACTION --backtest-limit $BACKTEST_LIMIT
+    - name: 显示完整结果
+      if: always()
+      run: |
+        echo "=========================================="
+        echo "完整预测结果:"
+        echo "=========================================="
+        cat workflow.log 2>/dev/null || echo "无日志文件"
