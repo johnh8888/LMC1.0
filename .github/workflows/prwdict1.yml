@@ -29,27 +29,18 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@v4
       
-    - name: 查看文件结构
-      run: |
-        echo "当前目录文件:"
-        ls -la
-        echo ""
-        echo "Python 文件:"
-        find . -name "*.py" -type f
-      
     - name: 设置Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
         
     - name: 安装依赖
-      run: |
-        pip install --upgrade pip
+      run: pip install --upgrade pip
         
     - name: 创建数据目录
       run: mkdir -p data
       
-    - name: 执行预测
+    - name: 执行预测并保存完整输出
       run: |
         ACTION="${{ github.event.inputs.action }}"
         BACKTEST_LIMIT="${{ github.event.inputs.backtest_limit }}"
@@ -74,15 +65,28 @@ jobs:
         echo "回测期数: $BACKTEST_LIMIT"
         echo "=========================================="
         
-        python new.py $ACTION --backtest-limit $BACKTEST_LIMIT
+        # 把输出同时显示和保存
+        python -u new.py $ACTION --backtest-limit $BACKTEST_LIMIT 2>&1 | tee full_output.txt
         
-    - name: 保存结果
+        echo ""
+        echo "=========================================="
+        echo "完整输出已保存到 full_output.txt"
+        echo "=========================================="
+        
+    - name: 上传完整输出
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: prediction-results
+        name: full-prediction-output
+        path: full_output.txt
+        retention-days: 30
+        
+    - name: 上传数据库
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: prediction-data
         path: |
           data/
           *.db
-          *.log
         retention-days: 30
