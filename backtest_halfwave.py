@@ -1351,11 +1351,55 @@ import datetime
 # ============================================================
 
 
+def random_baseline_test(hit_rate, test_count, k=10, total=49):
+    """
+    把模型的命中率,和"纯随机选k个号码"的理论基准做 z 检验。
+
+    原理:如果开奖真的是独立随机的,那不管模型怎么设计,
+    命中率的期望值都应该是 k/total(比如10个候选/49个号码≈20.4%)。
+    这里用二项分布的正态近似算 z 值和双尾 p 值,
+    判断模型的实际命中率是不是"看起来比瞎猜准",
+    还是只是样本量小导致的正常波动。
+    """
+
+    p0 = k / total
+
+    if test_count <= 0:
+        return None
+
+    se = math.sqrt(p0 * (1 - p0) / test_count)
+
+    if se == 0:
+        return None
+
+    z = (hit_rate - p0) / se
+
+    # 双尾 p 值(正态近似)
+    p_value = 2 * (1 - 0.5 * (1 + math.erf(abs(z) / math.sqrt(2))))
+
+    if abs(z) >= 1.96:
+        verdict = "显著(可能有信号,但注意多重比较)"
+    elif abs(z) >= 1.0:
+        verdict = "有点偏离,但不算显著"
+    else:
+        verdict = "和瞎猜没有区别"
+
+    return {
+        "p0": p0,
+        "z": z,
+        "p_value": p_value,
+        "verdict": verdict
+    }
+
+
 def backtest_hitrate(history, period):
     """
     三层模型(大小→单双→颜色)的滚动回测。
-    只统计一个指标:最终命中率 = 目标特码是否落在
-    本期预测的10个最终候选(主推5 + 防守5)里。
+    统计两件事:
+    1. 最终命中率 = 目标特码是否落在本期预测的10个最终候选
+       (主推5 + 防守5)里
+    2. 这个命中率和"纯随机选10个号码"的理论基准(10/49)
+       相比,是不是统计显著
 
     period: 回测最近多少期(如果数据不够,会自动缩到可用的最大期数)
     """
@@ -1391,10 +1435,15 @@ def backtest_hitrate(history, period):
         if target in final_nums:
             hit += 1
 
+    hit_rate = hit / test_count
+
+    test = random_baseline_test(hit_rate, test_count, k=10, total=49)
+
     return {
         "period": period,
         "test_count": test_count,
-        "hit_rate": hit / test_count
+        "hit_rate": hit_rate,
+        "test": test
     }
 
 
@@ -1436,13 +1485,20 @@ def run_lottery(name):
 
         stat = backtest_hitrate(history, p)
 
-        if stat:
+        if stat and stat["test"]:
+            t = stat["test"]
             lines.append(
-                f"{stat['period']}期:{stat['hit_rate']*100:.1f}%(样本{stat['test_count']})"
+                f"{stat['period']}期: 命中{stat['hit_rate']*100:.1f}% "
+                f"vs基准{t['p0']*100:.1f}% "
+                f"(z={t['z']:.2f}, {t['verdict']})"
+            )
+        elif stat:
+            lines.append(
+                f"{stat['period']}期: 命中{stat['hit_rate']*100:.1f}%(样本太小,无法检验)"
             )
 
     if lines:
-        print("   最终命中率回测  " + "  ".join(lines))
+        print("   " + "\n   ".join(lines))
 
 
 
