@@ -1,11 +1,9 @@
 name: 新澳门彩预测工作流
 
 on:
-  # 定时触发 - 每天上午9:00和下午5:00运行
   schedule:
     - cron: '0 9 * * *'   # 每天9:00
     - cron: '0 17 * * *'  # 每天17:00
-  # 手动触发
   workflow_dispatch:
     inputs:
       action:
@@ -17,9 +15,6 @@ on:
           - sync
           - show
           - vote
-          - schedule
-          - tune
-          - cleanup
       backtest_limit:
         description: '回测期数'
         required: false
@@ -37,26 +32,17 @@ jobs:
     - name: 查看文件结构
       run: |
         echo "当前目录: $(pwd)"
-        echo "文件列表:"
         ls -la
-        echo ""
-        echo "查找 Python 文件:"
         find . -name "*.py" -type f
-        echo ""
-        echo "查找配置文件:"
-        find . -name "*.json" -type f
       
     - name: 设置Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        cache: 'pip'
         
     - name: 安装依赖
       run: |
         pip install --upgrade pip
-        # 安装 schedule 依赖
-        pip install schedule requests
         
     - name: 创建数据目录
       run: |
@@ -69,18 +55,24 @@ jobs:
         ACTION="${{ github.event.inputs.action }}"
         BACKTEST_LIMIT="${{ github.event.inputs.backtest_limit }}"
         
-        # 如果是定时任务，默认执行 sync
+        # 定时任务默认 sync
         if [ "${{ github.event_name }}" == "schedule" ]; then
           ACTION="sync"
           BACKTEST_LIMIT="18"
         fi
         
-        # 如果没有输入，默认 sync
+        # 默认值
         if [ -z "$ACTION" ]; then
           ACTION="sync"
         fi
         
-        if [ -z "$BACKTEST_LIMIT" ]; then
+        # 处理浮点数 -> 整数 (去除小数点及后面的部分)
+        if [ ! -z "$BACKTEST_LIMIT" ]; then
+          BACKTEST_LIMIT=$(echo "$BACKTEST_LIMIT" | cut -d'.' -f1)
+          if ! [[ "$BACKTEST_LIMIT" =~ ^[0-9]+$ ]] || [ "$BACKTEST_LIMIT" -lt 1 ]; then
+            BACKTEST_LIMIT="18"
+          fi
+        else
           BACKTEST_LIMIT="18"
         fi
         
@@ -89,8 +81,13 @@ jobs:
         echo "回测期数: $BACKTEST_LIMIT"
         echo "=========================================="
         
-        # 使用 workflow.py 执行
-        python workflow.py $ACTION --backtest-limit $BACKTEST_LIMIT
+        if [ "$ACTION" == "sync" ]; then
+          python new.py sync --with-backtest --backtest-limit $BACKTEST_LIMIT
+        elif [ "$ACTION" == "vote" ]; then
+          python new.py vote --backtest-limit $BACKTEST_LIMIT
+        else
+          python new.py show --backtest-limit $BACKTEST_LIMIT
+        fi
         
     - name: 保存预测结果
       if: always()
@@ -102,89 +99,12 @@ jobs:
           *.db
           *.log
           logs/
-          workflow.log
         retention-days: 30
         
     - name: 打印执行状态
       if: always()
       run: |
-        echo "=========================================="
-        echo "任务执行完成"
-        echo "状态: ${{ job.status }}"
-        echo "执行时间: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "=========================================="
+        echo "任务完成，状态: ${{ job.status }}"
         if [ -f "workflow.log" ]; then
-          echo "最后50行日志:"
-          tail -50 workflow.log
+          tail -30 workflow.log
         fi
-
-  # 回测任务 - 每周日运行
-  backtest-weekly:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' && github.event.schedule == '0 0 * * 0'
-    
-    steps:
-    - name: 检出代码
-      uses: actions/checkout@v4
-      
-    - name: 设置Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        
-    - name: 安装依赖
-      run: |
-        pip install --upgrade pip
-        pip install schedule requests
-        
-    - name: 执行完整回测
-      run: |
-        echo "=========================================="
-        echo "执行每周回测 (50期)"
-        echo "=========================================="
-        python workflow.py show --backtest-limit 50
-        
-    - name: 保存回测报告
-      uses: actions/upload-artifact@v4
-      with:
-        name: backtest-report-${{ github.run_id }}
-        path: |
-          data/
-          *.db
-          logs/
-        retention-days: 90
-
-  # 自动调优 - 每周一运行
-  auto-tune:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' && github.event.schedule == '0 0 * * 1'
-    
-    steps:
-    - name: 检出代码
-      uses: actions/checkout@v4
-      
-    - name: 设置Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        
-    - name: 安装依赖
-      run: |
-        pip install --upgrade pip
-        pip install schedule requests
-        
-    - name: 执行自动调优
-      run: |
-        echo "=========================================="
-        echo "执行自动调优"
-        echo "=========================================="
-        python workflow.py tune
-        
-    - name: 保存调优结果
-      uses: actions/upload-artifact@v4
-      with:
-        name: tune-results-${{ github.run_id }}
-        path: |
-          data/
-          logs/
-        retention-days: 30
