@@ -40,7 +40,7 @@ jobs:
     - name: 创建数据目录
       run: mkdir -p data
       
-    - name: 执行预测并保存完整输出
+    - name: 执行预测
       run: |
         ACTION="${{ github.event.inputs.action }}"
         BACKTEST_LIMIT="${{ github.event.inputs.backtest_limit }}"
@@ -64,29 +64,11 @@ jobs:
         echo "执行操作: $ACTION"
         echo "回测期数: $BACKTEST_LIMIT"
         echo "=========================================="
+        echo ""
         
-        # 把输出同时显示和保存
-        python -u new.py $ACTION --backtest-limit $BACKTEST_LIMIT 2>&1 | tee full_output.txt
+        stdbuf -oL -eL python -u new.py $ACTION --backtest-limit $BACKTEST_LIMIT
         
         echo ""
         echo "=========================================="
-        echo "完整输出已保存到 full_output.txt"
+        echo "执行完成"
         echo "=========================================="
-        
-    - name: 上传完整输出
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: full-prediction-output
-        path: full_output.txt
-        retention-days: 30
-        
-    - name: 上传数据库
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: prediction-data
-        path: |
-          data/
-          *.db
-        retention-days: 30
