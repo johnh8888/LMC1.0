@@ -17,6 +17,9 @@ on:
           - sync
           - show
           - vote
+          - schedule
+          - tune
+          - cleanup
       backtest_limit:
         description: '回测期数'
         required: false
@@ -31,6 +34,18 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@v4
       
+    - name: 查看文件结构
+      run: |
+        echo "当前目录: $(pwd)"
+        echo "文件列表:"
+        ls -la
+        echo ""
+        echo "查找 Python 文件:"
+        find . -name "*.py" -type f
+        echo ""
+        echo "查找配置文件:"
+        find . -name "*.json" -type f
+      
     - name: 设置Python
       uses: actions/setup-python@v5
       with:
@@ -40,39 +55,71 @@ jobs:
     - name: 安装依赖
       run: |
         pip install --upgrade pip
+        # 安装 schedule 依赖
+        pip install schedule requests
         
-    - name: 创建数据库目录
+    - name: 创建数据目录
       run: |
         mkdir -p data
+        mkdir -p logs
         
     - name: 执行预测
       run: |
-        if [ "${{ github.event.inputs.action }}" == "sync" ] || [ "${{ github.event_name }}" == "schedule" ]; then
-          python new.py sync --with-backtest
-        elif [ "${{ github.event.inputs.action }}" == "vote" ]; then
-          python new.py vote --backtest-limit ${{ github.event.inputs.backtest_limit }}
-        else
-          python new.py show --backtest-limit ${{ github.event.inputs.backtest_limit }}
+        # 获取输入参数
+        ACTION="${{ github.event.inputs.action }}"
+        BACKTEST_LIMIT="${{ github.event.inputs.backtest_limit }}"
+        
+        # 如果是定时任务，默认执行 sync
+        if [ "${{ github.event_name }}" == "schedule" ]; then
+          ACTION="sync"
+          BACKTEST_LIMIT="18"
         fi
         
+        # 如果没有输入，默认 sync
+        if [ -z "$ACTION" ]; then
+          ACTION="sync"
+        fi
+        
+        if [ -z "$BACKTEST_LIMIT" ]; then
+          BACKTEST_LIMIT="18"
+        fi
+        
+        echo "=========================================="
+        echo "执行操作: $ACTION"
+        echo "回测期数: $BACKTEST_LIMIT"
+        echo "=========================================="
+        
+        # 使用 workflow.py 执行
+        python workflow.py $ACTION --backtest-limit $BACKTEST_LIMIT
+        
     - name: 保存预测结果
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: prediction-results
+        name: prediction-results-${{ github.run_id }}
         path: |
           data/
           *.db
           *.log
+          logs/
+          workflow.log
         retention-days: 30
         
-    - name: 发送通知（可选）
+    - name: 打印执行状态
       if: always()
       run: |
-        echo "预测任务完成"
-        # 可配置钉钉/飞书/微信通知
+        echo "=========================================="
+        echo "任务执行完成"
+        echo "状态: ${{ job.status }}"
+        echo "执行时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "=========================================="
+        if [ -f "workflow.log" ]; then
+          echo "最后50行日志:"
+          tail -50 workflow.log
+        fi
 
   # 回测任务 - 每周日运行
-  backtest:
+  backtest-weekly:
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule' && github.event.schedule == '0 0 * * 0'
     
@@ -85,15 +132,59 @@ jobs:
       with:
         python-version: '3.11'
         
+    - name: 安装依赖
+      run: |
+        pip install --upgrade pip
+        pip install schedule requests
+        
     - name: 执行完整回测
       run: |
-        python new.py show --backtest-limit 50
+        echo "=========================================="
+        echo "执行每周回测 (50期)"
+        echo "=========================================="
+        python workflow.py show --backtest-limit 50
         
     - name: 保存回测报告
       uses: actions/upload-artifact@v4
       with:
-        name: backtest-report
+        name: backtest-report-${{ github.run_id }}
         path: |
           data/
           *.db
+          logs/
         retention-days: 90
+
+  # 自动调优 - 每周一运行
+  auto-tune:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' && github.event.schedule == '0 0 * * 1'
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 设置Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: 安装依赖
+      run: |
+        pip install --upgrade pip
+        pip install schedule requests
+        
+    - name: 执行自动调优
+      run: |
+        echo "=========================================="
+        echo "执行自动调优"
+        echo "=========================================="
+        python workflow.py tune
+        
+    - name: 保存调优结果
+      uses: actions/upload-artifact@v4
+      with:
+        name: tune-results-${{ github.run_id }}
+        path: |
+          data/
+          logs/
+        retention-days: 30
