@@ -495,35 +495,15 @@ def check_data(data):
         return False
 
 
+def check_data_silent(data):
+    """不打印任何内容,仅返回数据是否有效"""
+    if len(data) == 0:
+        return False
+    return 1 <= data[0]["num"] <= 49
+
+
 
 # ============================================================
-# 测试
-# ============================================================
-
-
-if __name__=="__main__":
-
-
-    print("="*70)
-
-    print(
-    "三彩",
-    VERSION,
-    "数据模块测试"
-    )
-
-    print("="*70)
-
-
-
-    for name in LOTTERY_CONFIG:
-
-
-        data=fetch_lottery(name)
-
-
-        check_data(data)
-        # ============================================================
 # 三彩 V11.3
 # 第二部分：
 # 四层漏斗预测核心
@@ -981,177 +961,40 @@ def color_filter(candidates):
 
 
 
-def predict_v113(history):
-
-
-    print()
-
-    print("="*70)
-
-    print("🎯 V11.3 四层漏斗预测")
-
-    print("="*70)
-
-
+def predict_v113(history, verbose=False):
 
     # 第一层
-
-    l1=layer_one(history)
-
-
-
-    print()
-
-    print("第一层 尾余TOP12:")
-
-    print(
-
-        [
-            x[0]
-
-            for x in l1
-
-        ]
-
-    )
-
-
+    l1 = layer_one(history)
 
     # 第二层
-
-
-    l2=size_filter(
-
-        l1,
-
-        history
-
-    )
-
-
-    print()
-
-    print("第二层 大小过滤:")
-
-    print(
-
-        [
-            x[0]
-
-            for x in l2
-
-        ]
-
-    )
-
-
-
+    l2 = size_filter(l1, history)
 
     # 第三层
-
-
-    l3=odd_even_filter(
-
-        l2,
-
-        history
-
-    )
-
-
-    print()
-
-    print("第三层 单双过滤:")
-
-    print(
-
-        [
-            x[0]
-
-            for x in l3
-
-        ]
-
-    )
-
-
-
-
+    l3 = odd_even_filter(l2, history)
 
     # 第四层
+    final = color_filter(l3)
 
+    if verbose:
+        print()
+        print("第一层 尾余TOP12:", [x[0] for x in l1])
+        print("第二层 大小过滤:", [x[0] for x in l2])
+        print("第三层 单双过滤:", [x[0] for x in l3])
+        print("第四层 颜色确认:")
+        for x in final:
+            print(x["num"], x["color"], round(x["score"], 2))
 
-    final=color_filter(l3)
+    main = [x["num"] for x in final[:2]]
+    guard = [x["num"] for x in final[2:]]
 
-
-
-    print()
-
-    print("第四层 颜色确认:")
-
-
-    for x in final:
-
-        print(
-
-            x["num"],
-
-            x["color"],
-
-            round(
-                x["score"],
-                2
-            )
-
-        )
-
-
-
-    main=[
-
-        x["num"]
-
-        for x in final[:2]
-
-    ]
-
-
-
-    guard=[
-
-        x["num"]
-
-        for x in final[2:]
-
-    ]
-
-
-
-    print()
-
-    print(
-    "⭐ 主推双码:",
-    tuple(main)
-    )
-
-
-    print(
-
-    "🛡 防守号码:",
-
-    guard
-
-    )
-
+    # pool: 第一层排序后的12码,用于 TOP10 命中统计
+    pool = [x[0] for x in l1]
 
     return {
-
-        "main":main,
-
-        "guard":guard,
-
-        "detail":final
-
+        "main": main,
+        "guard": guard,
+        "detail": final,
+        "pool": pool
     }
     # ============================================================
 # 三彩 V11.3
@@ -1169,7 +1012,7 @@ import statistics
 # ============================================================
 
 
-BACKTEST_PERIOD = 13
+BACKTEST_PERIOD = 100
 
 
 BET_AMOUNT = 10
@@ -1237,18 +1080,13 @@ def calc_double_profit(hit,bet):
 # ============================================================
 
 
-def backtest_v113(history):
+def backtest_v113(history, verbose=True):
 
-
-    print()
-
-    print("="*70)
-
-    print("📈 V11.3 历史滚动回测")
-
-    print("="*70)
-
-
+    if verbose:
+        print()
+        print("="*70)
+        print("📈 V11.3 历史滚动回测")
+        print("="*70)
 
     total=len(history)
 
@@ -1272,6 +1110,8 @@ def backtest_v113(history):
     top3=0
 
     top5=0
+
+    top10=0
 
 
     double_hit=0
@@ -1349,6 +1189,8 @@ def backtest_v113(history):
 
         ]
 
+        pool = result["pool"]
+
 
 
 
@@ -1371,6 +1213,11 @@ def backtest_v113(history):
         if target in detail[:5]:
 
             top5+=1
+
+
+        if target in pool[:10]:
+
+            top10+=1
 
 
 
@@ -1448,211 +1295,33 @@ def backtest_v113(history):
 
     if test_count==0:
 
-        return
-
-
-
-
-
-    print()
-
-    print(
-
-    "测试期:",
-
-    test_count
-
-    )
-
-
-    print(
-
-    "TOP1:",
-
-    round(
-
-        top1/test_count*100,
-
-        2
-
-    ),
-
-    "%"
-
-    )
-
-
-    print(
-
-    "TOP3:",
-
-    round(
-
-        top3/test_count*100,
-
-        2
-
-    ),
-
-    "%"
-
-    )
-
-
-    print(
-
-    "TOP5:",
-
-    round(
-
-        top5/test_count*100,
-
-        2
-
-    ),
-
-    "%"
-
-    )
-
-
-
-    print()
-
-    print(
-
-    "双码命中:",
-
-    round(
-
-        double_hit/test_count*100,
-
-        2
-
-    ),
-
-    "%"
-
-    )
-
-
-
-    roi=(
-
-        profit
-
-        /
-
-        (
-
-        test_count*
-
-        BET_AMOUNT
-
-        )
-
-        *
-
-        100
-
-    )
-
-
-
-    double_roi=(
-
-        double_profit
-
-        /
-
-        (
-
-        test_count*
-
-        BET_AMOUNT
-
-        )
-
-        *
-
-        100
-
-    )
-
-
-
-    print()
-
-    print(
-
-    "单码ROI:",
-
-    round(
-
-        roi,
-
-        2
-
-    ),
-
-    "%"
-
-    )
-
-
-
-    print(
-
-    "双码ROI:",
-
-    round(
-
-        double_roi,
-
-        2
-
-    ),
-
-    "%"
-
-    )
-
-
-
+        return None
+
+    roi = profit / (test_count * BET_AMOUNT) * 100
+    double_roi = double_profit / (test_count * BET_AMOUNT) * 100
+
+    if verbose:
+        print()
+        print("测试期:", test_count)
+        print("TOP1:", round(top1/test_count*100, 2), "%")
+        print("TOP3:", round(top3/test_count*100, 2), "%")
+        print("TOP5:", round(top5/test_count*100, 2), "%")
+        print("TOP10:", round(top10/test_count*100, 2), "%")
+        print()
+        print("双码命中:", round(double_hit/test_count*100, 2), "%")
+        print()
+        print("单码ROI:", round(roi, 2), "%")
+        print("双码ROI:", round(double_roi, 2), "%")
 
     return {
-
-
-        "top1":
-
-        top1/test_count,
-
-
-        "top3":
-
-        top3/test_count,
-
-
-        "top5":
-
-        top5/test_count,
-
-
-        "double":
-
-        double_hit/test_count,
-
-
-        "roi":
-
-        roi,
-
-
-        "double_roi":
-
-        double_roi
-
-
+        "test_count": test_count,
+        "top1": top1/test_count,
+        "top3": top3/test_count,
+        "top5": top5/test_count,
+        "top10": top10/test_count,
+        "double": double_hit/test_count,
+        "roi": roi,
+        "double_roi": double_roi
     }
     # ============================================================
 # 三彩 V11.3
@@ -1670,173 +1339,48 @@ import datetime
 # ============================================================
 
 
+def format_num_tag(item):
+    """把一个候选号码格式化成 '12(小单红)' 这种简短标签"""
+    num = item["num"]
+    feat = number_feature(num)
+    size_tag = "大" if feat["big"] else "小"
+    odd_tag = "单" if feat["odd"] else "双"
+    color_tag = feat["color"]
+    return f"{num}({size_tag}{odd_tag}{color_tag})"
+
+
 def run_lottery(name):
-
-
-    print()
-
-    print("="*70)
-
-    print(
-        "📡 获取数据:",
-        name
-    )
-
-    print("="*70)
-
-
-
-    # 获取数据
 
     history = fetch_lottery(name)
 
-
-
     if not history:
-
-
-        print(
-            "❌ 数据为空:",
-            name
-        )
-
+        print(f"❌ {name}: 数据为空")
         return
 
-
-
-    # 数据检查
-
-
-    if not check_data(history):
-
-
-        print(
-            "❌ 数据异常"
-        )
-
+    if not check_data_silent(history):
+        print(f"❌ {name}: 数据异常")
         return
 
+    result = predict_v113(history)
 
-
-
-    print()
-
-    print("="*70)
-
-    print(
-
-        "🎯",
-
-        name,
-
-        "V11.3预测"
-
-    )
-
-    print("="*70)
-
-
-
-    # 当前最新号码
-
-    print(
-
-        "最新特码:",
-
-        history[0]["num"]
-
-    )
-
-
-
-
-    # =========================
-    # 四层预测
-    # =========================
-
-
-    result=predict_v113(
-
-        history
-
-    )
-
-
-
+    main_tags = [format_num_tag(x) for x in result["detail"][:2]]
+    guard_tags = [format_num_tag(x) for x in result["detail"][2:]]
 
     print()
+    print(f"【{name}】最新特码: {history[0]['num']}")
+    print(f"⭐ 主推: {'  '.join(main_tags)}")
+    print(f"🛡 防守: {'  '.join(guard_tags)}")
 
-    print("="*70)
-
-    print("⭐ 最终推荐")
-
-    print("="*70)
-
-
-
-    print(
-
-        "主推双码:",
-
-        result["main"]
-
-    )
-
-
-    print(
-
-        "防守号码:",
-
-        result["guard"]
-
-    )
-
-
-
-
-    print()
-
-    print(
-
-        "颜色分布:"
-    )
-
-
-    for x in result["detail"]:
-
-
-        print(
-
-            x["num"],
-
-            x["color"],
-
-            round(
-
-                x["score"],
-
-                2
-
+    if len(history) > 100:
+        stats = backtest_v113(history, verbose=False)
+        if stats:
+            print(
+                f"   回测(近{stats['test_count']}期) "
+                f"TOP1:{stats['top1']*100:.1f}%  "
+                f"TOP10:{stats['top10']*100:.1f}%  "
+                f"双码命中:{stats['double']*100:.1f}%  "
+                f"双码ROI:{stats['double_roi']:.1f}%"
             )
-
-        )
-
-
-
-
-    # =========================
-    # 回测
-    # =========================
-
-
-    if len(history)>100:
-
-
-        backtest_v113(
-
-            history
-
-        )
 
 
 
@@ -1850,94 +1394,15 @@ def run_lottery(name):
 
 def main():
 
+    print(f"🚀 三彩 V11.3 预测  {datetime.datetime.now():%Y-%m-%d %H:%M}")
+    print("-"*50)
 
-    print()
-
-    print("="*70)
-
-    print(
-
-    "🚀 三彩 V11.3 AI四层特码预测系统启动(数据源已修复)"
-
-    )
-
-    print(
-
-    datetime.datetime.now()
-
-    )
-
-    print("="*70)
-
-
-
-    print()
-
-    print(
-
-    "模型结构:"
-    )
-
-    print(
-
-    "尾数+余数 → 大小 → 单双 → 颜色"
-
-    )
-
-
-
-
-
-    for name in [
-
-        "香港彩",
-
-        "新澳门彩",
-
-        "老澳门彩"
-
-    ]:
-
-
+    for name in ["香港彩", "新澳门彩", "老澳门彩"]:
         try:
-
-
-            run_lottery(
-
-                name
-
-            )
-
-
+            run_lottery(name)
         except Exception as e:
-
-
-            print()
-
-            print(
-
-            "❌运行错误:",
-
-            name
-
-            )
-
-            print(e)
-
-
-
-
-    print()
-
-    print("="*70)
-
-    print(
-
-    "✅ V11.3运行完成"
-
-    )
-
-    print("="*70)
+            print(f"❌ {name} 运行错误: {e}")
+        print("-"*50)
 
 
 
