@@ -701,7 +701,7 @@ def layer_one(history):
     )
 
 
-    return result[:12]
+    return result[:16]
 
 
 
@@ -795,7 +795,7 @@ def size_filter(candidates,history):
     )
 
 
-    return result[:8]
+    return result[:12]
 
 
 
@@ -894,7 +894,7 @@ def odd_even_filter(candidates,history):
     )
 
 
-    return result[:5]
+    return result[:10]
 
 
 
@@ -961,40 +961,52 @@ def color_filter(candidates):
 
 
 
+def base_candidates(history):
+    """
+    三层模式起点:不再用尾数+余数打分,
+    直接从全部49个号码出发,只给一个很轻的历史出现频率作基础分
+    (纯粹为了让后面大小/单双加分时不是完全同分,不引入尾数余数逻辑)
+    """
+
+    nums = [x["num"] for x in history]
+
+    freq = Counter(nums)
+
+    return [
+        (n, freq.get(n, 0) * 0.1)
+        for n in range(1, 50)
+    ]
+
+
 def predict_v113(history, verbose=False):
 
-    # 第一层
-    l1 = layer_one(history)
+    # 起点：全部49码 + 轻量频率基础分
+    base = base_candidates(history)
 
-    # 第二层
-    l2 = size_filter(l1, history)
+    # 第一层：大小过滤 49 -> 12
+    l1 = size_filter(base, history)
 
-    # 第三层
-    l3 = odd_even_filter(l2, history)
+    # 第二层：单双过滤 12 -> 10
+    l2 = odd_even_filter(l1, history)
 
-    # 第四层
-    final = color_filter(l3)
+    # 第三层：颜色确认(排序+展示)
+    final = color_filter(l2)
 
     if verbose:
         print()
-        print("第一层 尾余TOP12:", [x[0] for x in l1])
-        print("第二层 大小过滤:", [x[0] for x in l2])
-        print("第三层 单双过滤:", [x[0] for x in l3])
-        print("第四层 颜色确认:")
+        print("第一层 大小过滤:", [x[0] for x in l1])
+        print("第二层 单双过滤:", [x[0] for x in l2])
+        print("第三层 颜色确认:")
         for x in final:
             print(x["num"], x["color"], round(x["score"], 2))
 
-    main = [x["num"] for x in final[:2]]
-    guard = [x["num"] for x in final[2:]]
-
-    # pool: 第一层排序后的12码,用于 TOP10 命中统计
-    pool = [x[0] for x in l1]
+    main = [x["num"] for x in final[:5]]
+    guard = [x["num"] for x in final[5:10]]
 
     return {
         "main": main,
         "guard": guard,
-        "detail": final,
-        "pool": pool
+        "detail": final
     }
     # ============================================================
 # 三彩 V11.3
@@ -1189,7 +1201,7 @@ def backtest_v113(history, verbose=True):
 
         ]
 
-        pool = result["pool"]
+        pool = [x["num"] for x in result["detail"]]
 
 
 
@@ -1339,6 +1351,53 @@ import datetime
 # ============================================================
 
 
+def backtest_hitrate(history, period):
+    """
+    三层模型(大小→单双→颜色)的滚动回测。
+    只统计一个指标:最终命中率 = 目标特码是否落在
+    本期预测的10个最终候选(主推5 + 防守5)里。
+
+    period: 回测最近多少期(如果数据不够,会自动缩到可用的最大期数)
+    """
+
+    total = len(history)
+
+    # 至少留一部分数据当"训练历史",这里简单地保证 train 不为空
+    max_possible = total - 1
+
+    test_count = min(period, max_possible)
+
+    if test_count <= 0:
+        return None
+
+    hit = 0
+
+    for i in range(test_count, 0, -1):
+
+        train = history[i:]
+
+        if len(train) == 0:
+            continue
+
+        target = history[i - 1]["num"]
+
+        try:
+            result = predict_v113(train)
+        except Exception:
+            continue
+
+        final_nums = result["main"] + result["guard"]
+
+        if target in final_nums:
+            hit += 1
+
+    return {
+        "period": period,
+        "test_count": test_count,
+        "hit_rate": hit / test_count
+    }
+
+
 def format_num_tag(item):
     """把一个候选号码格式化成 '12(小单红)' 这种简短标签"""
     num = item["num"]
@@ -1363,24 +1422,27 @@ def run_lottery(name):
 
     result = predict_v113(history)
 
-    main_tags = [format_num_tag(x) for x in result["detail"][:2]]
-    guard_tags = [format_num_tag(x) for x in result["detail"][2:]]
+    main_tags = [format_num_tag(x) for x in result["detail"][:5]]
+    guard_tags = [format_num_tag(x) for x in result["detail"][5:10]]
 
     print()
     print(f"【{name}】最新特码: {history[0]['num']}")
     print(f"⭐ 主推: {'  '.join(main_tags)}")
     print(f"🛡 防守: {'  '.join(guard_tags)}")
 
-    if len(history) > 100:
-        stats = backtest_v113(history, verbose=False)
-        if stats:
-            print(
-                f"   回测(近{stats['test_count']}期) "
-                f"TOP1:{stats['top1']*100:.1f}%  "
-                f"TOP10:{stats['top10']*100:.1f}%  "
-                f"双码命中:{stats['double']*100:.1f}%  "
-                f"双码ROI:{stats['double_roi']:.1f}%"
+    lines = []
+
+    for p in [100, 50, 30, 10]:
+
+        stat = backtest_hitrate(history, p)
+
+        if stat:
+            lines.append(
+                f"{stat['period']}期:{stat['hit_rate']*100:.1f}%(样本{stat['test_count']})"
             )
+
+    if lines:
+        print("   最终命中率回测  " + "  ".join(lines))
 
 
 
