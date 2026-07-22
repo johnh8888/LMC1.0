@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-
 import argparse
 import json
 import logging
@@ -46,13 +45,14 @@ COLOR_GAP_HIGH   = 0.25
 COLOR_GAP_MEDIUM = 0.08
 BS_GAP_HIGH      = 0.30
 BS_GAP_MEDIUM    = 0.15
-ODD_EVEN_GAP_HIGH = 0.30
-ODD_EVEN_GAP_MEDIUM = 0.15
+OE_GAP_HIGH      = 0.30
+OE_GAP_MEDIUM    = 0.15
 RISK_SCORE_HIGH  = 2
 RISK_COLOR_RATE_LOW = 0.333
 RISK_BS_RATE_LOW    = 0.40
-RISK_ODD_EVEN_RATE_LOW = 0.40
+RISK_OE_RATE_LOW    = 0.40
 BS_CONSECUTIVE_ERROR_THRESHOLD = 2
+OE_CONSECUTIVE_ERROR_THRESHOLD = 2
 COLOR_WEIGHT_TRANS_HIGH = 0.20
 COLOR_WEIGHT_TRANS_LOW  = 0.05
 ZODIAC_STREAK_PENALTY_FACTOR = 0.03
@@ -80,6 +80,9 @@ def get_color(num: int) -> str:
     if num in RED_WAVE:   return "红"
     if num in BLUE_WAVE:  return "蓝"
     return "绿"
+
+def get_parity(num: int) -> str:
+    return "单" if num % 2 == 1 else "双"
 
 def _build_color_zodiac_map() -> Dict[str, set]:
     m = {"红": set(), "蓝": set(), "绿": set()}
@@ -248,7 +251,7 @@ def color_confidence_dynamic(specials, main_score, second_score, window=8, metho
     level = "高" if gap >= hi else "中" if gap >= lo else "低"
     return level, gap
 
-# ---------- 大小预测 ----------
+# ---------- 大小预测（增强版）----------
 def _attr_score(attrs, score_keys, specials_raw, attr_fn, window):
     score = {k: 0.0 for k in score_keys}
     total_w = 0.0
@@ -347,161 +350,93 @@ def apply_bs_correction(train_specials, pred_bs, consecutive_threshold=BS_CONSEC
         return flipped, "(连错纠正)"
     return pred_bs, ""
 
-# ---------- 单双预测 ----------
-def predict_odd_even(specials: List[int], window: int = 8) -> Tuple[str, float]:
-    if len(specials) < 5:
-        return "单", 0.0
-    
+# ---------- 单双预测（结构对齐大小预测）----------
+def predict_odd_even(specials, window=8):
+    """结构与 predict_big_small 完全对齐：本位单双 + 合数单双(辅) + 头数单双(辅)
+    + 转移概率 + 连续同一结果衰减。返回 (主推单/双, 主次差值)。"""
+    if len(specials) < 5: return "单", 0.0
     recent = specials[-window:] if len(specials) >= window else specials
-    oe_fn = lambda n: "单" if n % 2 == 1 else "双"
+    oe_fn = lambda n: get_parity(n)
     attrs = [oe_fn(n) for n in recent]
-    
-    score = {"单": 0.0, "双": 0.0}
-    total_w = 0.0
-    for i, a in enumerate(reversed(attrs)):
-        w = float(window - i)
-        score[a] += w
-        total_w += w
-    if total_w > 0:
-        for k in score:
-            score[k] = score[k] / total_w * 0.50
-    
-    omit = {"单": 0, "双": 0}
-    for k in ["单", "双"]:
-        miss = 0
-        for n in reversed(specials):
-            if (n % 2 == 1 and k == "单") or (n % 2 == 0 and k == "双"):
-                break
-            miss += 1
-        omit[k] = miss
-    max_omit = max(omit.values()) or 1
-    for k in score:
-        score[k] += 0.30 * (omit[k] / max_omit)
-    
-    if len(attrs) >= 2:
-        current = attrs[-1]
-        trans = {"单": 0, "双": 0}
-        total_trans = 0
-        for i in range(len(attrs) - 1):
-            if attrs[i] == current:
-                trans[attrs[i + 1]] += 1
-                total_trans += 1
-        if total_trans > 0:
-            for k in score:
-                score[k] += 0.20 * (trans[k] / total_trans)
-    
-    streak_oe = attrs[-1]
-    streak = 1
-    for i in range(len(attrs) - 2, -1, -1):
-        if attrs[i] == streak_oe:
-            streak += 1
-        else:
-            break
-    if streak >= 2:
-        score[streak_oe] *= max(0.35, 1.0 - streak * 0.15)
-    
-    he_attrs = [("单" if ((n // 10 + n % 10) % 2 == 1) else "双") for n in recent]
-    he_score = {"单": 0.0, "双": 0.0}
-    hw = 0.0
+    score = _attr_score(attrs, ["单","双"], specials, oe_fn, window)
+    # 合数单双（辅助信号，权重对齐大小预测的合数大小 0.18）
+    he_attrs = [("单" if (n//10+n%10)%2==1 else "双") for n in recent]
+    he_score = {"单":0.0,"双":0.0}; hw = 0.0
     for i, a in enumerate(reversed(he_attrs)):
-        w = float(window - i)
-        he_score[a] += w
-        hw += w
+        w = float(window-i); he_score[a] += w; hw += w
     if hw > 0:
-        for k in he_score:
-            he_score[k] = he_score[k] / hw * 0.15
+        for k in he_score: he_score[k] = he_score[k]/hw*0.18
     score[max(he_score, key=he_score.get)] += max(he_score.values())
-    
+    # 头数单双（十位数字奇偶，辅助信号，权重对齐尾数大小 0.07）
+    tou_attrs = [("单" if (n//10)%2==1 else "双") for n in recent]
+    tou_score = {"单":0.0,"双":0.0}; tw = 0.0
+    for i, a in enumerate(reversed(tou_attrs)):
+        w = float(window-i); tou_score[a] += w; tw += w
+    if tw > 0:
+        for k in tou_score: tou_score[k] = tou_score[k]/tw*0.07
+    score[max(tou_score, key=tou_score.get)] += max(tou_score.values())
+    # 转移概率
+    trans_weight = 0.15
+    if _detect_alternating_pattern(attrs):
+        trans_weight = 0.05
+    if len(attrs) >= 2:
+        current = attrs[-1]; trans = {"单":0,"双":0}; tt = 0
+        for i in range(len(attrs)-1):
+            if attrs[i] == current: trans[attrs[i+1]] += 1; tt += 1
+        if tt > 0:
+            for k in score: score[k] += trans_weight*(trans[k]/tt)
+    sv = attrs[-1]; streak = 1
+    for i in range(len(attrs)-2,-1,-1):
+        if attrs[i] == sv: streak += 1
+        else: break
+    if streak >= 2: score[sv] *= max(0.35, 1.0-streak*0.15)
     ranked = sorted(score.items(), key=lambda x: x[1], reverse=True)
-    return ranked[0][0], ranked[0][1] - ranked[1][1]
+    return ranked[0][0], ranked[0][1]-ranked[1][1]
 
-
-def predict_odd_even_ensemble(specials: List[int], windows=CANDIDATE_WINDOWS) -> Tuple[str, float]:
-    if len(specials) < 20:
-        return predict_odd_even(specials, window=8)
-    
+def predict_odd_even_ensemble(specials, windows=CANDIDATE_WINDOWS):
+    if len(specials) < 20: return predict_odd_even(specials, window=8)
     test_limit = _safe_test_periods(len(specials))
-    if test_limit <= 0:
-        return predict_odd_even(specials, window=8)
-    
+    if test_limit <= 0: return predict_odd_even(specials, window=8)
     weights = []
     for w in windows:
-        hits = sum(1 for i in range(len(specials) - test_limit, len(specials))
-                   if predict_odd_even(specials[:i], window=w)[0] == ("单" if specials[i] % 2 == 1 else "双"))
-        weights.append(hits / test_limit)
-    
-    squared = [w ** 2 for w in weights]
+        hits = sum(1 for i in range(len(specials)-test_limit, len(specials))
+                   if predict_odd_even(specials[:i], window=w)[0] == get_parity(specials[i]))
+        weights.append(hits/test_limit)
+    squared = [w**2 for w in weights]
     sq_total = sum(squared) or 1
-    norm_weights = [s / sq_total for s in squared]
-    
-    score = {"单": 0.0, "双": 0.0}
-    for w, weight in zip(windows, norm_weights):
+    weights = [s/sq_total for s in squared]
+    score = {"单":0.0,"双":0.0}
+    for w, weight in zip(windows, weights):
         pred, _ = predict_odd_even(specials, window=w)
         score[pred] += weight
-    
     winner = max(score, key=score.get)
-    total = sum(score.values()) or 1
-    gap = abs(score[winner] / total - 0.5) * 2
+    gap = abs(score[winner]/sum(score.values())-0.5)*2
     return winner, gap
 
-
-def auto_tune_oe_window(specials: List[int], test_periods: int = None) -> int:
-    if test_periods is None:
-        test_periods = _safe_test_periods(len(specials))
-    train_end = len(specials) - test_periods
-    if train_end < max(CANDIDATE_WINDOWS) + 1:
-        return 8
-    
-    train_for_tune = specials[:train_end]
-    best_w, best_hits = 8, -1
-    for w in CANDIDATE_WINDOWS:
-        if len(train_for_tune) < w + 5:
-            continue
-        tp = _safe_test_periods(len(train_for_tune))
-        hits = sum(
-            1 for i in range(len(train_for_tune) - tp, len(train_for_tune))
-            if predict_odd_even(train_for_tune[:i], window=w)[0]
-               == ("单" if train_for_tune[i] % 2 == 1 else "双")
-        )
-        if hits > best_hits:
-            best_hits, best_w = hits, w
-    return best_w
-
-
-def apply_oe_correction(train_specials: List[int], pred_oe: str,
-                        consecutive_threshold: int = BS_CONSECUTIVE_ERROR_THRESHOLD) -> Tuple[str, str]:
+def apply_oe_correction(train_specials, pred_oe, consecutive_threshold=OE_CONSECUTIVE_ERROR_THRESHOLD):
+    """与 apply_bs_correction 完全对齐：最近 N 期若连续全错则反转推荐。"""
     if len(train_specials) < consecutive_threshold + 1:
         return pred_oe, ""
-    
     all_wrong = True
     for i in range(len(train_specials) - consecutive_threshold, len(train_specials)):
         sub = train_specials[:i]
-        actual = "单" if train_specials[i] % 2 == 1 else "双"
-        pred, _ = predict_odd_even_ensemble(sub) if len(sub) >= 20 else predict_odd_even(sub, window=8)
+        actual = get_parity(train_specials[i])
+        pred, _ = (predict_odd_even_ensemble(sub) if len(sub) >= 20
+                   else predict_odd_even(sub, window=8))
         if pred == actual:
             all_wrong = False
             break
-    
     if all_wrong:
         flipped = "双" if pred_oe == "单" else "单"
         return flipped, "(连错纠正)"
     return pred_oe, ""
 
-
-def calc_oe_recent_hit_rate(specials: List[int], recent: int = 5) -> float:
-    if len(specials) < recent + 5:
-        return None
-    hits = 0
-    for i in range(len(specials) - recent, len(specials)):
-        train = specials[:i]
-        pred, _ = predict_odd_even_ensemble(train) if len(train) >= 20 else predict_odd_even(train, window=8)
-        pred, _ = apply_oe_correction(train, pred)
-        if pred == ("单" if specials[i] % 2 == 1 else "双"):
-            hits += 1
-    return hits / recent
-
-# ---------- 自动调优 ----------
+# ---------- 自动调优（回测隔离版）----------
 def auto_tune_color_window(specials, test_periods=None):
+    """
+    调优只在 specials[:-test_periods] 上选窗口，
+    不让调优过程"看见"测试区间的数据。
+    """
     if test_periods is None:
         test_periods = _safe_test_periods(len(specials))
     train_end = len(specials) - test_periods
@@ -523,6 +458,7 @@ def auto_tune_color_window(specials, test_periods=None):
     return best_w
 
 def auto_tune_bs_window(specials, test_periods=None):
+    """同上，大小窗口调优也隔离测试区间。"""
     if test_periods is None:
         test_periods = _safe_test_periods(len(specials))
     train_end = len(specials) - test_periods
@@ -538,6 +474,28 @@ def auto_tune_bs_window(specials, test_periods=None):
             1 for i in range(len(train_for_tune) - tp, len(train_for_tune))
             if predict_big_small(train_for_tune[:i], window=w)[0]
                == ("大" if train_for_tune[i] >= 25 else "小")
+        )
+        if hits > best_hits:
+            best_hits, best_w = hits, w
+    return best_w
+
+def auto_tune_oe_window(specials, test_periods=None):
+    """与 auto_tune_bs_window 完全对齐的单双窗口调优（回测隔离）。"""
+    if test_periods is None:
+        test_periods = _safe_test_periods(len(specials))
+    train_end = len(specials) - test_periods
+    if train_end < max(CANDIDATE_WINDOWS) + 1:
+        return 8
+    train_for_tune = specials[:train_end]
+    best_w, best_hits = 8, -1
+    for w in CANDIDATE_WINDOWS:
+        if len(train_for_tune) < w + 5:
+            continue
+        tp = _safe_test_periods(len(train_for_tune))
+        hits = sum(
+            1 for i in range(len(train_for_tune) - tp, len(train_for_tune))
+            if predict_odd_even(train_for_tune[:i], window=w)[0]
+               == get_parity(train_for_tune[i])
         )
         if hits > best_hits:
             best_hits, best_w = hits, w
@@ -564,29 +522,33 @@ def calc_bs_recent_hit_rate(specials, recent=5):
         if pred == ("大" if specials[i]>=25 else "小"): hits += 1
     return hits / recent
 
-def calc_risk_score(specials, color_conf, bs_conf, oe_conf, bs_gap, color_gap, oe_gap):
+def calc_oe_recent_hit_rate(specials, recent=5):
+    if len(specials) < recent + 5: return None
+    hits = 0
+    for i in range(len(specials)-recent, len(specials)):
+        train = specials[:i]
+        pred, _ = predict_odd_even_ensemble(train) if len(train)>=20 else predict_odd_even(train, window=8)
+        pred, _ = apply_oe_correction(train, pred)
+        if pred == get_parity(specials[i]): hits += 1
+    return hits / recent
+
+def calc_risk_score(specials, color_conf, bs_conf, bs_gap, color_gap, oe_conf=None):
     score = 0
     if color_conf == "高": score += 1
     if bs_conf == "高": score += 1
-    if oe_conf == "高": score += 1
-    
     color_rate = calc_color_recent_hit_rate(specials, recent=5)
     if color_rate is not None and color_rate < RISK_COLOR_RATE_LOW: score -= 1
-    
     bs_rate = calc_bs_recent_hit_rate(specials, recent=5)
     if bs_rate is not None and bs_rate < RISK_BS_RATE_LOW: score -= 2
-    
-    oe_rate = calc_oe_recent_hit_rate(specials, recent=5)
-    if oe_rate is not None and oe_rate < RISK_ODD_EVEN_RATE_LOW: score -= 1
-    
     pred_bs_raw, _ = predict_big_small_ensemble(specials) if len(specials)>=20 else predict_big_small(specials, window=8)
-    _, ce_bs = apply_bs_correction(specials, pred_bs_raw)
-    if ce_bs: score -= 1
-    
+    _, ce = apply_bs_correction(specials, pred_bs_raw)
+    if ce: score -= 1
+    oe_rate = calc_oe_recent_hit_rate(specials, recent=5)
+    if oe_conf == "高": score += 1
+    if oe_rate is not None and oe_rate < RISK_OE_RATE_LOW: score -= 2
     pred_oe_raw, _ = predict_odd_even_ensemble(specials) if len(specials)>=20 else predict_odd_even(specials, window=8)
-    _, ce_oe = apply_oe_correction(specials, pred_oe_raw)
-    if ce_oe: score -= 1
-    
+    _, oe_ce = apply_oe_correction(specials, pred_oe_raw)
+    if oe_ce: score -= 1
     return score, color_rate, bs_rate, oe_rate
 
 def risk_level(score):
@@ -594,10 +556,8 @@ def risk_level(score):
     if score >= 0: return "🟡", "中风险", "信号混杂，建议观望或极小注"
     return "🔴", "高风险", "信号矛盾或近期连续错误，建议本期暂停"
 
-def build_dimension_advice(color_conf, bs_conf, oe_conf, bs_ce, oe_ce,
-                           bs_rate, color_rate, oe_rate,
-                           bs_gap, color_gap, oe_gap,
-                           bs_conf_str, oe_conf_str):
+def build_dimension_advice(color_conf, bs_conf, bs_ce, bs_rate, color_rate, bs_gap, color_gap, bs_conf_str,
+                            oe_conf_str=None, oe_ce="", oe_rate=None):
     lines = []
     if color_conf == "高" and (color_rate is None or color_rate >= RISK_COLOR_RATE_LOW):
         lines.append(f"   波色：🟢 可参考（信心{color_conf}，近期命中{f'{color_rate*100:.0f}%' if color_rate else '计算中'}）")
@@ -605,7 +565,6 @@ def build_dimension_advice(color_conf, bs_conf, oe_conf, bs_ce, oe_ce,
         lines.append(f"   波色：🔴 不建议（信心低，差值{color_gap:.3f}）")
     else:
         lines.append(f"   波色：🟡 谨慎（信心{color_conf}，近期命中{f'{color_rate*100:.0f}%' if color_rate else '计算中'}）")
-    
     if bs_ce:
         lines.append(f"   大小：🔴 不建议（{bs_ce}，近期命中{f'{bs_rate*100:.0f}%' if bs_rate else '计算中'}）")
     elif bs_conf_str == "低" or (bs_rate is not None and bs_rate < RISK_BS_RATE_LOW):
@@ -614,16 +573,15 @@ def build_dimension_advice(color_conf, bs_conf, oe_conf, bs_ce, oe_ce,
         lines.append(f"   大小：🟢 可参考（信心高，近期命中{f'{bs_rate*100:.0f}%' if bs_rate else '计算中'}）")
     else:
         lines.append(f"   大小：🟡 谨慎（信心{bs_conf_str}，近期命中{f'{bs_rate*100:.0f}%' if bs_rate else '计算中'}）")
-    
-    if oe_ce:
-        lines.append(f"   单双：🔴 不建议（{oe_ce}，近期命中{f'{oe_rate*100:.0f}%' if oe_rate else '计算中'}）")
-    elif oe_conf_str == "低" or (oe_rate is not None and oe_rate < RISK_ODD_EVEN_RATE_LOW):
-        lines.append(f"   单双：🔴 不建议（信心{oe_conf_str}，近期命中{f'{oe_rate*100:.0f}%' if oe_rate else '计算中'}）")
-    elif oe_conf_str == "高" and (oe_rate is None or oe_rate >= 0.50):
-        lines.append(f"   单双：🟢 可参考（信心高，近期命中{f'{oe_rate*100:.0f}%' if oe_rate else '计算中'}）")
-    else:
-        lines.append(f"   单双：🟡 谨慎（信心{oe_conf_str}，近期命中{f'{oe_rate*100:.0f}%' if oe_rate else '计算中'}）")
-    
+    if oe_conf_str is not None:
+        if oe_ce:
+            lines.append(f"   单双：🔴 不建议（{oe_ce}，近期命中{f'{oe_rate*100:.0f}%' if oe_rate else '计算中'}）")
+        elif oe_conf_str == "低" or (oe_rate is not None and oe_rate < RISK_OE_RATE_LOW):
+            lines.append(f"   单双：🔴 不建议（信心{oe_conf_str}，近期命中{f'{oe_rate*100:.0f}%' if oe_rate else '计算中'}）")
+        elif oe_conf_str == "高" and (oe_rate is None or oe_rate >= 0.50):
+            lines.append(f"   单双：🟢 可参考（信心高，近期命中{f'{oe_rate*100:.0f}%' if oe_rate else '计算中'}）")
+        else:
+            lines.append(f"   单双：🟡 谨慎（信心{oe_conf_str}，近期命中{f'{oe_rate*100:.0f}%' if oe_rate else '计算中'}）")
     if bs_conf_str == "低":
         lines.append("   生肖：🟡 谨慎（大小信心低，已跳过大小筛选，仅按波色选肖）")
         lines.append("   六码：🔴 不建议（依赖大小方向，当前不稳定）")
@@ -633,10 +591,8 @@ def build_dimension_advice(color_conf, bs_conf, oe_conf, bs_ce, oe_ce,
     else:
         lines.append("   生肖：🟢 可参考（漏斗方向正常）")
         lines.append("   六码：🟡 谨慎（基线12.2%，仅供参考）")
-    
     return "\n".join(lines)
 
-# ---------- 回测 ----------
 def backtest_big_small_by_confidence(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
     rows = conn.execute("SELECT special_number FROM draws ORDER BY draw_date ASC, issue_no ASC").fetchall()
     specials = [r["special_number"] for r in rows]
@@ -655,62 +611,88 @@ def backtest_big_small_by_confidence(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
     return result
 
 def backtest_odd_even_by_confidence(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
+    """与 backtest_big_small_by_confidence 完全对齐的单双版本。"""
     rows = conn.execute("SELECT special_number FROM draws ORDER BY draw_date ASC, issue_no ASC").fetchall()
     specials = [r["special_number"] for r in rows]
-    if len(specials) < recent_limit + 10:
-        recent_limit = max(10, len(specials) - 10)
-    
-    result = {"高": {"total": 0, "hit": 0, "periods": []},
-              "中": {"total": 0, "hit": 0, "periods": []},
-              "低": {"total": 0, "hit": 0, "periods": []}}
-    
+    if len(specials) < recent_limit + 10: recent_limit = max(10, len(specials)-10)
+    result = {"高": {"total":0,"hit":0,"periods":[]}, "中": {"total":0,"hit":0,"periods":[]}, "低": {"total":0,"hit":0,"periods":[]}}
     start = len(specials) - recent_limit
     for i in range(start, len(specials)):
-        train = specials[:i]
-        actual_oe = "单" if specials[i] % 2 == 1 else "双"
-        pred_oe, gap = predict_odd_even_ensemble(train) if len(train) >= 20 else predict_odd_even(train, window=8)
+        train = specials[:i]; actual_oe = get_parity(specials[i])
+        pred_oe, gap = predict_odd_even_ensemble(train) if len(train)>=20 else predict_odd_even(train, window=8)
         pred_oe, _ = apply_oe_correction(train, pred_oe)
-        
-        conf = "高" if gap >= ODD_EVEN_GAP_HIGH else "中" if gap >= ODD_EVEN_GAP_MEDIUM else "低"
+        conf = "高" if gap>=OE_GAP_HIGH else "中" if gap>=OE_GAP_MEDIUM else "低"
         result[conf]["total"] += 1
         hit = pred_oe == actual_oe
-        if hit:
-            result[conf]["hit"] += 1
-        result[conf]["periods"].append({
-            "idx": i - start + 1,
-            "pred": pred_oe,
-            "actual": actual_oe,
-            "actual_num": specials[i],
-            "hit": hit,
-            "gap": gap
-        })
+        if hit: result[conf]["hit"] += 1
+        result[conf]["periods"].append({"idx":i-start+1,"pred":pred_oe,"actual":actual_oe,"actual_num":specials[i],"hit":hit,"gap":gap})
+    return result
+
+def backtest_big_small_only(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
+    rows = conn.execute("SELECT special_number FROM draws ORDER BY draw_date ASC, issue_no ASC").fetchall()
+    specials = [r["special_number"] for r in rows]
+    if len(specials) < recent_limit+10: return {}
+    result = {"big_small":{"total":0,"hit":0,"periods":[]}}
+    start = len(specials)-recent_limit
+    for i in range(start, len(specials)):
+        train = specials[:i]; actual_bs = "大" if specials[i]>=25 else "小"
+        pred_bs, gap = predict_big_small_ensemble(train) if len(train)>=20 else predict_big_small(train, window=8)
+        pred_bs, _ = apply_bs_correction(train, pred_bs)
+        bs_hit = pred_bs==actual_bs
+        result["big_small"]["total"]+=1
+        if bs_hit: result["big_small"]["hit"]+=1
+        result["big_small"]["periods"].append({"idx":i-start+1,"pred":pred_bs,"actual":actual_bs,"actual_num":specials[i],"hit":bs_hit})
     return result
 
 def backtest_odd_even_only(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
+    """与 backtest_big_small_only 对齐的单双滚动回测。"""
     rows = conn.execute("SELECT special_number FROM draws ORDER BY draw_date ASC, issue_no ASC").fetchall()
     specials = [r["special_number"] for r in rows]
-    if len(specials) < recent_limit + 10:
-        return {}
-    
-    result = {"odd_even": {"total": 0, "hit": 0, "periods": []}}
-    start = len(specials) - recent_limit
+    if len(specials) < recent_limit+10: return {}
+    result = {"odd_even":{"total":0,"hit":0,"periods":[]}}
+    start = len(specials)-recent_limit
     for i in range(start, len(specials)):
-        train = specials[:i]
-        actual_oe = "单" if specials[i] % 2 == 1 else "双"
-        pred_oe, gap = predict_odd_even_ensemble(train) if len(train) >= 20 else predict_odd_even(train, window=8)
+        train = specials[:i]; actual_oe = get_parity(specials[i])
+        pred_oe, gap = predict_odd_even_ensemble(train) if len(train)>=20 else predict_odd_even(train, window=8)
         pred_oe, _ = apply_oe_correction(train, pred_oe)
-        hit = pred_oe == actual_oe
-        result["odd_even"]["total"] += 1
-        if hit:
-            result["odd_even"]["hit"] += 1
-        result["odd_even"]["periods"].append({
-            "idx": i - start + 1,
-            "pred": pred_oe,
-            "actual": actual_oe,
-            "actual_num": specials[i],
-            "hit": hit,
-            "gap": gap
-        })
+        oe_hit = pred_oe==actual_oe
+        result["odd_even"]["total"]+=1
+        if oe_hit: result["odd_even"]["hit"]+=1
+        result["odd_even"]["periods"].append({"idx":i-start+1,"pred":pred_oe,"actual":actual_oe,"actual_num":specials[i],"hit":oe_hit})
+    return result
+
+def backtest_zodiac_and_special_nums(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
+    rows = conn.execute("SELECT special_number FROM draws ORDER BY draw_date ASC, issue_no ASC").fetchall()
+    specials = [r["special_number"] for r in rows]
+    if len(specials) < recent_limit+10: return {}
+    result = {"zodiac":{"total":0,"hit":0,"periods":[]},"special_nums":{"total":0,"hit":0,"periods":[]}}
+    start = len(specials)-recent_limit
+    for i in range(start, len(specials)):
+        train = specials[:i]; actual_num = specials[i]; actual_zodiac = get_zodiac(actual_num)
+        cw = auto_tune_color_window(train) if len(train)>=30 else 8
+        if len(train)>=20:
+            pred_bs, bs_gap = predict_big_small_ensemble(train)
+            mc,sc_color,ec,_,_,_ = predict_color_ensemble(train, method='weighted')
+        else:
+            pred_bs, bs_gap = predict_big_small(train, window=8)
+            mc,sc_color,ec,_,_,_ = predict_color(train, window=cw, method='weighted')
+        pred_bs, _ = apply_bs_correction(train, pred_bs)
+        bs_conf = "高" if bs_gap>=BS_GAP_HIGH else "中" if bs_gap>=BS_GAP_MEDIUM else "低"
+        pred_zodiacs, zodiac_scores = predict_zodiac(train, window=cw, big_small=pred_bs,
+                                                     main_color=mc, second_color=sc_color, exclude_color=ec,
+                                                     bs_confidence=bs_conf)
+        pred_nums, num_scores = predict_special_nums_from_zodiacs(train, pred_zodiacs, big_small=pred_bs,
+                                                                  main_color=mc, second_color=sc_color, exclude_color=ec,
+                                                                  bs_confidence=bs_conf)
+        zodiac_hit = actual_zodiac in pred_zodiacs
+        num_hit = actual_num in pred_nums
+        result["zodiac"]["total"]+=1; result["special_nums"]["total"]+=1
+        if zodiac_hit: result["zodiac"]["hit"]+=1
+        if num_hit: result["special_nums"]["hit"]+=1
+        result["zodiac"]["periods"].append({"idx":i-start+1,"pred":pred_zodiacs,"actual":actual_zodiac,
+            "hit":zodiac_hit,"big_small":pred_bs,"main_color":mc,"second_color":sc_color,"bs_conf":bs_conf,"zodiac_scores":zodiac_scores})
+        result["special_nums"]["periods"].append({"idx":i-start+1,"pred_nums":pred_nums,
+            "actual_num":actual_num,"hit":num_hit,"num_scores":num_scores})
     return result
 
 def backtest_colors(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
@@ -749,74 +731,7 @@ def backtest_colors_by_confidence(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
         r["periods"].append({"idx":i-start+1,"main":m,"second":s,"exclude":excl,"actual_color":actual,"actual_num":specials[i],"gap":gap,"mark":mark,"two_ok":two_ok})
     return result
 
-def backtest_big_small_only(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
-    rows = conn.execute("SELECT special_number FROM draws ORDER BY draw_date ASC, issue_no ASC").fetchall()
-    specials = [r["special_number"] for r in rows]
-    if len(specials) < recent_limit+10: return {}
-    result = {"big_small":{"total":0,"hit":0,"periods":[]}}
-    start = len(specials)-recent_limit
-    for i in range(start, len(specials)):
-        train = specials[:i]; actual_bs = "大" if specials[i]>=25 else "小"
-        pred_bs, gap = predict_big_small_ensemble(train) if len(train)>=20 else predict_big_small(train, window=8)
-        pred_bs, _ = apply_bs_correction(train, pred_bs)
-        bs_hit = pred_bs==actual_bs
-        result["big_small"]["total"]+=1
-        if bs_hit: result["big_small"]["hit"]+=1
-        result["big_small"]["periods"].append({"idx":i-start+1,"pred":pred_bs,"actual":actual_bs,"actual_num":specials[i],"hit":bs_hit})
-    return result
-
-def backtest_zodiac_and_special_nums(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
-    rows = conn.execute("SELECT special_number FROM draws ORDER BY draw_date ASC, issue_no ASC").fetchall()
-    specials = [r["special_number"] for r in rows]
-    if len(specials) < recent_limit+10: return {}
-    result = {"zodiac":{"total":0,"hit":0,"periods":[]},"special_nums":{"total":0,"hit":0,"periods":[]}}
-    start = len(specials)-recent_limit
-    for i in range(start, len(specials)):
-        train = specials[:i]; actual_num = specials[i]; actual_zodiac = get_zodiac(actual_num)
-        cw = auto_tune_color_window(train) if len(train)>=30 else 8
-        if len(train)>=20:
-            pred_bs, bs_gap = predict_big_small_ensemble(train)
-            mc,sc_color,ec,_,_,_ = predict_color_ensemble(train, method='weighted')
-        else:
-            pred_bs, bs_gap = predict_big_small(train, window=8)
-            mc,sc_color,ec,_,_,_ = predict_color(train, window=cw, method='weighted')
-        pred_bs, _ = apply_bs_correction(train, pred_bs)
-        bs_conf = "高" if bs_gap>=BS_GAP_HIGH else "中" if bs_gap>=BS_GAP_MEDIUM else "低"
-        pred_zodiacs, zodiac_scores = predict_zodiac(train, window=cw, big_small=pred_bs,
-                                                     main_color=mc, second_color=sc_color, exclude_color=ec,
-                                                     bs_confidence=bs_conf)
-        pred_nums, num_scores = predict_special_nums_from_zodiacs(train, pred_zodiacs, big_small=pred_bs,
-                                                                  main_color=mc, second_color=sc_color, exclude_color=ec,
-                                                                  bs_confidence=bs_conf)
-        zodiac_hit = actual_zodiac in pred_zodiacs
-        num_hit = actual_num in pred_nums
-        result["zodiac"]["total"]+=1; result["special_nums"]["total"]+=1
-        if zodiac_hit: result["zodiac"]["hit"]+=1
-        if num_hit: result["special_nums"]["hit"]+=1
-        result["zodiac"]["periods"].append({"idx":i-start+1,"pred":pred_zodiacs,"actual":actual_zodiac,
-            "hit":zodiac_hit,"big_small":pred_bs,"main_color":mc,"second_color":sc_color,"bs_conf":bs_conf,"zodiac_scores":zodiac_scores})
-        result["special_nums"]["periods"].append({"idx":i-start+1,"pred_nums":pred_nums,
-            "actual_num":actual_num,"hit":num_hit,"num_scores":num_scores})
-    return result
-
-def backtest_single_zodiac_v2(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
-    rows = conn.execute("SELECT numbers_json, special_number FROM draws ORDER BY draw_date ASC, issue_no ASC").fetchall()
-    draws = [json.loads(r["numbers_json"]) + [r["special_number"]] for r in rows]
-    if len(draws) < recent_limit+10: return {"total":0,"hit":0,"periods":[]}
-    total = hit = 0; periods = []; start = len(draws)-recent_limit
-    for i in range(start, len(draws)):
-        train = draws[:i]
-        tp = max(5, min(10, len(train)-21))
-        w, d = auto_tune_single_zodiac_window(train, test_periods=tp)
-        best_weights = select_best_weight(train)
-        pred, pred_score = predict_single_zodiac_v2(train, window=w, weights=best_weights, decay=d)
-        is_hit = any(get_zodiac(n)==pred for n in draws[i])
-        if is_hit: hit+=1
-        total+=1
-        periods.append({"idx":i-start+1,"pred":pred,"hit":is_hit,"window":w,"score":pred_score})
-    return {"total":total,"hit":hit,"periods":periods}
-
-# ---------- 生肖预测 ----------
+# ---------- 生肖预测（返回得分）----------
 def predict_zodiac(specials: List[int], window: int = 8,
                    big_small: str = None,
                    main_color: str = None, second_color: str = None,
@@ -895,6 +810,7 @@ def predict_special_nums_from_zodiacs(specials, zodiacs, big_small=None,
         if len(picked) == 6: break
     return picked[:6], scores
 
+# ---------- 独肖预测（返回得分）----------
 def predict_single_zodiac_v2(draws: List[List[int]], window: int = 20,
                               weights: Tuple = None, decay: float = 0.25) -> Tuple[str, float]:
     if not draws or len(draws) < 5: return "马", 0.0
@@ -1027,259 +943,22 @@ def select_best_weight(train_draws, test_periods=None):
         if hits > best_hits: best_hits = hits; best_w = wt
     return best_w
 
-# ---------- 组合策略投票预测 ----------
-def predict_by_strategy_voting(draws: List[List[int]], mined_cfg: dict = None) -> Dict:
-    if len(draws) < 20:
-        return None
-    
-    cfg = mined_cfg or _default_mined_config()
-    
-    strategy_specials = []
-    strategy_details = []
-    
-    for strategy in STRATEGY_IDS:
-        picks, snum, sscore, scores = generate_strategy(draws, strategy, cfg)
-        main_numbers = [n for n, _, _, _ in picks]
-        
-        size = "大" if snum >= 25 else "小"
-        odd_even = "单" if snum % 2 == 1 else "双"
-        color = get_color(snum)
-        
-        strategy_specials.append({
-            "strategy": strategy,
-            "number": snum,
-            "size": size,
-            "odd_even": odd_even,
-            "color": color,
-            "score": sscore,
-            "main_numbers": main_numbers
-        })
-        
-        strategy_details.append({
-            "strategy": strategy,
-            "special": snum,
-            "main": main_numbers,
-            "size": size,
-            "odd_even": odd_even,
-            "color": color
-        })
-    
-    size_votes = {"大": 0, "小": 0}
-    size_weighted = {"大": 0.0, "小": 0.0}
-    
-    for item in strategy_specials:
-        size_votes[item["size"]] += 1
-        size_weighted[item["size"]] += item["score"]
-    
-    size_pred = max(size_votes, key=size_votes.get)
-    size_total = sum(size_votes.values())
-    size_conf = size_votes[size_pred] / size_total if size_total > 0 else 0.5
-    
-    size_weighted_total = sum(size_weighted.values())
-    size_weighted_conf = size_weighted[size_pred] / size_weighted_total if size_weighted_total > 0 else 0.5
-    
-    oe_votes = {"单": 0, "双": 0}
-    oe_weighted = {"单": 0.0, "双": 0.0}
-    
-    for item in strategy_specials:
-        oe_votes[item["odd_even"]] += 1
-        oe_weighted[item["odd_even"]] += item["score"]
-    
-    oe_pred = max(oe_votes, key=oe_votes.get)
-    oe_total = sum(oe_votes.values())
-    oe_conf = oe_votes[oe_pred] / oe_total if oe_total > 0 else 0.5
-    
-    oe_weighted_total = sum(oe_weighted.values())
-    oe_weighted_conf = oe_weighted[oe_pred] / oe_weighted_total if oe_weighted_total > 0 else 0.5
-    
-    color_votes = {"红": 0, "蓝": 0, "绿": 0}
-    color_weighted = {"红": 0.0, "蓝": 0.0, "绿": 0.0}
-    
-    for item in strategy_specials:
-        color_votes[item["color"]] += 1
-        color_weighted[item["color"]] += item["score"]
-    
-    color_pred = max(color_votes, key=color_votes.get)
-    color_total = sum(color_votes.values())
-    color_conf = color_votes[color_pred] / color_total if color_total > 0 else 0.333
-    
-    color_weighted_total = sum(color_weighted.values())
-    color_weighted_conf = color_weighted[color_pred] / color_weighted_total if color_weighted_total > 0 else 0.333
-    
-    color_ranked = sorted(color_votes.items(), key=lambda x: x[1], reverse=True)
-    second_color = color_ranked[1][0] if len(color_ranked) > 1 else None
-    third_color = color_ranked[2][0] if len(color_ranked) > 2 else None
-    
-    main_size_votes = {"大": 0, "小": 0}
-    main_oe_votes = {"单": 0, "双": 0}
-    main_color_votes = {"红": 0, "蓝": 0, "绿": 0}
-    
-    for item in strategy_specials:
-        for n in item["main_numbers"]:
-            main_size_votes["大" if n >= 25 else "小"] += 1
-            main_oe_votes["单" if n % 2 == 1 else "双"] += 1
-            main_color_votes[get_color(n)] += 1
-    
-    main_size_pred = max(main_size_votes, key=main_size_votes.get)
-    main_oe_pred = max(main_oe_votes, key=main_oe_votes.get)
-    main_color_pred = max(main_color_votes, key=main_color_votes.get)
-    main_total = sum(main_size_votes.values())
-    
-    return {
-        "size": {
-            "pred": size_pred,
-            "confidence": round(size_conf, 3),
-            "weighted_confidence": round(size_weighted_conf, 3),
-            "votes": size_votes,
-            "weighted_votes": {k: round(v, 3) for k, v in size_weighted.items()},
-            "main_pred": main_size_pred,
-            "main_ratio": main_size_votes[main_size_pred] / main_total if main_total > 0 else 0
-        },
-        "odd_even": {
-            "pred": oe_pred,
-            "confidence": round(oe_conf, 3),
-            "weighted_confidence": round(oe_weighted_conf, 3),
-            "votes": oe_votes,
-            "weighted_votes": {k: round(v, 3) for k, v in oe_weighted.items()},
-            "main_pred": main_oe_pred,
-            "main_ratio": main_oe_votes[main_oe_pred] / main_total if main_total > 0 else 0
-        },
-        "color": {
-            "pred": color_pred,
-            "second": second_color,
-            "third": third_color,
-            "confidence": round(color_conf, 3),
-            "weighted_confidence": round(color_weighted_conf, 3),
-            "votes": color_votes,
-            "weighted_votes": {k: round(v, 3) for k, v in color_weighted.items()},
-            "main_pred": main_color_pred,
-            "main_ratio": main_color_votes[main_color_pred] / main_total if main_total > 0 else 0
-        },
-        "all_predictions": strategy_details,
-        "consensus_level": "强" if color_conf >= 0.5 else "中" if color_conf >= 0.4 else "弱"
-    }
-
-
-def backtest_strategy_voting(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
+def backtest_single_zodiac_v2(conn, recent_limit=DEFAULT_BACKTEST_LIMIT):
     rows = conn.execute("SELECT numbers_json, special_number FROM draws ORDER BY draw_date ASC, issue_no ASC").fetchall()
     draws = [json.loads(r["numbers_json"]) + [r["special_number"]] for r in rows]
-    
-    if len(draws) < recent_limit + 20:
-        recent_limit = max(10, len(draws) - 20)
-    
-    results = {
-        "size": {"total": 0, "hit": 0, "periods": []},
-        "odd_even": {"total": 0, "hit": 0, "periods": []},
-        "color": {"total": 0, "hit": 0, "periods": []}
-    }
-    
-    start = len(draws) - recent_limit
+    if len(draws) < recent_limit+10: return {"total":0,"hit":0,"periods":[]}
+    total = hit = 0; periods = []; start = len(draws)-recent_limit
     for i in range(start, len(draws)):
         train = draws[:i]
-        actual_num = draws[i][-1]
-        actual_size = "大" if actual_num >= 25 else "小"
-        actual_oe = "单" if actual_num % 2 == 1 else "双"
-        actual_color = get_color(actual_num)
-        
-        voting = predict_by_strategy_voting(train)
-        if not voting:
-            continue
-        
-        idx = i - start + 1
-        
-        results["size"]["total"] += 1
-        size_hit = voting["size"]["pred"] == actual_size
-        if size_hit:
-            results["size"]["hit"] += 1
-        results["size"]["periods"].append({
-            "idx": idx,
-            "pred": voting["size"]["pred"],
-            "actual": actual_size,
-            "actual_num": actual_num,
-            "hit": size_hit,
-            "confidence": voting["size"]["confidence"]
-        })
-        
-        results["odd_even"]["total"] += 1
-        oe_hit = voting["odd_even"]["pred"] == actual_oe
-        if oe_hit:
-            results["odd_even"]["hit"] += 1
-        results["odd_even"]["periods"].append({
-            "idx": idx,
-            "pred": voting["odd_even"]["pred"],
-            "actual": actual_oe,
-            "actual_num": actual_num,
-            "hit": oe_hit,
-            "confidence": voting["odd_even"]["confidence"]
-        })
-        
-        results["color"]["total"] += 1
-        color_hit = voting["color"]["pred"] == actual_color
-        if color_hit:
-            results["color"]["hit"] += 1
-        results["color"]["periods"].append({
-            "idx": idx,
-            "pred": voting["color"]["pred"],
-            "second": voting["color"]["second"],
-            "actual": actual_color,
-            "actual_num": actual_num,
-            "hit": color_hit,
-            "confidence": voting["color"]["confidence"]
-        })
-    
-    return results
-
-
-def print_voting_dashboard(voting_result: Dict):
-    if not voting_result:
-        print("⚠️ 数据不足，无法进行组合策略投票预测")
-        return
-    
-    print("\n" + "=" * 70)
-    print("🤝 组合策略投票预测 (6策略共识)")
-    print("=" * 70)
-    
-    print("\n📋 各策略特码预测：")
-    for item in voting_result["all_predictions"]:
-        label = STRATEGY_LABELS.get(item["strategy"], item["strategy"])
-        size_mark = "🟦大" if item["size"] == "大" else "🟨小"
-        oe_mark = "🔵单" if item["odd_even"] == "单" else "🔴双"
-        color_mark = {"红": "🔴红", "蓝": "🔵蓝", "绿": "🟢绿"}[item["color"]]
-        print(f"   {label:　<8s}: {item['special']:02d} → {size_mark} {oe_mark} {color_mark}")
-    
-    print("\n" + "-" * 70)
-    print("📊 投票汇总（特码）：")
-    
-    s = voting_result["size"]
-    print(f"\n   【大小】")
-    print(f"      投票: 大 {s['votes']['大']}票 / 小 {s['votes']['小']}票 → {s['pred']} (信心 {s['confidence']*100:.0f}%)")
-    print(f"      主码辅助: {s['main_pred']} ({s['main_ratio']*100:.0f}%)")
-    
-    oe = voting_result["odd_even"]
-    print(f"\n   【单双】")
-    print(f"      投票: 单 {oe['votes']['单']}票 / 双 {oe['votes']['双']}票 → {oe['pred']} (信心 {oe['confidence']*100:.0f}%)")
-    print(f"      主码辅助: {oe['main_pred']} ({oe['main_ratio']*100:.0f}%)")
-    
-    c = voting_result["color"]
-    print(f"\n   【波色】")
-    print(f"      投票: 红 {c['votes']['红']}票 / 蓝 {c['votes']['蓝']}票 / 绿 {c['votes']['绿']}票")
-    print(f"      → {c['pred']} (信心 {c['confidence']*100:.0f}%)  次推: {c['second']}  排除: {c['third']}")
-    print(f"      主码辅助: {c['main_pred']} ({c['main_ratio']*100:.0f}%)")
-    
-    print(f"\n📈 共识水平: {voting_result['consensus_level']}")
-    if voting_result["consensus_level"] == "强":
-        print("   ✅ 6个策略在主要属性上高度一致，预测置信度较高")
-    elif voting_result["consensus_level"] == "中":
-        print("   🟡 策略间存在分歧，建议结合其他指标综合判断")
-    else:
-        print("   ⚠️ 策略间分歧较大，建议观望或极小注")
-    
-    print("\n🎯 综合推荐属性：")
-    print(f"   {s['pred']} {oe['pred']} {c['pred']}波")
-    print(f"   (大小{ s['pred']} + 单双{ oe['pred']} + { c['pred']}波)")
-    
-    print("=" * 70)
-
+        tp = max(5, min(10, len(train)-21))
+        w, d = auto_tune_single_zodiac_window(train, test_periods=tp)
+        best_weights = select_best_weight(train)
+        pred, pred_score = predict_single_zodiac_v2(train, window=w, weights=best_weights, decay=d)
+        is_hit = any(get_zodiac(n)==pred for n in draws[i])
+        if is_hit: hit+=1
+        total+=1
+        periods.append({"idx":i-start+1,"pred":pred,"hit":is_hit,"window":w,"score":pred_score})
+    return {"total":total,"hit":hit,"periods":periods}
 
 # ---------- 数据库 ----------
 @dataclass
@@ -1351,7 +1030,7 @@ def set_model_state(conn, key, value):
     conn.execute("INSERT INTO model_state(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
                  (key, value, utc_now()))
 
-# ---------- 数据获取 ----------
+# ---------- 数据获取（问题#1不修改）----------
 def _parse_marksix6_response(payload):
     records, errors = [], []
     hk_data = next((l for l in payload.get("lottery_data",[]) if l.get("name")=="新澳门彩"), None)
@@ -1764,7 +1443,29 @@ def _build_color_advice(conf_data, conf_level, mc, sc_color, ec):
     if tr >= 2/3+0.05: return f"→ {emoji} 建议两色 {mc}/{sc_color}，排除 {ec}（两色历史 {tr*100:.0f}%）"
     return f"→ {emoji} 各指标接近随机基线，建议观望"
 
-# ---------- 仪表盘 ----------
+def _build_bs_advice(gap_conf_data, conf_level, pred):
+    """新增：大小主推建议，格式对齐 _build_color_advice。"""
+    d = gap_conf_data.get(conf_level,{})
+    if not d or d["total"] < 5: return f"→ 历史样本不足（{d.get('total',0)}期），建议观望"
+    r = d["hit"]/d["total"]
+    other = "小" if pred == "大" else "大"
+    emoji = {"高":"🟢","中":"🟡","低":"🔴"}[conf_level]
+    if r >= 0.5+0.10: return f"→ {emoji} 建议主推 {pred}（历史命中 {r*100:.0f}%，高于基线50%）"
+    if r <= 0.5-0.05: return f"→ {emoji} 主推 {pred} 风险较高（历史仅 {r*100:.0f}%），建议转投次推 {other}"
+    return f"→ {emoji} 各指标接近随机基线，建议观望"
+
+def _build_oe_advice(gap_conf_data, conf_level, pred):
+    """与 _build_bs_advice 完全对齐的单双建议。"""
+    d = gap_conf_data.get(conf_level,{})
+    if not d or d["total"] < 5: return f"→ 历史样本不足（{d.get('total',0)}期），建议观望"
+    r = d["hit"]/d["total"]
+    other = "双" if pred == "单" else "单"
+    emoji = {"高":"🟢","中":"🟡","低":"🔴"}[conf_level]
+    if r >= 0.5+0.10: return f"→ {emoji} 建议主推 {pred}（历史命中 {r*100:.0f}%，高于基线50%）"
+    if r <= 0.5-0.05: return f"→ {emoji} 主推 {pred} 风险较高（历史仅 {r*100:.0f}%），建议转投次推 {other}"
+    return f"→ {emoji} 各指标接近随机基线，建议观望"
+
+# ---------- 仪表盘（美化版，含单双预测）----------
 def print_dashboard(conn, color_window=None, color_method="weighted", backtest_limit=DEFAULT_BACKTEST_LIMIT):
     print("="*70)
     print("⚠️  免责声明：彩票开奖为独立随机事件，所有预测算法及回测数据均不代表")
@@ -1783,49 +1484,16 @@ def print_dashboard(conn, color_window=None, color_method="weighted", backtest_l
     if len(train_specials) >= 30:
         cw = color_window if color_window is not None else auto_tune_color_window(train_specials)
         bs_w = auto_tune_bs_window(train_specials)
-        oe_w = auto_tune_oe_window(train_specials)
     else:
         cw = color_window if color_window is not None else 8
         bs_w = 8
-        oe_w = 8
-    print(f"🔧 实时预测调优窗口: 波色={cw}期  大小={bs_w}期  单双={oe_w}期")
-
-    # 组合策略投票预测
-    if len(all_rows) >= 20:
-        full_draws = [json.loads(r["numbers_json"]) + [r["special_number"]] 
-                      for r in conn.execute("SELECT numbers_json, special_number FROM draws ORDER BY draw_date ASC, issue_no ASC").fetchall()]
-        
-        if len(full_draws) >= 20:
-            mined_cfg = json.loads(get_model_state(conn, MINED_CONFIG_KEY) or "null") or _default_mined_config()
-            voting_result = predict_by_strategy_voting(full_draws[:-1], mined_cfg)
-            
-            if voting_result:
-                print_voting_dashboard(voting_result)
-                
-                bt_voting = backtest_strategy_voting(conn, recent_limit=backtest_limit)
-                if bt_voting:
-                    print("\n📊 投票策略回测（近{}期）：".format(backtest_limit))
-                    for key, label in [("size", "大小"), ("odd_even", "单双"), ("color", "波色")]:
-                        d = bt_voting[key]
-                        if d["total"] > 0:
-                            rate = d["hit"] / d["total"]
-                            baseline = 0.5 if key != "color" else 0.333
-                            flag = "✅跑赢" if rate > baseline else "❌低于"
-                            print(f"   {label}: {d['hit']}/{d['total']} ({rate*100:.1f}%) 基线{baseline*100:.1f}% {flag}")
-                
-                if bt_voting and bt_voting["color"]["total"] > 0:
-                    print(f"\n   近 {min(backtest_limit, bt_voting['color']['total'])} 期投票逐期明细：")
-                    for p in bt_voting["color"]["periods"][-min(backtest_limit, bt_voting['color']['total']):]:
-                        mark = "▲" if p["hit"] else "✗"
-                        conf_emoji = "🟢" if p["confidence"] >= 0.5 else "🟡" if p["confidence"] >= 0.4 else "🔴"
-                        print(f"     第{p['idx']:02d}期: {conf_emoji} 投{p['pred']}({p['confidence']*100:.0f}%) → 实{p['actual']}({p['actual_num']:02d}) {mark}")
+    print(f"🔧 实时预测调优窗口: 波色={cw}期  大小={bs_w}期")
 
     pred_mc = pred_sc_color = pred_ec = None
     pred_ms = pred_ss = 0.0
     conf_level = "低"
     pred_bs = None; bs_gap = 0.0; bs_conf_str = "低"; bs_ce = ""
     pred_oe = None; oe_gap = 0.0; oe_conf_str = "低"; oe_ce = ""
-    
     if len(train_specials) >= 20:
         pred_mc, pred_sc_color, pred_ec, pred_ms, pred_ss, _ = predict_color_ensemble(train_specials, method=color_method)
         conf_level, conf_gap_val = color_confidence_dynamic(train_specials, pred_ms, pred_ss, window=cw, method=color_method)
@@ -1834,20 +1502,19 @@ def print_dashboard(conn, color_window=None, color_method="weighted", backtest_l
         bs_conf_str = "高" if bs_gap>=BS_GAP_HIGH else "中" if bs_gap>=BS_GAP_MEDIUM else "低"
         pred_oe, oe_gap = predict_odd_even_ensemble(train_specials)
         pred_oe, oe_ce = apply_oe_correction(train_specials, pred_oe)
-        oe_conf_str = "高" if oe_gap>=ODD_EVEN_GAP_HIGH else "中" if oe_gap>=ODD_EVEN_GAP_MEDIUM else "低"
+        oe_conf_str = "高" if oe_gap>=OE_GAP_HIGH else "中" if oe_gap>=OE_GAP_MEDIUM else "低"
 
     if len(train_specials) >= 20:
         risk_score, color_rate, bs_rate, oe_rate = calc_risk_score(
-            train_specials, conf_level, bs_conf_str, oe_conf_str, bs_gap, pred_ms - pred_ss, oe_gap)
+            train_specials, conf_level, bs_conf_str, bs_gap, pred_ms - pred_ss, oe_conf=oe_conf_str)
         r_emoji, r_level, r_msg = risk_level(risk_score)
         print(f"\n{'='*50}")
         print(f"⚖️  本期综合风险评级：{r_emoji} {r_level}")
         print(f"   {r_msg}")
         print(f"\n   各维度建议：")
-        print(build_dimension_advice(conf_level, bs_conf_str, oe_conf_str, bs_ce, oe_ce,
-                                      bs_rate, color_rate, oe_rate,
-                                      bs_gap, pred_ms - pred_ss, oe_gap,
-                                      bs_conf_str, oe_conf_str))
+        print(build_dimension_advice(conf_level, bs_conf_str, bs_ce, bs_rate,
+                                      color_rate, bs_gap, pred_ms - pred_ss, bs_conf_str,
+                                      oe_conf_str=oe_conf_str, oe_ce=oe_ce, oe_rate=oe_rate))
         print(f"{'='*50}")
 
     pending = conn.execute("SELECT id,issue_no,strategy FROM prediction_runs WHERE status='PENDING' ORDER BY strategy").fetchall()
@@ -1863,11 +1530,12 @@ def print_dashboard(conn, color_window=None, color_method="weighted", backtest_l
                 a = special_attributes(special_row["number"])
                 print(f"         特码属性: {a['单双']}/{a['大小']} 合{a['合单双']}/{a['合大小']} 尾{a['尾大小']} {a['色波']} {a['五行']} | {a['生肖']}属")
 
-    # 大小预测
+    # ---- 大小预测（主推/次推）----
     if len(train_specials) >= 20:
+        bs_other = "小" if pred_bs == "大" else "大"
         bs_conf_emoji = "🟢高" if bs_gap>=BS_GAP_HIGH else "🟡中" if bs_gap>=BS_GAP_MEDIUM else "🔴低"
         print(f"\n🔢 特码大小预测（实时，含连错纠正）：")
-        print(f"   大小: {pred_bs} {bs_conf_emoji}{bs_ce}（差值 {bs_gap:.3f}）")
+        print(f"   主推: {pred_bs}   次推: {bs_other}   信心度: {bs_conf_emoji}{bs_ce}（差值 {bs_gap:.3f}）")
         if bs_conf_str == "低":
             print(f"   ⚠️ 信心度低，生肖漏斗已跳过大小筛选")
 
@@ -1884,6 +1552,7 @@ def print_dashboard(conn, color_window=None, color_method="weighted", backtest_l
             if lv == "高" and rate >= 0.50: usable = True
         if not usable:
             print(f"   ⚠️ 高信心组命中率未达50%，大小预测不建议参考")
+        print(f"   {_build_bs_advice(bs_conf_data, bs_conf_str, pred_bs)}")
 
         bt_bs = backtest_big_small_only(conn, recent_limit=backtest_limit)
         if bt_bs and bt_bs["big_small"]["total"] > 0:
@@ -1895,35 +1564,41 @@ def print_dashboard(conn, color_window=None, color_method="weighted", backtest_l
                 mark = "▲" if p["hit"] else "✗"
                 print(f"     第{p['idx']:02d}期: 大小 预{p['pred']}→实{p['actual']}({p['actual_num']:02d}) {mark}")
 
-    # 单双预测
+    # ---- 单双预测（主推/次推，新增，结构对齐大小预测）----
     if len(train_specials) >= 20:
-        oe_conf_emoji = "🟢高" if oe_gap>=ODD_EVEN_GAP_HIGH else "🟡中" if oe_gap>=ODD_EVEN_GAP_MEDIUM else "🔴低"
-        print(f"\n🔢 特码单双预测（实时，窗口{oe_w}期）：")
-        print(f"   单双: {pred_oe} {oe_conf_emoji}{oe_ce}（差值 {oe_gap:.3f}）")
-        
+        oe_other = "双" if pred_oe == "单" else "单"
+        oe_conf_emoji = "🟢高" if oe_gap>=OE_GAP_HIGH else "🟡中" if oe_gap>=OE_GAP_MEDIUM else "🔴低"
+        print(f"\n🔢 特码单双预测（实时，含连错纠正）：")
+        print(f"   主推: {pred_oe}   次推: {oe_other}   信心度: {oe_conf_emoji}{oe_ce}（差值 {oe_gap:.3f}）")
+        if oe_conf_str == "低":
+            print(f"   ⚠️ 信心度低，本期单双信号偏弱，建议观望")
+
         oe_conf_data = backtest_odd_even_by_confidence(conn, recent_limit=backtest_limit)
         print(f"\n📊 单双信心度分组命中率（近{backtest_limit}期，基线50%）：")
+        oe_usable = False
         for lv in ["高","中","低"]:
-            d = oe_conf_data.get(lv, {})
-            if not d or d["total"] == 0:
-                continue
-            rate = d["hit"] / d["total"]
+            d = oe_conf_data.get(lv,{})
+            if not d or d["total"]==0: continue
+            rate = d["hit"]/d["total"]
             flag = "✅" if rate >= 0.50 else "❌"
             emoji = {"高":"🟢","中":"🟡","低":"🔴"}[lv]
             print(f"   {emoji}{lv}信心: {d['hit']}/{d['total']} ({rate*100:.1f}%) {flag}")
-        
+            if lv == "高" and rate >= 0.50: oe_usable = True
+        if not oe_usable:
+            print(f"   ⚠️ 高信心组命中率未达50%，单双预测不建议参考")
+        print(f"   {_build_oe_advice(oe_conf_data, oe_conf_str, pred_oe)}")
+
         bt_oe = backtest_odd_even_only(conn, recent_limit=backtest_limit)
         if bt_oe and bt_oe["odd_even"]["total"] > 0:
-            d = bt_oe["odd_even"]
-            t = d["total"]
-            flag = "✅跑赢" if d["hit"] / t >= 0.50 else "❌低于基线"
+            d = bt_oe["odd_even"]; t = d["total"]
+            flag = "✅跑赢" if d["hit"]/t>=0.50 else "❌低于基线"
             print(f"\n📊 单双近{backtest_limit}期滚动命中率：{d['hit']}/{t} ({d['hit']/t*100:.1f}%) {flag}")
-            print(f"\n   近 {min(backtest_limit, t)} 期逐期明细：")
-            for p in d["periods"][-min(backtest_limit, t):]:
+            print(f"\n   近 {min(backtest_limit,t)} 期逐期明细：")
+            for p in d["periods"][-min(backtest_limit,t):]:
                 mark = "▲" if p["hit"] else "✗"
                 print(f"     第{p['idx']:02d}期: 单双 预{p['pred']}→实{p['actual']}({p['actual_num']:02d}) {mark}")
 
-    # 波色预测
+    # ---- 波色预测（主推/次推/排除，原有结构）----
     if pred_mc:
         conf_data = backtest_colors_by_confidence(conn, recent_limit=backtest_limit)
         conf_level, conf_gap = color_confidence_dynamic(train_specials, pred_ms, pred_ss, window=cw, method=color_method)
@@ -1961,7 +1636,6 @@ def print_dashboard(conn, color_window=None, color_method="weighted", backtest_l
     else:
         print("\n特码数据不足，无法预测波色。")
 
-    # 生肖预测
     if len(train_specials) >= 20:
         pred_zocs, zodiac_scores = predict_zodiac(train_specials, window=cw, big_small=pred_bs,
                                                   main_color=pred_mc, second_color=pred_sc_color,
@@ -2099,59 +1773,21 @@ def cmd_show(args):
     try: init_db(conn); print_dashboard(conn, color_window=args.color_window, color_method=args.color_method, backtest_limit=args.backtest_limit)
     finally: conn.close()
 
-def cmd_vote(args):
-    conn = connect_db(args.db)
-    try:
-        init_db(conn)
-        rows = conn.execute("SELECT numbers_json, special_number FROM draws ORDER BY draw_date ASC, issue_no ASC").fetchall()
-        if len(rows) < 20:
-            print("⚠️ 需要至少20期数据才能进行投票预测")
-            return
-        
-        full_draws = [json.loads(r["numbers_json"]) + [r["special_number"]] for r in rows]
-        mined_cfg = json.loads(get_model_state(conn, MINED_CONFIG_KEY) or "null") or _default_mined_config()
-        
-        voting_result = predict_by_strategy_voting(full_draws[:-1], mined_cfg)
-        if voting_result:
-            print_voting_dashboard(voting_result)
-            
-            bt_voting = backtest_strategy_voting(conn, recent_limit=args.backtest_limit)
-            if bt_voting:
-                print("\n📊 投票策略回测（近{}期）：".format(args.backtest_limit))
-                for key, label in [("size", "大小"), ("odd_even", "单双"), ("color", "波色")]:
-                    d = bt_voting[key]
-                    if d["total"] > 0:
-                        rate = d["hit"] / d["total"]
-                        baseline = 0.5 if key != "color" else 0.333
-                        flag = "✅" if rate > baseline else "❌"
-                        print(f"   {label}: {d['hit']}/{d['total']} ({rate*100:.1f}%) 基线{baseline*100:.1f}% {flag}")
-        else:
-            print("⚠️ 数据不足，无法进行投票预测")
-    finally:
-        conn.close()
-
 def main():
-    p = argparse.ArgumentParser(description="新澳门六合彩预测工具（美化版 + 增强大小 + 单双 + 投票）")
+    p = argparse.ArgumentParser(description="新澳门六合彩预测工具（美化版 + 增强大小 + 单双）")
     p.add_argument("--db", default=DB_PATH_DEFAULT)
     p.add_argument("--official-url", default=OFFICIAL_URL_DEFAULT, help="官方数据API地址")
     p.add_argument("--third-party-urls", nargs="*", default=THIRD_PARTY_URLS_DEFAULT, help="备用第三方数据源URL列表")
     p.add_argument("--color-window", type=int, default=None)
     p.add_argument("--color-method", choices=["simple","weighted"], default="weighted")
     sub = p.add_subparsers(dest="cmd", required=True)
-    
     sp = sub.add_parser("sync", help="同步数据并生成预测")
     sp.add_argument("--with-backtest", action="store_true")
     sp.add_argument("--backtest-limit", type=int, default=DEFAULT_BACKTEST_LIMIT)
     sp.set_defaults(func=cmd_sync)
-    
     sh = sub.add_parser("show", help="展示最新预测和回测")
     sh.add_argument("--backtest-limit", type=int, default=DEFAULT_BACKTEST_LIMIT)
     sh.set_defaults(func=cmd_show)
-    
-    v_sub = sub.add_parser("vote", help="组合策略投票预测")
-    v_sub.add_argument("--backtest-limit", type=int, default=DEFAULT_BACKTEST_LIMIT)
-    v_sub.set_defaults(func=cmd_vote)
-    
     args = p.parse_args()
     args.func(args)
 
