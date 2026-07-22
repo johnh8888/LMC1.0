@@ -29,6 +29,14 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@v4
       
+    - name: 查看文件结构
+      run: |
+        echo "当前目录文件:"
+        ls -la
+        echo ""
+        echo "Python 文件:"
+        find . -name "*.py" -type f
+      
     - name: 设置Python
       uses: actions/setup-python@v5
       with:
@@ -39,12 +47,9 @@ jobs:
         pip install --upgrade pip
         
     - name: 创建数据目录
-      run: |
-        mkdir -p data
-        mkdir -p logs
-        
+      run: mkdir -p data
+      
     - name: 执行预测
-      id: predict
       run: |
         ACTION="${{ github.event.inputs.action }}"
         BACKTEST_LIMIT="${{ github.event.inputs.backtest_limit }}"
@@ -58,114 +63,26 @@ jobs:
           ACTION="sync"
         fi
         
-        BACKTEST_LIMIT=$(echo "${BACKTEST_LIMIT:-18}" | cut -d'.' -f1)
+        if [ -z "$BACKTEST_LIMIT" ] || [ "$BACKTEST_LIMIT" == "null" ]; then
+          BACKTEST_LIMIT="18"
+        fi
+        
+        BACKTEST_LIMIT=$(echo "$BACKTEST_LIMIT" | cut -d'.' -f1)
         
         echo "=========================================="
-        echo "新澳门彩预测工具"
-        echo "执行时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "执行操作: $ACTION"
         echo "回测期数: $BACKTEST_LIMIT"
         echo "=========================================="
-        echo ""
         
-        python new.py $ACTION --backtest-limit $BACKTEST_LIMIT 2>&1 | tee output.txt
+        python new.py $ACTION --backtest-limit $BACKTEST_LIMIT
         
-        echo ""
-        echo "=========================================="
-        echo "预测执行完成"
-        echo "=========================================="
-        
-    - name: 显示预测摘要
-      if: always()
-      run: |
-        echo ""
-        echo "========== 📊 预测摘要 =========="
-        echo ""
-        
-        if [ -f output.txt ]; then
-          echo "--- 策略预测 ---"
-          grep -E "(组合策略|热号策略|冷号回补|近期动量|集成投票|规律挖掘)" output.txt | head -10 || echo "未找到策略预测"
-          echo ""
-          echo "--- 特码属性 ---"
-          grep -E "(特码属性)" output.txt | head -10 || echo "未找到特码属性"
-          echo ""
-          echo "--- 大小/单双/波色 ---"
-          grep -E "(大小:|单双:|波色:|主推:|信心度)" output.txt | head -20 || echo "未找到预测"
-          echo ""
-          echo "--- 生肖预测 ---"
-          grep -E "(五肖|六码|独胆)" output.txt | head -10 || echo "未找到生肖预测"
-          echo ""
-          echo "--- 回测统计 ---"
-          grep -E "(命中率|滚动命中率|信心度分组)" output.txt | head -20 || echo "未找到回测统计"
-          echo ""
-          echo "========== 摘要结束 =========="
-        else
-          echo "未找到输出文件"
-        fi
-        
-    - name: 保存完整预测结果
+    - name: 保存结果
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: prediction-result-${{ github.run_id }}
+        name: prediction-results
         path: |
-          output.txt
           data/
           *.db
           *.log
-          logs/
-        retention-days: 30
-        
-    - name: 保存精简结果
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: prediction-summary-${{ github.run_id }}
-        path: |
-          output.txt
-        retention-days: 7
-        
-    - name: 打印执行状态
-      if: always()
-      run: |
-        echo ""
-        echo "=========================================="
-        echo "任务状态: ${{ job.status }}"
-        echo "完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "=========================================="
-
-  # 每周日自动调优
-  auto-tune:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' && github.event.schedule == '0 0 * * 0'
-    
-    steps:
-    - name: 检出代码
-      uses: actions/checkout@v4
-      
-    - name: 设置Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        
-    - name: 创建数据目录
-      run: mkdir -p data
-      
-    - name: 自动调优
-      run: |
-        echo "=========================================="
-        echo "执行自动调优 (每周日)"
-        echo "执行时间: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "=========================================="
-        python new.py show --backtest-limit 50 2>&1 | tee tune_output.txt
-        
-    - name: 保存调优结果
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: tune-result-${{ github.run_id }}
-        path: |
-          tune_output.txt
-          data/
-          *.db
         retention-days: 30
