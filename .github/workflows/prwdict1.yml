@@ -1,0 +1,99 @@
+name: 新澳门彩预测工作流
+
+on:
+  # 定时触发 - 每天上午9:00和下午5:00运行
+  schedule:
+    - cron: '0 9 * * *'   # 每天9:00
+    - cron: '0 17 * * *'  # 每天17:00
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      action:
+        description: '执行操作'
+        required: true
+        default: 'sync'
+        type: choice
+        options:
+          - sync
+          - show
+          - vote
+      backtest_limit:
+        description: '回测期数'
+        required: false
+        default: 18
+        type: number
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 设置Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+        
+    - name: 安装依赖
+      run: |
+        pip install --upgrade pip
+        
+    - name: 创建数据库目录
+      run: |
+        mkdir -p data
+        
+    - name: 执行预测
+      run: |
+        if [ "${{ github.event.inputs.action }}" == "sync" ] || [ "${{ github.event_name }}" == "schedule" ]; then
+          python new.py sync --with-backtest
+        elif [ "${{ github.event.inputs.action }}" == "vote" ]; then
+          python new.py vote --backtest-limit ${{ github.event.inputs.backtest_limit }}
+        else
+          python new.py show --backtest-limit ${{ github.event.inputs.backtest_limit }}
+        fi
+        
+    - name: 保存预测结果
+      uses: actions/upload-artifact@v4
+      with:
+        name: prediction-results
+        path: |
+          data/
+          *.db
+          *.log
+        retention-days: 30
+        
+    - name: 发送通知（可选）
+      if: always()
+      run: |
+        echo "预测任务完成"
+        # 可配置钉钉/飞书/微信通知
+
+  # 回测任务 - 每周日运行
+  backtest:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' && github.event.schedule == '0 0 * * 0'
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 设置Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: 执行完整回测
+      run: |
+        python new.py show --backtest-limit 50
+        
+    - name: 保存回测报告
+      uses: actions/upload-artifact@v4
+      with:
+        name: backtest-report
+        path: |
+          data/
+          *.db
+        retention-days: 90
