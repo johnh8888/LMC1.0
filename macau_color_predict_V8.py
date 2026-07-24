@@ -22,8 +22,9 @@ from collections import defaultdict
 CONFIG = {
     "history_limit": 30,
     "api_url": "https://marksix6.net/index.php?api=1",
-    "bet_count": 2,
-    "zodiac_bet_count": 3,
+    "bet_count": 3,
+    "zodiac_bet_count": 5,
+    "tail_bet_count": 5,
     "bet_per_note": 50,
     "cache_file": "newmacau_cache.json",
     "zodiac_year": 2026,
@@ -276,12 +277,12 @@ def run_backtest(rows, periods):
         color_pred, size_pred, zod_pred = sp.freq("color"), sp.freq("size"), sp.freq("zodiac")
 
         # 简单版半波（使用修复后的选择器）
-        hw_simple_list = DynamicHalfwaveSelector(history).select_best(2)
+        hw_simple_list = DynamicHalfwaveSelector(history).select_best(CONFIG["bet_count"])
         hw_simple = [b[0] for b in hw_simple_list]
-        zd_simple = [b[0] for b in SimpleZodiacSelector(zod_pred).select_best(3)]
+        zd_simple = [b[0] for b in SimpleZodiacSelector(zod_pred).select_best(CONFIG["zodiac_bet_count"])]
 
-        hw_ens = [b[0] for b in EnsemblePredictor(history, HALFHALF_CATEGORIES, "halfhalf").select_best(2)]
-        zd_ens = [b[0] for b in EnsemblePredictor(history, ZODIAC_ORDER, "zodiac").select_best(3)]
+        hw_ens = [b[0] for b in EnsemblePredictor(history, HALFHALF_CATEGORIES, "halfhalf").select_best(CONFIG["bet_count"])]
+        zd_ens = [b[0] for b in EnsemblePredictor(history, ZODIAC_ORDER, "zodiac").select_best(CONFIG["zodiac_bet_count"])]
 
         hw_actual = actual["halfhalf"]
         hw_s_hit = hw_actual in hw_simple
@@ -342,8 +343,8 @@ def main():
     zd_simple = SimpleZodiacSelector(zod_pred).select_best(CONFIG["zodiac_bet_count"])
     zd_ens = EnsemblePredictor(rows, ZODIAC_ORDER, "zodiac").select_best(CONFIG["zodiac_bet_count"])
 
-    tail_simple = sorted(tail_pred.items(), key=lambda x: x[1], reverse=True)[:4]
-    tail_ens = EnsemblePredictor(rows, TAIL_CATEGORIES, "tail").select_best(4)
+    tail_simple = sorted(tail_pred.items(), key=lambda x: x[1], reverse=True)[:CONFIG["tail_bet_count"]]
+    tail_ens = EnsemblePredictor(rows, TAIL_CATEGORIES, "tail").select_best(CONFIG["tail_bet_count"])
 
     print("\n💡 半波推荐")
     print("  简单版:", ", ".join(f"{hw}({s:.1f})" for hw, s in hw_simple_list))
@@ -359,4 +360,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
