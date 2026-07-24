@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - V9.2（修复版）
+新澳门彩预测系统 - V9.2（修复版 + 半波类别对齐修复）
 修复：半波推荐固定问题，现在会随历史动态变化。
 新增：尾数/余数预测 + 参数防过拟合。
+
+本次修复点：
+- HALFHALF_CATEGORIES 原来只有6类（如"红大"、"蓝小"），
+  但实际数据 halfhalf 字段是12类完整格式（如"红大单"、"蓝小双"）。
+  两者格式不一致导致 EnsemblePredictor 对半波的 freq/gap/transition
+  永远匹配不到实际值，最终每次都退化成固定顺序输出（"红大,红小"）。
+  现已将 HALFHALF_CATEGORIES 改为完整的12类，与 get_halfhalf() 输出对齐。
 """
 
 import re
@@ -37,7 +44,8 @@ GREEN = {5,6,11,16,17,21,22,27,28,32,33,38,39,43,44,49}
 ZODIAC_ORDER = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
 ZODIAC_BASE_YEAR = 2020
 
-HALFHALF_CATEGORIES = [c + s for c in ["红", "蓝", "绿"] for s in ["大", "小"]]
+# 修复：改为完整的12类（颜色+大小+单双），与 get_halfhalf() 的输出格式对齐
+HALFHALF_CATEGORIES = [c + s + o for c in ["红", "蓝", "绿"] for s in ["大", "小"] for o in ["单", "双"]]
 TAIL_CATEGORIES = [str(i) for i in range(10)]
 MOD3_CATEGORIES = [f"余{i}" for i in range(3)]
 MOD4_CATEGORIES = [f"余{i}" for i in range(4)]
@@ -275,7 +283,7 @@ def run_backtest(rows, periods):
         hw_ens = [b[0] for b in EnsemblePredictor(history, HALFHALF_CATEGORIES, "halfhalf").select_best(2)]
         zd_ens = [b[0] for b in EnsemblePredictor(history, ZODIAC_ORDER, "zodiac").select_best(3)]
 
-        hw_actual = actual["color"] + actual["size"]
+        hw_actual = actual["halfhalf"]
         hw_s_hit = hw_actual in hw_simple
         hw_e_hit = hw_actual in hw_ens
         zd_s_hit = actual["zodiac"] in zd_simple
@@ -300,7 +308,7 @@ def run_backtest(rows, periods):
 
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - V9.2（半波修复版）")
+    print("新澳门彩预测系统 - V9.2（半波修复版 + 类别对齐修复）")
     print(f"生肖年份基准: {CONFIG['zodiac_year']}年")
     print("=" * 60)
 
