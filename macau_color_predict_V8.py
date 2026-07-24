@@ -1,26 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门彩预测系统 - V9.2（修复版 + 半波类别对齐修复）
-修复：半波推荐固定问题，现在会随历史动态变化。
-新增：尾数/余数预测 + 参数防过拟合。
+新澳门彩预测系统 - V9.3（自动窗口调优版）
+在 V9.2（半波类别对齐修复版）基础上新增：
 
-本次修复点：
-- HALFHALF_CATEGORIES 原来只有6类（如"红大"、"蓝小"），
-  但实际数据 halfhalf 字段是12类完整格式（如"红大单"、"蓝小双"）。
-  两者格式不一致导致 EnsemblePredictor 对半波的 freq/gap/transition
-  永远匹配不到实际值，最终每次都退化成固定顺序输出（"红大,红小"）。
-  现已将 HALFHALF_CATEGORIES 改为完整的12类，与 get_halfhalf() 输出对齐。
+1. AutoWindowSelector：自动为“每一期”挑选最优统计窗口长度（如最近15/20/30/40期），
+   不再需要手动调 recency_decay / weight_* 这些参数。
+   挑选过程本身是"滚动验证"（walk-forward）：
+     - 对第 i 期做预测时，只允许用 rows[i+1:]（即该期之前的历史）。
+     - 窗口大小的挑选，也只在这段历史内部做"回头验证"，
+       绝不触碰第 i 期或更未来的数据 —— 避免用未来信息挑参数（数据泄露/过拟合的最大来源）。
+2. 随机基线对照：每类预测都打印"如果瞎猜，命中率应该是多少"，
+   方便判断模型是否真的跑赢随机，而不是自己骗自己。
+3. 窗口选择分布打印：如果自动窗口在各期之间跳来跳去毫无规律，
+   这是过拟合/不稳定的信号，可以直接从输出里看出来。
+
+注意：这是一个统计彩票的历史频率分析工具，开奖机制设计上保证独立随机，
+历史数据里不存在可持续利用的规律。这里做的一切"防过拟合"设计，
+目的是让回测数字诚实，而不是让预测真的变准。
 """
 
 import re
 import json
 import urllib.request
 import os
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 CONFIG = {
-    "history_limit": 30,
+    # 数据量必须能覆盖：回测期数 + 内部验证期数 + 最大窗口候选值 + 一些缓冲
+    # 15(验证) + 40(最大窗口) + 20(回测) + 缓冲 ≈ 100，所以整体拉到100期
+    "history_limit": 100,
     "api_url": "https://marksix6.net/index.php?api=1",
     "bet_count": 3,
     "zodiac_bet_count": 5,
@@ -29,12 +38,18 @@ CONFIG = {
     "cache_file": "newmacau_cache.json",
     "zodiac_year": 2026,
 
-    # ---- 综合版参数（轻度调整）----
+    # ---- 综合版参数（人工设定，作为对照，不再是唯一方案）----
     "recency_decay": 0.85,
     "weight_freq": 0.50,
     "weight_gap": 0.20,
     "weight_trans": 0.30,
     "backtest_periods": 20,
+
+    # ---- 自动窗口调优参数 ----
+    # 候选窗口故意选得比较稀疏、跨度较大，而不是1~100逐一试探。
+    # 候选越多、越密，越容易"挑到"历史偶然表现好的窗口，反而更容易过拟合。
+    "window_candidates": [10, 15, 20, 25, 30, 40],
+    "window_validation_periods": 15,
 }
 
 # 波色定义
@@ -253,6 +268,78 @@ class EnsemblePredictor:
         s = self.score()
         return sorted(s.items(), key=lambda x: x[1], reverse=True)[:count]
 
+# ---------------------------------------------------------------------------
+# 自动窗口调优（替代手动调参）
+# ---------------------------------------------------------------------------
+def _freq_from_rows(rows, key):
+    """
+    独立的频率统计函数，不走 SimplePredictor（它内部硬编码只看前30期）。
+    自动窗口需要能测试比30更大的窗口候选值，所以单独写一个不设上限的版本。
+    """
+    c = defaultdict(int)
+    for r in rows:
+        c[r[key]] += 1
+    total = sum(c.values()) or 1
+    return {k: round(v / total * 100, 2) for k, v in c.items()}
+
+class AutoWindowSelector:
+    """
+    对每一期预测，自动挑选最优统计窗口长度（数据窗口的“期数”），
+    以此取代人工反复试参数。
+
+    关键防泄露设计：
+    - predict(history) 传入的 history 必须是"该期之前"的历史数据（不含当期和未来）。
+    - 窗口挑选的验证过程（_window_hit_rate）同样只在 history 内部往回看，
+      不会借用 history 之外（也就是当期或未来）的任何信息。
+    - 打平分时优先选更大的窗口（更多数据、更稳定，不容易被短期偶然波动带偏）。
+    """
+    def __init__(self, key, categories, bet_count, candidates=None, validation_periods=None):
+        self.key = key
+        self.categories = categories
+        self.bet_count = bet_count
+        self.candidates = candidates or CONFIG["window_candidates"]
+        self.validation_periods = validation_periods or CONFIG["window_validation_periods"]
+
+    def _window_hit_rate(self, history, w):
+        hits = 0
+        count = 0
+        for j in range(self.validation_periods):
+            # j 期的"过去"是 history[j+1 : j+1+w]，j 期本身是 history[j]
+            # 全部严格取自 history 内部更早的数据，不接触 history 之外的任何一期
+            if j + 1 + w > len(history):
+                break
+            actual = history[j]
+            window_data = history[j + 1: j + 1 + w]
+            freq = _freq_from_rows(window_data, self.key)
+            top = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:self.bet_count]
+            top_cats = [t[0] for t in top]
+            if actual[self.key] in top_cats:
+                hits += 1
+            count += 1
+        return (hits / count) if count > 0 else None
+
+    def select_window(self, history):
+        scores = {}
+        for w in self.candidates:
+            s = self._window_hit_rate(history, w)
+            if s is not None:
+                scores[w] = s
+        if not scores:
+            # 数据不够验证任何窗口，退回一个保守默认值
+            fallback = max(w for w in self.candidates if w <= len(history)) if history else self.candidates[0]
+            return fallback, {}
+        best_score = max(scores.values())
+        # 打平分时选更大的窗口：更稳定，减少"刚好蒙对"式的过拟合
+        tied = [w for w, s in scores.items() if s == best_score]
+        return max(tied), scores
+
+    def predict(self, history):
+        best_window, scores = self.select_window(history)
+        window_data = history[:best_window]
+        freq = _freq_from_rows(window_data, self.key)
+        top = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:self.bet_count]
+        return best_window, top, scores
+
 def run_backtest(rows, periods):
     total = min(periods, len(rows) - 1)
     if total <= 0:
@@ -268,6 +355,8 @@ def run_backtest(rows, periods):
     print("-" * 118)
 
     hw_simple_hits = hw_ens_hits = zd_simple_hits = zd_ens_hits = 0
+    aw_hw_hits = aw_zd_hits = aw_tail_hits = 0
+    aw_hw_windows, aw_zd_windows, aw_tail_windows = [], [], []
 
     for i in range(total):
         history = rows[i + 1:]
@@ -295,6 +384,23 @@ def run_backtest(rows, periods):
         zd_simple_hits += zd_s_hit
         zd_ens_hits += zd_e_hit
 
+        # ---- 自动窗口版（只用 history，即第 i 期之前的数据，挑窗口+做预测）----
+        aw_hw_window, aw_hw_top, _ = AutoWindowSelector("halfhalf", HALFHALF_CATEGORIES, CONFIG["bet_count"]).predict(history)
+        aw_zd_window, aw_zd_top, _ = AutoWindowSelector("zodiac", ZODIAC_ORDER, CONFIG["zodiac_bet_count"]).predict(history)
+        aw_tail_window, aw_tail_top, _ = AutoWindowSelector("tail", TAIL_CATEGORIES, CONFIG["tail_bet_count"]).predict(history)
+
+        aw_hw_cats = [c for c, _ in aw_hw_top]
+        aw_zd_cats = [c for c, _ in aw_zd_top]
+        aw_tail_cats = [c for c, _ in aw_tail_top]
+
+        aw_hw_hits += actual["halfhalf"] in aw_hw_cats
+        aw_zd_hits += actual["zodiac"] in aw_zd_cats
+        aw_tail_hits += actual["tail"] in aw_tail_cats
+
+        aw_hw_windows.append(aw_hw_window)
+        aw_zd_windows.append(aw_zd_window)
+        aw_tail_windows.append(aw_tail_window)
+
         print(f"{actual['issue']:<12} {actual['halfhalf']:<8} {actual['zodiac']:<6} "
               f"{','.join(hw_simple):<14}{'✓' if hw_s_hit else '✗':<3} "
               f"{','.join(hw_ens):<14}{'✓' if hw_e_hit else '✗':<3} "
@@ -303,13 +409,31 @@ def run_backtest(rows, periods):
 
     print("-" * 118)
     print(f"半波命中率  简单版: {hw_simple_hits}/{total} = {hw_simple_hits/total*100:.1f}%   "
-          f"综合版: {hw_ens_hits}/{total} = {hw_ens_hits/total*100:.1f}%")
+          f"综合版: {hw_ens_hits}/{total} = {hw_ens_hits/total*100:.1f}%   "
+          f"自动窗口版: {aw_hw_hits}/{total} = {aw_hw_hits/total*100:.1f}%")
     print(f"生肖命中率  简单版: {zd_simple_hits}/{total} = {zd_simple_hits/total*100:.1f}%   "
-          f"综合版: {zd_ens_hits}/{total} = {zd_ens_hits/total*100:.1f}%")
+          f"综合版: {zd_ens_hits}/{total} = {zd_ens_hits/total*100:.1f}%   "
+          f"自动窗口版: {aw_zd_hits}/{total} = {aw_zd_hits/total*100:.1f}%")
+    print(f"尾数命中率  自动窗口版: {aw_tail_hits}/{total} = {aw_tail_hits/total*100:.1f}%")
+
+    # 随机基线：如果瞎猜，理论命中率应该是多少（用于判断是否真的跑赢随机）
+    hw_baseline = CONFIG["bet_count"] / len(HALFHALF_CATEGORIES) * 100
+    zd_baseline = CONFIG["zodiac_bet_count"] / len(ZODIAC_ORDER) * 100
+    tail_baseline = CONFIG["tail_bet_count"] / len(TAIL_CATEGORIES) * 100
+    print(f"\n📐 随机基线对照（瞎猜的理论命中率，命中率若长期贴近甚至低于这个数，说明模型没有实际预测力）")
+    print(f"半波随机基线: {CONFIG['bet_count']}/{len(HALFHALF_CATEGORIES)} = {hw_baseline:.1f}%")
+    print(f"生肖随机基线: {CONFIG['zodiac_bet_count']}/{len(ZODIAC_ORDER)} = {zd_baseline:.1f}%")
+    print(f"尾数随机基线: {CONFIG['tail_bet_count']}/{len(TAIL_CATEGORIES)} = {tail_baseline:.1f}%")
+
+    # 窗口选择分布：如果窗口在各期之间跳来跳去毫无规律，是不稳定/过拟合的信号
+    print(f"\n🔍 自动窗口选择分布（越集中越稳定，越分散越可能是噪声驱动）")
+    print(f"半波窗口分布: {dict(sorted(Counter(aw_hw_windows).items()))}")
+    print(f"生肖窗口分布: {dict(sorted(Counter(aw_zd_windows).items()))}")
+    print(f"尾数窗口分布: {dict(sorted(Counter(aw_tail_windows).items()))}")
 
 def main():
     print("=" * 60)
-    print("新澳门彩预测系统 - V9.2（半波修复版 + 类别对齐修复）")
+    print("新澳门彩预测系统 - V9.3（自动窗口调优版）")
     print(f"生肖年份基准: {CONFIG['zodiac_year']}年")
     print("=" * 60)
 
@@ -346,17 +470,25 @@ def main():
     tail_simple = sorted(tail_pred.items(), key=lambda x: x[1], reverse=True)[:CONFIG["tail_bet_count"]]
     tail_ens = EnsemblePredictor(rows, TAIL_CATEGORIES, "tail").select_best(CONFIG["tail_bet_count"])
 
+    # 自动窗口版最终预测（用全部可用历史 rows 挑一次窗口，再输出）
+    aw_hw_window, aw_hw_top, _ = AutoWindowSelector("halfhalf", HALFHALF_CATEGORIES, CONFIG["bet_count"]).predict(rows)
+    aw_zd_window, aw_zd_top, _ = AutoWindowSelector("zodiac", ZODIAC_ORDER, CONFIG["zodiac_bet_count"]).predict(rows)
+    aw_tail_window, aw_tail_top, _ = AutoWindowSelector("tail", TAIL_CATEGORIES, CONFIG["tail_bet_count"]).predict(rows)
+
     print("\n💡 半波推荐")
     print("  简单版:", ", ".join(f"{hw}({s:.1f})" for hw, s in hw_simple_list))
     print("  综合版:", ", ".join(f"{hw}({s:.1f})" for hw, s in hw_ens))
+    print(f"  自动窗口版(窗口={aw_hw_window}期):", ", ".join(f"{hw}({s:.1f})" for hw, s in aw_hw_top))
 
     print("\n💡 生肖推荐")
     print("  简单版:", ", ".join(f"{z}({s:.1f})" for z, s in zd_simple))
     print("  综合版:", ", ".join(f"{z}({s:.1f})" for z, s in zd_ens))
+    print(f"  自动窗口版(窗口={aw_zd_window}期):", ", ".join(f"{z}({s:.1f})" for z, s in aw_zd_top))
 
     print("\n💡 尾数推荐")
     print("  简单版:", ", ".join(f"{t}({s:.1f})" for t, s in tail_simple))
     print("  综合版:", ", ".join(f"{t}({s:.1f})" for t, s in tail_ens))
+    print(f"  自动窗口版(窗口={aw_tail_window}期):", ", ".join(f"{t}({s:.1f})" for t, s in aw_tail_top))
 
 if __name__ == "__main__":
     main()
