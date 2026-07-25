@@ -24,6 +24,7 @@ import re
 import json
 import urllib.request
 import os
+from math import comb
 from collections import defaultdict, Counter
 
 CONFIG = {
@@ -50,6 +51,11 @@ CONFIG = {
     # 候选越多、越密，越容易"挑到"历史偶然表现好的窗口，反而更容易过拟合。
     "window_candidates": [10, 15, 20, 25, 30, 40],
     "window_validation_periods": 15,
+
+    # ---- 显著性过滤 ----
+    # 内部验证得到的命中率，要在做完"多重比较校正"之后，p值仍小于这个阈值，
+    # 才认为是"和随机基线有真实差异"，否则应视为噪声、建议观望而不是硬凑推荐。
+    "significance_alpha": 0.10,
 }
 
 # 波色定义
@@ -282,6 +288,17 @@ def _freq_from_rows(rows, key):
     total = sum(c.values()) or 1
     return {k: round(v / total * 100, 2) for k, v in c.items()}
 
+def binom_tail_prob(hits, n, p):
+    """
+    P(X >= hits)，X ~ Binomial(n, p)。
+    用来回答："如果真实命中概率就是随机基线p，纯属运气得到>=hits次命中的概率有多大？"
+    这个概率越小，说明观察到的命中率越不像是巧合。
+    """
+    if n <= 0:
+        return 1.0
+    hits = max(0, min(hits, n))
+    return sum(comb(n, k) * (p ** k) * ((1 - p) ** (n - k)) for k in range(hits, n + 1))
+
 class AutoWindowSelector:
     """
     对每一期预测，自动挑选最优统计窗口长度（数据窗口的“期数”），
@@ -292,15 +309,25 @@ class AutoWindowSelector:
     - 窗口挑选的验证过程（_window_hit_rate）同样只在 history 内部往回看，
       不会借用 history 之外（也就是当期或未来）的任何信息。
     - 打平分时优先选更大的窗口（更多数据、更稳定，不容易被短期偶然波动带偏）。
+
+    显著性过滤（防止"矮子里选将军"式过拟合）：
+    - 我们测试了多个候选窗口、挑出内部验证表现最好的一个，这个"挑选"动作本身
+      会系统性地高估表现（多重比较问题：候选越多，纯靠运气出现"表现最好"的概率越大）。
+    - 所以对被选中窗口的命中次数做二项分布检验，并把 p 值按测试过的候选数做
+      Bonferroni 校正，校正后仍然显著，才认为这不是巧合。
     """
-    def __init__(self, key, categories, bet_count, candidates=None, validation_periods=None):
+    def __init__(self, key, categories, bet_count, candidates=None,
+                 validation_periods=None, significance_alpha=None):
         self.key = key
         self.categories = categories
         self.bet_count = bet_count
         self.candidates = candidates or CONFIG["window_candidates"]
         self.validation_periods = validation_periods or CONFIG["window_validation_periods"]
+        self.significance_alpha = significance_alpha or CONFIG["significance_alpha"]
+        self.baseline_p = bet_count / len(categories)
 
-    def _window_hit_rate(self, history, w):
+    def _window_hits(self, history, w):
+        """返回 (命中次数, 验证期数) 的原始计数，而不是提前算好的比率。"""
         hits = 0
         count = 0
         for j in range(self.validation_periods):
@@ -316,29 +343,45 @@ class AutoWindowSelector:
             if actual[self.key] in top_cats:
                 hits += 1
             count += 1
-        return (hits / count) if count > 0 else None
+        return hits, count
 
     def select_window(self, history):
-        scores = {}
+        raw = {}  # w -> (hits, count)
         for w in self.candidates:
-            s = self._window_hit_rate(history, w)
-            if s is not None:
-                scores[w] = s
-        if not scores:
-            # 数据不够验证任何窗口，退回一个保守默认值
+            hits, count = self._window_hits(history, w)
+            if count > 0:
+                raw[w] = (hits, count)
+
+        if not raw:
             fallback = max(w for w in self.candidates if w <= len(history)) if history else self.candidates[0]
-            return fallback, {}
+            return fallback, {}, None
+
+        scores = {w: hits / count for w, (hits, count) in raw.items()}
         best_score = max(scores.values())
         # 打平分时选更大的窗口：更稳定，减少"刚好蒙对"式的过拟合
         tied = [w for w, s in scores.items() if s == best_score]
-        return max(tied), scores
+        best_window = max(tied)
+
+        hits, count = raw[best_window]
+        raw_p = binom_tail_prob(hits, count, self.baseline_p)
+        # Bonferroni 校正：测试了 len(raw) 个候选窗口，p 值按这个数放大
+        corrected_p = min(1.0, raw_p * len(raw))
+        sig_info = {
+            "hits": hits,
+            "count": count,
+            "hit_rate": round(hits / count * 100, 1),
+            "baseline": round(self.baseline_p * 100, 1),
+            "p_value": round(corrected_p, 3),
+            "significant": corrected_p < self.significance_alpha,
+        }
+        return best_window, scores, sig_info
 
     def predict(self, history):
-        best_window, scores = self.select_window(history)
+        best_window, scores, sig_info = self.select_window(history)
         window_data = history[:best_window]
         freq = _freq_from_rows(window_data, self.key)
         top = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:self.bet_count]
-        return best_window, top, scores
+        return best_window, top, scores, sig_info
 
 def run_backtest(rows, periods):
     total = min(periods, len(rows) - 1)
@@ -357,6 +400,7 @@ def run_backtest(rows, periods):
     hw_simple_hits = hw_ens_hits = zd_simple_hits = zd_ens_hits = 0
     aw_hw_hits = aw_zd_hits = aw_tail_hits = 0
     aw_hw_windows, aw_zd_windows, aw_tail_windows = [], [], []
+    aw_hw_sig_count = aw_zd_sig_count = aw_tail_sig_count = 0
 
     for i in range(total):
         history = rows[i + 1:]
@@ -385,9 +429,9 @@ def run_backtest(rows, periods):
         zd_ens_hits += zd_e_hit
 
         # ---- 自动窗口版（只用 history，即第 i 期之前的数据，挑窗口+做预测）----
-        aw_hw_window, aw_hw_top, _ = AutoWindowSelector("halfhalf", HALFHALF_CATEGORIES, CONFIG["bet_count"]).predict(history)
-        aw_zd_window, aw_zd_top, _ = AutoWindowSelector("zodiac", ZODIAC_ORDER, CONFIG["zodiac_bet_count"]).predict(history)
-        aw_tail_window, aw_tail_top, _ = AutoWindowSelector("tail", TAIL_CATEGORIES, CONFIG["tail_bet_count"]).predict(history)
+        aw_hw_window, aw_hw_top, _, aw_hw_sig = AutoWindowSelector("halfhalf", HALFHALF_CATEGORIES, CONFIG["bet_count"]).predict(history)
+        aw_zd_window, aw_zd_top, _, aw_zd_sig = AutoWindowSelector("zodiac", ZODIAC_ORDER, CONFIG["zodiac_bet_count"]).predict(history)
+        aw_tail_window, aw_tail_top, _, aw_tail_sig = AutoWindowSelector("tail", TAIL_CATEGORIES, CONFIG["tail_bet_count"]).predict(history)
 
         aw_hw_cats = [c for c, _ in aw_hw_top]
         aw_zd_cats = [c for c, _ in aw_zd_top]
@@ -400,6 +444,10 @@ def run_backtest(rows, periods):
         aw_hw_windows.append(aw_hw_window)
         aw_zd_windows.append(aw_zd_window)
         aw_tail_windows.append(aw_tail_window)
+
+        aw_hw_sig_count += bool(aw_hw_sig and aw_hw_sig["significant"])
+        aw_zd_sig_count += bool(aw_zd_sig and aw_zd_sig["significant"])
+        aw_tail_sig_count += bool(aw_tail_sig and aw_tail_sig["significant"])
 
         print(f"{actual['issue']:<12} {actual['halfhalf']:<8} {actual['zodiac']:<6} "
               f"{','.join(hw_simple):<14}{'✓' if hw_s_hit else '✗':<3} "
@@ -430,6 +478,13 @@ def run_backtest(rows, periods):
     print(f"半波窗口分布: {dict(sorted(Counter(aw_hw_windows).items()))}")
     print(f"生肖窗口分布: {dict(sorted(Counter(aw_zd_windows).items()))}")
     print(f"尾数窗口分布: {dict(sorted(Counter(aw_tail_windows).items()))}")
+
+    # 显著性过滤结果：经过多重比较校正后，有多少期是"真的和随机不同"，而不是巧合
+    print(f"\n🧪 显著性过滤结果（Bonferroni校正后 p<{CONFIG['significance_alpha']} 才算显著，非严格意义的统计学检验，仅供参考）")
+    print(f"半波: {aw_hw_sig_count}/{total} 期显著   生肖: {aw_zd_sig_count}/{total} 期显著   尾数: {aw_tail_sig_count}/{total} 期显著")
+    if aw_hw_sig_count == 0 and aw_zd_sig_count == 0 and aw_tail_sig_count == 0:
+        print("⚠️  全部期数都未通过显著性检验：目前没有证据表明历史数据里存在可利用的规律，"
+              "命中率的高低更可能来自随机波动本身。")
 
 def main():
     print("=" * 60)
@@ -471,24 +526,34 @@ def main():
     tail_ens = EnsemblePredictor(rows, TAIL_CATEGORIES, "tail").select_best(CONFIG["tail_bet_count"])
 
     # 自动窗口版最终预测（用全部可用历史 rows 挑一次窗口，再输出）
-    aw_hw_window, aw_hw_top, _ = AutoWindowSelector("halfhalf", HALFHALF_CATEGORIES, CONFIG["bet_count"]).predict(rows)
-    aw_zd_window, aw_zd_top, _ = AutoWindowSelector("zodiac", ZODIAC_ORDER, CONFIG["zodiac_bet_count"]).predict(rows)
-    aw_tail_window, aw_tail_top, _ = AutoWindowSelector("tail", TAIL_CATEGORIES, CONFIG["tail_bet_count"]).predict(rows)
+    aw_hw_window, aw_hw_top, _, aw_hw_sig = AutoWindowSelector("halfhalf", HALFHALF_CATEGORIES, CONFIG["bet_count"]).predict(rows)
+    aw_zd_window, aw_zd_top, _, aw_zd_sig = AutoWindowSelector("zodiac", ZODIAC_ORDER, CONFIG["zodiac_bet_count"]).predict(rows)
+    aw_tail_window, aw_tail_top, _, aw_tail_sig = AutoWindowSelector("tail", TAIL_CATEGORIES, CONFIG["tail_bet_count"]).predict(rows)
+
+    def _sig_label(sig):
+        if not sig:
+            return "数据不足，无法检验"
+        flag = "✓ 显著" if sig["significant"] else "✗ 不显著（更像噪声）"
+        return (f"内部验证命中率 {sig['hit_rate']}% vs 随机基线 {sig['baseline']}%，"
+                f"p={sig['p_value']} → {flag}")
 
     print("\n💡 半波推荐")
     print("  简单版:", ", ".join(f"{hw}({s:.1f})" for hw, s in hw_simple_list))
     print("  综合版:", ", ".join(f"{hw}({s:.1f})" for hw, s in hw_ens))
     print(f"  自动窗口版(窗口={aw_hw_window}期):", ", ".join(f"{hw}({s:.1f})" for hw, s in aw_hw_top))
+    print(f"    显著性: {_sig_label(aw_hw_sig)}")
 
     print("\n💡 生肖推荐")
     print("  简单版:", ", ".join(f"{z}({s:.1f})" for z, s in zd_simple))
     print("  综合版:", ", ".join(f"{z}({s:.1f})" for z, s in zd_ens))
     print(f"  自动窗口版(窗口={aw_zd_window}期):", ", ".join(f"{z}({s:.1f})" for z, s in aw_zd_top))
+    print(f"    显著性: {_sig_label(aw_zd_sig)}")
 
     print("\n💡 尾数推荐")
     print("  简单版:", ", ".join(f"{t}({s:.1f})" for t, s in tail_simple))
     print("  综合版:", ", ".join(f"{t}({s:.1f})" for t, s in tail_ens))
     print(f"  自动窗口版(窗口={aw_tail_window}期):", ", ".join(f"{t}({s:.1f})" for t, s in aw_tail_top))
+    print(f"    显著性: {_sig_label(aw_tail_sig)}")
 
 if __name__ == "__main__":
     main()
