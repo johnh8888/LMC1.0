@@ -31,8 +31,8 @@ from collections import defaultdict, Counter
 
 CONFIG = {
     # 数据量必须能覆盖：回测期数 + 内部验证期数 + 最大窗口候选值 + 一些缓冲
-    # 15(验证) + 40(最大窗口) + 20(回测) + 缓冲 ≈ 100，所以整体拉到100期
-    "history_limit": 100,
+    # 40(验证) + 40(最大窗口) + 20(回测) + 缓冲 ≈ 150，实际数据源有646期，拉到150毫无压力
+    "history_limit": 150,
     "api_url": "https://marksix6.net/index.php?api=1",
     "api_url_backup": "https://marksix6.net/api/lottery_api.php",
     "bet_count": 3,
@@ -53,11 +53,15 @@ CONFIG = {
     # 候选窗口故意选得比较稀疏、跨度较大，而不是1~100逐一试探。
     # 候选越多、越密，越容易"挑到"历史偶然表现好的窗口，反而更容易过拟合。
     "window_candidates": [10, 15, 20, 25, 30, 40],
-    "window_validation_periods": 15,
+    # 验证期数从15提到40：内部验证的样本量越大，p值越能反映真实差异，
+    # 而不是被小样本本身的噪声主导（15期时哪怕真有信号也几乎测不出显著）。
+    "window_validation_periods": 40,
 
     # ---- 显著性过滤 ----
-    # 内部验证得到的命中率，要在做完"多重比较校正"之后，p值仍小于这个阈值，
-    # 才认为是"和随机基线有真实差异"，否则应视为噪声、建议观望而不是硬凑推荐。
+    # 内部验证得到的命中率，要在做完"多重比较校正"（Benjamini-Hochberg，控制假阳性比例FDR）
+    # 之后，校正后的p值仍小于这个阈值，才认为是"和随机基线有真实差异"，
+    # 否则应视为噪声、建议观望而不是硬凑推荐。
+    # 换成BH而不是Bonferroni：候选窗口只有6个时Bonferroni偏保守，容易把真信号也一起盖掉。
     "significance_alpha": 0.10,
 }
 
@@ -406,6 +410,27 @@ def binom_tail_prob(hits, n, p):
     hits = max(0, min(hits, n))
     return sum(comb(n, k) * (p ** k) * ((1 - p) ** (n - k)) for k in range(hits, n + 1))
 
+def bh_adjusted_pvalues(pvalue_map):
+    """
+    Benjamini-Hochberg 多重比较校正（控制假阳性比例 FDR，而不是 Bonferroni 那种
+    控制"至少一个假阳性"概率的更严格标准）。
+    输入: {候选w: 原始p值}；输出: {候选w: 校正后p值}。
+    候选数量少（比如这里只有6个窗口）时，Bonferroni容易过严，BH更合理。
+    """
+    m = len(pvalue_map)
+    if m == 0:
+        return {}
+    items = sorted(pvalue_map.items(), key=lambda kv: kv[1])  # 按p值升序
+    adjusted = {}
+    prev_min = 1.0
+    # 从最大的p值（rank=m）往回算，保证校正后的p值单调不减
+    for rank in range(m, 0, -1):
+        w, p = items[rank - 1]
+        adj = min(prev_min, p * m / rank)
+        adjusted[w] = adj
+        prev_min = adj
+    return adjusted
+
 class AutoWindowSelector:
     """
     对每一期预测，自动挑选最优统计窗口长度（数据窗口的“期数”），
@@ -420,8 +445,8 @@ class AutoWindowSelector:
     显著性过滤（防止"矮子里选将军"式过拟合）：
     - 我们测试了多个候选窗口、挑出内部验证表现最好的一个，这个"挑选"动作本身
       会系统性地高估表现（多重比较问题：候选越多，纯靠运气出现"表现最好"的概率越大）。
-    - 所以对被选中窗口的命中次数做二项分布检验，并把 p 值按测试过的候选数做
-      Bonferroni 校正，校正后仍然显著，才认为这不是巧合。
+    - 对全部候选窗口的p值做 Benjamini-Hochberg 校正（控制FDR），
+      被选中的窗口校正后p值仍然显著，才认为这不是巧合。
     """
     def __init__(self, key, categories, bet_count, candidates=None,
                  validation_periods=None, significance_alpha=None):
@@ -469,10 +494,12 @@ class AutoWindowSelector:
         tied = [w for w, s in scores.items() if s == best_score]
         best_window = max(tied)
 
+        # 对全部候选窗口一起做BH校正，而不是只校正被选中的那一个
+        raw_pvalues = {w: binom_tail_prob(hits, count, self.baseline_p) for w, (hits, count) in raw.items()}
+        adjusted_pvalues = bh_adjusted_pvalues(raw_pvalues)
+
         hits, count = raw[best_window]
-        raw_p = binom_tail_prob(hits, count, self.baseline_p)
-        # Bonferroni 校正：测试了 len(raw) 个候选窗口，p 值按这个数放大
-        corrected_p = min(1.0, raw_p * len(raw))
+        corrected_p = adjusted_pvalues[best_window]
         sig_info = {
             "hits": hits,
             "count": count,
