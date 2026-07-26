@@ -35,6 +35,7 @@ CONFIG = {
 
     "api_url":
     "https://marksix6.net/index.php?api=1",
+    "api_url_backup": "https://marksix6.net/api/lottery_api.php",
 
     "lottery_type": "老澳门彩",
 
