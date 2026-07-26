@@ -22,7 +22,9 @@
 
 import re
 import json
+import ssl
 import urllib.request
+import urllib.error
 import os
 from math import comb
 from collections import defaultdict, Counter
@@ -32,6 +34,7 @@ CONFIG = {
     # 15(验证) + 40(最大窗口) + 20(回测) + 缓冲 ≈ 100，所以整体拉到100期
     "history_limit": 100,
     "api_url": "https://marksix6.net/index.php?api=1",
+    "api_url_backup": "https://marksix6.net/api/lottery_api.php",
     "bet_count": 3,
     "zodiac_bet_count": 5,
     "tail_bet_count": 5,
@@ -175,6 +178,30 @@ def _row_from_entry(entry):
         "mod4": get_mod4(special),
     }
 
+def _fetch_json(url):
+    """
+    请求并解析JSON。优先走标准的证书校验；
+    只有在明确判断失败原因是"证书校验失败"（例如对方证书过期）时，
+    才降级为不校验证书直接连接 —— 因为这里读的是公开开奖数据，不涉及登录态或敏感信息，
+    降级的风险可控，但仍然会失去防中间人攻击的保护，所以每次降级都会打印明确提示。
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        reason = str(getattr(e, "reason", e))
+        if "CERTIFICATE_VERIFY_FAILED" in reason or "certificate" in reason.lower():
+            print(f"⚠️  {url} 的HTTPS证书校验失败（{reason}），大概率是对方证书过期。")
+            print("⚠️  为了不让抓取彻底中断，这里降级为不校验证书直接连接（仅限本次公开数据请求，"
+                  "会失去防中间人攻击的保护）。建议留意对方是否长期不修复证书。")
+            unverified_ctx = ssl.create_default_context()
+            unverified_ctx.check_hostname = False
+            unverified_ctx.verify_mode = ssl.CERT_NONE
+            with urllib.request.urlopen(req, timeout=15, context=unverified_ctx) as response:
+                return json.loads(response.read().decode("utf-8"))
+        raise
+
 def fetch_new_macau(limit=30):
     if os.path.exists(CONFIG["cache_file"]):
         try:
@@ -186,12 +213,23 @@ def fetch_new_macau(limit=30):
             pass
 
     print("🌐 正在获取最新数据...")
-    try:
-        req = urllib.request.Request(CONFIG["api_url"], headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=15) as response:
-            raw_text = response.read().decode("utf-8")
-            data = json.loads(raw_text)
+    data = None
+    last_error = None
+    for url in [CONFIG["api_url"], CONFIG["api_url_backup"]]:
+        try:
+            data = _fetch_json(url)
+            break
+        except Exception as e:
+            last_error = e
+            print(f"⚠️  {url} 请求失败: {e}，尝试下一个接口地址...")
+            continue
 
+    if data is None:
+        print(f"❌ 获取失败: {last_error}")
+        print("💡 可使用缓存或手动提供历史数据继续运行。")
+        return []
+
+    try:
         target = None
         for item in data.get("lottery_data", []):
             if item.get("name", "").strip() == "新澳门彩":
