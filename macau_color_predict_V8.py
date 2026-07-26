@@ -113,6 +113,68 @@ def parse_numbers(text):
     nums = re.findall(r"\d+", text)
     return [int(x) for x in nums if 1 <= int(x) <= 49]
 
+def _row_from_entry(entry):
+    """
+    兼容两种可能的历史记录格式：
+    1) 新格式：entry 本身是结构化 dict，字段类似顶层
+       (expect / openCode / numbers / zodiac / wave / openTime)
+    2) 旧格式：entry 是一整行字符串，需要用正则从里面抠期号和号码
+
+    颜色/生肖/大小单双等标签一律用脚本自己的 get_xxx() 函数从"特码"重新计算，
+    不直接信任接口给的 zodiac/wave 字段——因为生肖对应关系是按年份换算的
+    (ZODIAC_MAP 用的是 CONFIG['zodiac_year'])，用接口自己的标签容易和这里的口径对不上。
+    """
+    if isinstance(entry, dict):
+        nums = entry.get("numbers")
+        if isinstance(nums, list) and nums:
+            try:
+                nums = [int(x) for x in nums]
+            except (TypeError, ValueError):
+                nums = []
+        if not nums:
+            nums = parse_numbers(str(entry.get("openCode", "")))
+        if len(nums) < 7:
+            return None
+        special = nums[-1]
+
+        expect = str(entry.get("expect", "")).strip()
+        open_time = str(entry.get("openTime", "")).strip()
+
+        m = re.match(r"(20\d{2})[^\d]?(\d{1,4})$", expect)
+        if m:
+            issue = f"{m.group(1)}/{m.group(2).zfill(3)}"
+        else:
+            year_m = re.search(r"(20\d{2})", open_time)
+            year = year_m.group(1) if year_m else "0000"
+            tail_part = re.sub(r"\D", "", expect) or expect
+            issue = f"{year}/{str(tail_part).zfill(3) if str(tail_part).isdigit() else tail_part}"
+        if not issue or issue == "0000/":
+            return None
+    else:
+        line = str(entry)
+        nums = parse_numbers(line)
+        if len(nums) < 7:
+            return None
+        special = nums[-1]
+        m = re.search(r"(20\d{5,8})", line)
+        if not m:
+            return None
+        raw = m.group(1)
+        issue = raw[:4] + "/" + str(int(raw[4:])).zfill(3)
+
+    return {
+        "issue": issue,
+        "special": special,
+        "color": get_color(special),
+        "size": get_size(special),
+        "odd": get_odd(special),
+        "halfhalf": get_halfhalf(special),
+        "zodiac": get_zodiac(special),
+        "tail": get_tail(special),
+        "mod3": get_mod3(special),
+        "mod4": get_mod4(special),
+    }
+
 def fetch_new_macau(limit=30):
     if os.path.exists(CONFIG["cache_file"]):
         try:
@@ -127,32 +189,39 @@ def fetch_new_macau(limit=30):
     try:
         req = urllib.request.Request(CONFIG["api_url"], headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=15) as response:
-            data = json.loads(response.read().decode("utf-8"))
+            raw_text = response.read().decode("utf-8")
+            data = json.loads(raw_text)
 
-        rows = []
+        target = None
         for item in data.get("lottery_data", []):
             if item.get("name", "").strip() == "新澳门彩":
-                for line in item.get("history", []):
-                    nums = parse_numbers(line)
-                    if len(nums) < 7: continue
-                    special = nums[-1]
-                    m = re.search(r"(20\d{5,8})", line)
-                    if not m: continue
-                    raw = m.group(1)
-                    issue = raw[:4] + "/" + str(int(raw[4:])).zfill(3)
-                    rows.append({
-                        "issue": issue,
-                        "special": special,
-                        "color": get_color(special),
-                        "size": get_size(special),
-                        "odd": get_odd(special),
-                        "halfhalf": get_halfhalf(special),
-                        "zodiac": get_zodiac(special),
-                        "tail": get_tail(special),
-                        "mod3": get_mod3(special),
-                        "mod4": get_mod4(special),
-                    })
+                target = item
                 break
+
+        if target is None:
+            names = [it.get("name", "?") for it in data.get("lottery_data", [])]
+            print(f"❌ 接口返回里没找到'新澳门彩'，实际包含的彩种名: {names}")
+            return []
+
+        history_list = target.get("history", [])
+        print(f"🔎 调试信息: history 共 {len(history_list)} 条，"
+              f"首条数据类型: {type(history_list[0]).__name__ if history_list else '空'}")
+
+        rows = []
+        for entry in history_list:
+            r = _row_from_entry(entry)
+            if r:
+                rows.append(r)
+
+        # 有些接口把"当前最新一期"放在顶层字段而不放进 history 数组里，一并纳入
+        top_row = _row_from_entry(target)
+        if top_row and not any(r["issue"] == top_row["issue"] for r in rows):
+            rows.append(top_row)
+
+        if not rows:
+            print("❌ history 里的记录一条都没能解析成功，接口返回的数据结构可能变了。")
+            print(f"🔎 原始 history 首条内容示例: {history_list[0] if history_list else '(空数组)'}")
+            return []
 
         rows = list({r["issue"]: r for r in rows}.values())
         rows.sort(key=lambda x: x["issue"], reverse=True)
@@ -557,4 +626,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
