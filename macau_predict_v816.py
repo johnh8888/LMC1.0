@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-老澳门彩预测系统 V8.17 - 动态半波版（颜色分散优化）
+老澳门彩预测系统 V8.17 - 动态半波版（颜色分散优化 + SSL证书修复版）
 
 核心功能:
 1. 老澳门彩专用配置
@@ -13,11 +13,14 @@
 6. 下注记录追踪
 7. 多模型集成
 8. 滚动回测 + 动态调参
+9. [新增] SSL证书过期/校验失败自动绕过
+10. [新增] 主API失败自动切换备用API
 
 """
 
 import re
 import json
+import ssl
 import urllib.request
 import random
 from collections import defaultdict
@@ -190,51 +193,98 @@ def parse_numbers(text):
     ]
 
 
-def fetch_old_macau(limit=30):
+def _build_insecure_ssl_context():
+    """
+    构建跳过证书校验的 SSL context。
+    用于绕过目标站点证书过期 / 证书链不受信任 / 主机名不匹配等报错。
+    注意：这会牺牲中间人攻击防护，仅适用于抓取公开彩票数据这类低风险场景。
+    """
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
+
+def _fetch_raw_json(url, ssl_context, timeout=60):
+    """向单个 URL 发起请求并返回解析后的 JSON，失败时抛出异常交给上层处理"""
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0"
+        }
+    )
+
+    data = urllib.request.urlopen(
+        req,
+        timeout=timeout,
+        context=ssl_context
+    ).read()
+
+    return json.loads(data.decode("utf-8"))
+
+
+def fetch_old_macau(limit=30):
 
     rows=[]
 
+    ssl_context = _build_insecure_ssl_context()
+
+    data = None
+
+    # ---- 第一步：尝试主API，SSL证书问题在这里会被 context 绕过 ----
+    try:
+
+        print(f"🌐 正在请求主数据源: {CONFIG['api_url']}")
+
+        data = _fetch_raw_json(
+            CONFIG["api_url"],
+            ssl_context
+        )
+
+        print("✅ 主数据源请求成功")
+
+    except Exception as e:
+
+        print(
+            "⚠️ 主数据源请求失败:",
+            e
+        )
+
+        # ---- 第二步：主API失败，自动切换备用API ----
+        backup_url = CONFIG.get("api_url_backup")
+
+        if not backup_url:
+            print("❌ 未配置备用数据源，放弃获取")
+            return []
+
+        try:
+
+            print(f"🌐 正在尝试备用数据源: {backup_url}")
+
+            data = _fetch_raw_json(
+                backup_url,
+                ssl_context
+            )
+
+            print("✅ 备用数据源请求成功")
+
+        except Exception as e2:
+
+            print(
+                "❌ 备用数据源同样请求失败:",
+                e2
+            )
+
+            return []
+
+    if data is None:
+        print("❌ 未能获取到任何数据")
+        return []
 
     try:
 
-
-        req=urllib.request.Request(
-
-            CONFIG["api_url"],
-
-            headers={
-
-                "User-Agent":
-
-                "Mozilla/5.0"
-
-            }
-
-        )
-
-
-        data=urllib.request.urlopen(
-
-            req,
-
-            timeout=60
-
-        ).read()
-
-
-
-        data=json.loads(
-
-            data.decode("utf-8")
-
-        )
-
-
-
         target=None
-
-
 
         for item in data.get(
 
@@ -370,7 +420,7 @@ def fetch_old_macau(limit=30):
 
         print(
 
-            "获取失败:",
+            "解析失败:",
 
             e
 
@@ -2423,7 +2473,7 @@ def main():
 
 
     print("=" * 50)
-    print("🎯 老澳门彩预测系统 V8.17（动态半波版 颜色分散优化）")
+    print("🎯 老澳门彩预测系统 V8.17（动态半波版 颜色分散优化 SSL修复版）")
     print("=" * 50)
 
 
